@@ -44,6 +44,7 @@ CURRENT_HASH="$(sha256sum "${REQUIREMENTS}" | cut -d' ' -f1)"
     echo "~~~ :python: Setting up qdb-artifacts plugin"
     python3 -m venv "${VENV_DIR}"
     "${VENV_DIR}/bin/pip" install --quiet \
+      --retries 3 --resume-retries 3 \
       -r "${REQUIREMENTS}"
     echo "${CURRENT_HASH}" > "${HASH_FILE}"
   fi
