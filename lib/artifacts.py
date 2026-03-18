@@ -44,14 +44,14 @@ Parallelism
 Each worker creates its own boto3 client (not thread-safe to share). Combined
 defaults yield up to 128 concurrent TCP streams.
 
-Streaming extraction
---------------------
-With --extract, archives decompress directly from the S3 response stream — no
-intermediate file on disk (saves space on constrained CI agents).
-  .tar.gz  — tarfile 'r|gz' mode (streaming gzip)
-  .tar.zst — zstandard.stream_reader → tarfile 'r|' (non-seekable)
-  .zip     — stream_unzip (zipfile needs seekable input); all chunk iterators
-             must be consumed even for skipped entries
+Extraction
+----------
+With --extract, archives are first downloaded to a temporary file on the same
+filesystem as the output directory using boto3's transfer manager (parallel ranged
+GETs), then extracted from the local file, then the temp file is removed.
+  .tar.gz  — tarfile 'r:gz' mode (seekable)
+  .tar.zst — zstandard.stream_reader → tarfile 'r|'
+  .zip     — zipfile.ZipFile (seekable local file)
 
 Entry filtering
 ---------------
@@ -76,7 +76,9 @@ import os
 import shutil
 import sys
 import tarfile
+import tempfile
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,7 +89,6 @@ import zstandard
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from stream_unzip import stream_unzip
 
 # ---------------------------------------------------------------------------
 # Timeout / retry constants
@@ -476,7 +477,8 @@ def download(
 
     --clean wipes output_dir first — needed because Buildkite retries reuse the same
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
-    With --extract, archives stream directly through decompression (no temp files).
+    With --extract, archives are downloaded to a temp file via boto3's transfer manager
+    (parallel ranged GETs), then extracted locally, then the temp file is removed.
     """
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
@@ -521,15 +523,17 @@ def download(
 
         def _do():
             if extract:
-                extract_archive(
-                    _s3_client(cfg, auth),
-                    bucket,
-                    key,
-                    rel,
-                    out,
-                    entry_filter,
-                    strip_prefix,
-                )
+                tmp = tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False)
+                tmp_path = tmp.name
+                tmp.close()
+                try:
+                    _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
+                    extract_local_archive(tmp_path, rel, out, entry_filter, strip_prefix)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             else:
                 dest = out / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -558,16 +562,6 @@ def download(
     )
 
 
-def _s3_body_chunks(body, chunk_size=1 << 20):
-    """Yield 1 MiB chunks from S3 response body for stream_unzip.
-    finally-close prevents connection pool leaks on early abort."""
-    try:
-        for chunk in iter(lambda: body.read(chunk_size), b""):
-            yield chunk
-    finally:
-        body.close()
-
-
 def _filter_tar_member(member, entry_filter, strip_prefix):
     """Apply filter + strip to a tar member. Returns mutated member or None to skip.
     member.name is mutated in-place (tarfile's path remapping convention)."""
@@ -594,53 +588,42 @@ def _extract_tar(tar, out, entry_filter, strip_prefix):
             tar.extract(member, path=out, filter="data")
 
 
-def extract_archive(s3, bucket, key, rel, output_dir, entry_filter=None, strip_prefix=None):
-    """Stream S3 object through decompression — no intermediate file on disk.
+def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix=None):
+    """Extract a locally downloaded archive file.
 
-    .tar.gz  — tarfile 'r|gz' (streaming gzip, non-seekable)
+    .tar.gz  — tarfile 'r:gz' (seekable, more efficient than streaming mode)
     .tar.zst — zstandard.stream_reader → tarfile 'r|'
-    .zip     — stream_unzip (zipfile needs seekable input, which S3 bodies aren't);
-               chunk iterators MUST be consumed even for skipped entries or the
-               stream can't advance to the next entry
+    .zip     — zipfile.ZipFile (seekable local file)
     """
-    body = s3.get_object(Bucket=bucket, Key=key)["Body"]
     out = Path(output_dir)
 
     if rel.endswith(".tar.gz"):
-        with tarfile.open(fileobj=body, mode="r|gz") as tar:
+        with tarfile.open(path, mode="r:gz") as tar:
             _extract_tar(tar, out, entry_filter, strip_prefix)
-        body.close()
 
     elif rel.endswith(".tar.zst") or rel.endswith(".tar.zstd"):
         dctx = zstandard.ZstdDecompressor()
-        with dctx.stream_reader(body) as reader:
-            with tarfile.open(fileobj=reader, mode="r|") as tar:
-                _extract_tar(tar, out, entry_filter, strip_prefix)
-        body.close()
+        with open(path, "rb") as fh:
+            with dctx.stream_reader(fh) as reader:
+                with tarfile.open(fileobj=reader, mode="r|") as tar:
+                    _extract_tar(tar, out, entry_filter, strip_prefix)
 
     elif rel.endswith(".zip"):
-        for name_bytes, _size, chunks in stream_unzip(_s3_body_chunks(body)):
-            name = name_bytes.decode()
-            # Must consume chunks for every entry — stream_unzip contract.
-            if name.endswith("/"):
-                for _ in chunks:
-                    pass
-                continue
-            if entry_filter and not fnmatch.fnmatch(name, entry_filter):
-                for _ in chunks:
-                    pass
-                continue
-            if strip_prefix and name.startswith(strip_prefix):
-                name = name[len(strip_prefix) :]
-            if not name:
-                for _ in chunks:
-                    pass
-                continue
-            dest = out / name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with open(dest, "wb") as f:
-                for chunk in chunks:
-                    f.write(chunk)
+        with zipfile.ZipFile(path, "r") as zf:
+            for info in zf.infolist():
+                name = info.filename
+                if name.endswith("/"):
+                    continue
+                if entry_filter and not fnmatch.fnmatch(name, entry_filter):
+                    continue
+                if strip_prefix and name.startswith(strip_prefix):
+                    name = name[len(strip_prefix) :]
+                if not name:
+                    continue
+                dest = out / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
 
     else:
         die(f"unsupported archive format: {rel}")
