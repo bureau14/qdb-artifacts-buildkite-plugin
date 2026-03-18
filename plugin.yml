@@ -6,14 +6,19 @@ requirements:
 configuration:
   properties:
     upload:
-      type: string
-      description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
-    upload-parallel:
-      type: integer
-      description: "Number of files uploaded simultaneously (default: 4)"
-    upload-concurrency:
-      type: integer
-      description: "Multipart threads per upload (default: 32)"
+      type: object
+      properties:
+        files:
+          type: string
+          description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
+        parallel:
+          type: integer
+          description: "Files uploaded simultaneously (default: 4)"
+        concurrency:
+          type: integer
+          description: "Multipart threads per upload (default: 32)"
+      required:
+        - files
     download:
       type: object
       properties:
@@ -50,7 +55,4 @@ configuration:
   oneOf:
     - required: [upload]
     - required: [download]
-  dependencies:
-    upload-parallel: [upload]
-    upload-concurrency: [upload]
   additionalProperties: false

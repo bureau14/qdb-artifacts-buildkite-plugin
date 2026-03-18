@@ -25,7 +25,8 @@ steps:
     command: make release
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
-          upload: "artifacts/**/*.tar.zst"
+          upload:
+            files: "artifacts/**/*.tar.zst"
 ```
 
 ### Download (test step, cross-step, with extraction and entry filtering)
@@ -64,22 +65,29 @@ plugins:
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
-      upload: "dist/**/*.tar.zst"
-      upload-parallel: 8
-      upload-concurrency: 16
+      upload:
+        files: "dist/**/*.tar.zst"
+        parallel: 8
+        concurrency: 16
 ```
 
 ## Configuration reference
 
 ### Top-level keys
 
-| Key                  | Type    | Description                                                                                           |
-| -------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `upload`             | string  | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`). Mutually exclusive with `download`. |
-| `upload-parallel`    | integer | Files uploaded simultaneously. Default: `4`. Requires `upload`.                                       |
-| `upload-concurrency` | integer | Multipart threads per upload. Default: `32`. Requires `upload`.                                       |
-| `download`           | object  | Download configuration block. Mutually exclusive with `upload`.                                       |
-| `debug`              | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                    |
+| Key        | Type    | Description                                                        |
+| ---------- | ------- | ------------------------------------------------------------------ |
+| `upload`   | object  | Upload configuration block. Mutually exclusive with `download`.   |
+| `download` | object  | Download configuration block. Mutually exclusive with `upload`.   |
+| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`. |
+
+### `upload` object keys
+
+| Key           | Type    | Required | Description                                                             |
+| ------------- | ------- | -------- | ----------------------------------------------------------------------- |
+| `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
+| `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
+| `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
 
 ### `download` object keys
 
@@ -141,6 +149,7 @@ Set `debug: true` in the plugin config to enable `set -x` tracing in all hooks:
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
-      upload: "artifacts/**/*.tar.zst"
+      upload:
+        files: "artifacts/**/*.tar.zst"
       debug: true
 ```
