@@ -1,0 +1,47 @@
+#!/bin/bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${DIR}/../lib/shared.bash"
+
+if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
+  set -x
+fi
+
+# Exit early if no download configured
+[[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_FILES_0:-}" ]] && exit 0
+
+echo "~~~ :arrow_down: Downloading artifacts"
+
+args=(download)
+
+# --step
+step="$(plugin_read_config DOWNLOAD_STEP "")"
+[[ -n "${step}" ]] && args+=(--step "${step}")
+
+# --output-dir
+output_dir="$(plugin_read_config DOWNLOAD_OUTPUT_DIR ".")"
+args+=(--output-dir "${output_dir}")
+
+# --extract
+[[ "$(plugin_read_config DOWNLOAD_EXTRACT false)" =~ ^(true|on|1)$ ]] \
+  && args+=(--extract)
+
+# --clean
+[[ "$(plugin_read_config DOWNLOAD_CLEAN false)" =~ ^(true|on|1)$ ]] \
+  && args+=(--clean)
+
+# --parallel
+parallel="$(plugin_read_config DOWNLOAD_PARALLEL "")"
+[[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
+
+# --concurrency
+concurrency="$(plugin_read_config DOWNLOAD_CONCURRENCY "")"
+[[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
+
+# Collect file patterns from array env vars
+while IFS= read -r file; do
+  args+=("${file}")
+done < <(plugin_read_list DOWNLOAD_FILES)
+
+run_artifacts_py "${args[@]}"

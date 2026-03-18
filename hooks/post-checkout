@@ -1,0 +1,51 @@
+#!/bin/bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${DIR}/../lib/shared.bash"
+
+if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
+  set -x
+fi
+
+# Pre-flight: verify Python 3 is available on the host agent.
+if ! command -v python3 &>/dev/null; then
+  echo "+++ :rotating_light: qdb-artifacts plugin requires python3 on the host agent"
+  echo "Install Python 3 on this agent or add it to the AMI via Packer."
+  exit 1
+fi
+
+REQUIREMENTS="${PLUGIN_DIR}/lib/requirements.txt"
+HASH_FILE="${VENV_DIR}/.requirements-hash"
+LOCK_FILE="${PLUGIN_DIR}/.venv.lock"
+CURRENT_HASH="$(sha256sum "${REQUIREMENTS}" | cut -d' ' -f1)"
+
+# flock prevents concurrent venv creation when multiple jobs run on the
+# same agent (--job-concurrency > 1).
+(
+  flock -x 200
+
+  NEEDS_REBUILD=false
+
+  if [[ -d "${VENV_DIR}" ]]; then
+    if [[ ! -f "${HASH_FILE}" ]]; then
+      # Hash file absent = previous pip install failed or was interrupted.
+      NEEDS_REBUILD=true
+    elif [[ "$(cat "${HASH_FILE}")" != "${CURRENT_HASH}" ]]; then
+      echo "~~~ :python: Requirements changed, rebuilding venv"
+      NEEDS_REBUILD=true
+    fi
+  else
+    NEEDS_REBUILD=true
+  fi
+
+  if [[ "${NEEDS_REBUILD}" == "true" ]]; then
+    rm -rf "${VENV_DIR}"
+    echo "~~~ :python: Setting up qdb-artifacts plugin"
+    python3 -m venv "${VENV_DIR}"
+    "${VENV_DIR}/bin/pip" install --quiet \
+      -r "${REQUIREMENTS}"
+    echo "${CURRENT_HASH}" > "${HASH_FILE}"
+  fi
+
+) 200>"${LOCK_FILE}"

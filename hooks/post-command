@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${DIR}/../lib/shared.bash"
+
+if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
+  set -x
+fi
+
+# Exit early if no upload configured
+[[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD:-}" ]] && exit 0
+
+# Skip upload if the command failed — broken builds should not pollute
+# the artifact namespace that test steps read from.
+if [[ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" -ne 0 ]]; then
+  echo "~~~ :warning: Skipping artifact upload (command exited ${BUILDKITE_COMMAND_EXIT_STATUS})"
+  exit 0
+fi
+
+echo "~~~ :arrow_up: Uploading artifacts"
+
+args=(upload)
+
+# --parallel
+parallel="$(plugin_read_config UPLOAD_PARALLEL "")"
+[[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
+
+# --concurrency
+concurrency="$(plugin_read_config UPLOAD_CONCURRENCY "")"
+[[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
+
+# Upload pattern (the value of `upload:` key)
+args+=("$(plugin_read_config UPLOAD)")
+
+run_artifacts_py "${args[@]}"
