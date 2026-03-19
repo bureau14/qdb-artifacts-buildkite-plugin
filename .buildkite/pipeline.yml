@@ -1,0 +1,15 @@
+agents:
+  queue: "default-debian-aarch64"
+
+steps:
+  - label: "Lint code (Ruff)"
+    command: |
+      pip install ruff
+      # linting check
+      ruff check .
+      # formatting check
+      ruff format --check .
+    plugins:
+      - docker#v5.13.0:
+          image: "python:3.14-slim"
+          chown: true
