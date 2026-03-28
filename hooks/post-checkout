@@ -17,36 +17,26 @@ fi
 
 REQUIREMENTS="${PLUGIN_DIR}/lib/requirements.txt"
 HASH_FILE="${VENV_DIR}/.requirements-hash"
-LOCK_FILE="${PLUGIN_DIR}/.venv.lock"
 CURRENT_HASH="$(sha256sum "${REQUIREMENTS}" | cut -d' ' -f1)"
 
-# flock prevents concurrent venv creation when multiple jobs run on the
-# same agent (--job-concurrency > 1).
-(
-  flock -x 200
-
-  NEEDS_REBUILD=false
-
-  if [[ -d "${VENV_DIR}" ]]; then
-    if [[ ! -f "${HASH_FILE}" ]]; then
-      # Hash file absent = previous pip install failed or was interrupted.
-      NEEDS_REBUILD=true
-    elif [[ "$(cat "${HASH_FILE}")" != "${CURRENT_HASH}" ]]; then
-      echo "~~~ :python: Requirements changed, rebuilding venv"
-      NEEDS_REBUILD=true
-    fi
-  else
+if [[ -d "${VENV_DIR}" ]]; then
+  if [[ ! -f "${HASH_FILE}" ]]; then
+    # Hash file absent = previous pip install failed or was interrupted.
+    NEEDS_REBUILD=true
+  elif [[ "$(cat "${HASH_FILE}")" != "${CURRENT_HASH}" ]]; then
+    echo "~~~ :python: Requirements changed, rebuilding venv"
     NEEDS_REBUILD=true
   fi
+else
+  NEEDS_REBUILD=true
+fi
 
-  if [[ "${NEEDS_REBUILD}" == "true" ]]; then
-    rm -rf "${VENV_DIR}"
-    echo "~~~ :python: Setting up qdb-artifacts plugin"
-    "${PYTHON3_CMD}" -m venv "${VENV_DIR}"
-    "${VENV_BIN}/python" -m pip install --quiet \
-      --retries 3 --resume-retries 3 \
-      -r "${REQUIREMENTS}"
-    echo "${CURRENT_HASH}" > "${HASH_FILE}"
-  fi
-
-) 200>"${LOCK_FILE}"
+if [[ "${NEEDS_REBUILD}" == "true" ]]; then
+  rm -rf "${VENV_DIR}"
+  echo "~~~ :python: Setting up qdb-artifacts plugin"
+  "${PYTHON3_CMD}" -m venv "${VENV_DIR}"
+  "${VENV_BIN}/python" -m pip install --quiet \
+    --retries 3 --resume-retries 3 \
+    -r "${REQUIREMENTS}"
+  echo "${CURRENT_HASH}" > "${HASH_FILE}"
+fi
