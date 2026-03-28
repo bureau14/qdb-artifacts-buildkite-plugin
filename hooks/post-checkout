@@ -9,7 +9,7 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
 fi
 
 # Pre-flight: verify Python 3 is available on the host agent.
-if ! command -v python3 &>/dev/null; then
+if [[ -z "${PYTHON3_CMD}" ]]; then
   echo "+++ :rotating_light: qdb-artifacts plugin requires python3 on the host agent"
   echo "Install Python 3 on this agent or add it to the AMI via Packer."
   exit 1
@@ -42,8 +42,8 @@ CURRENT_HASH="$(sha256sum "${REQUIREMENTS}" | cut -d' ' -f1)"
   if [[ "${NEEDS_REBUILD}" == "true" ]]; then
     rm -rf "${VENV_DIR}"
     echo "~~~ :python: Setting up qdb-artifacts plugin"
-    python3 -m venv "${VENV_DIR}"
-    "${VENV_DIR}/bin/pip" install --quiet \
+    "${PYTHON3_CMD}" -m venv "${VENV_DIR}"
+    "${VENV_BIN}/python" -m pip install --quiet \
       --retries 3 --resume-retries 3 \
       -r "${REQUIREMENTS}"
     echo "${CURRENT_HASH}" > "${HASH_FILE}"
