@@ -6,14 +6,33 @@ PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${PLUGIN_DIR}/.venv"
 ARTIFACTS_PY="${PLUGIN_DIR}/lib/artifacts.py"
 
-# Detect Python 3 — on Linux it's "python3", on Windows it's "python".
-if command -v python3 &>/dev/null; then
-  PYTHON3_CMD="python3"
-elif command -v python &>/dev/null && python -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
-  PYTHON3_CMD="python"
-else
-  PYTHON3_CMD=""
-fi
+# Detect Python 3.
+#   Linux/macOS: "python3" is on PATH.
+#   Windows:     Packer installs Python to C:\Python<ver>-<bits>\ which may not
+#                be on PATH. We search known locations as a fallback.
+_find_python3() {
+  # 1. Try standard commands on PATH
+  for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null \
+       && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
+      echo "$cmd"
+      return
+    fi
+  done
+
+  # 2. Windows fallback: scan well-known install directories (newest first)
+  if [[ -n "${SYSTEMROOT:-}" ]]; then
+    for dir in /c/Python3.*-64 /c/Python3.*-32 /c/Python3*; do
+      if [[ -x "${dir}/python.exe" ]] \
+         && "${dir}/python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
+        echo "${dir}/python.exe"
+        return
+      fi
+    done
+  fi
+}
+
+PYTHON3_CMD="$(_find_python3)"
 
 # Venv layout differs between platforms:
 #   Linux/macOS: .venv/bin/python3, .venv/bin/pip
