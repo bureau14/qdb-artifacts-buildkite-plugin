@@ -11,7 +11,13 @@ ARTIFACTS_PY="${PLUGIN_DIR}/lib/artifacts.py"
 #   Windows:     Packer installs Python to C:\Python<ver>-<bits>\ which may not
 #                be on PATH. We search known locations as a fallback.
 _find_python3() {
-  # 1. Try standard commands on PATH
+  # 1. Agent-provided path (set by packer via QDB_CICD_AGENT_PYTHON3)
+  if [[ -n "${QDB_CICD_AGENT_PYTHON3:-}" ]] && [[ -x "${QDB_CICD_AGENT_PYTHON3}" ]]; then
+    echo "${QDB_CICD_AGENT_PYTHON3}"
+    return
+  fi
+
+  # 2. Try standard commands on PATH
   for cmd in python3 python; do
     if command -v "$cmd" &>/dev/null \
        && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
@@ -20,7 +26,7 @@ _find_python3() {
     fi
   done
 
-  # 2. Windows fallback: scan well-known install directories (newest first)
+  # 3. Windows fallback: scan well-known install directories (newest first)
   if [[ -n "${SYSTEMROOT:-}" ]]; then
     for dir in /c/Python3.*-64 /c/Python3.*-32 /c/Python3*; do
       if [[ -x "${dir}/python.exe" ]] \
