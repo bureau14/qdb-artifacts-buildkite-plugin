@@ -34,7 +34,7 @@ fi
 if [[ "${NEEDS_REBUILD}" == "true" ]]; then
   rm -rf "${VENV_DIR}"
   echo "~~~ :python: Setting up qdb-artifacts plugin"
-  "${PYTHON3_CMD}" -m venv "${VENV_DIR}"
+  "${PYTHON3_CMD}" -m venv --upgrade-deps "${VENV_DIR}"
   "${VENV_BIN}/python" -m pip install --quiet \
     --retries 3 --resume-retries 3 \
     -r "${REQUIREMENTS}"
