@@ -18,6 +18,7 @@ fi
 REQUIREMENTS="${PLUGIN_DIR}/lib/requirements.txt"
 HASH_FILE="${VENV_DIR}/.requirements-hash"
 CURRENT_HASH="$(sha256sum "${REQUIREMENTS}" | cut -d' ' -f1)"
+NEEDS_REBUILD=false
 
 if [[ -d "${VENV_DIR}" ]]; then
   if [[ ! -f "${HASH_FILE}" ]]; then
