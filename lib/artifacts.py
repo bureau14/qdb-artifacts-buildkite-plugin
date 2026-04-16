@@ -70,6 +70,7 @@ Usage
         '*-c-api.tar.zst!lib/*' '*-server.tar.zst!bin/*' '*-tests.tar.zst!bin/*'
 """
 
+import datetime
 import fnmatch
 import glob
 import os
@@ -170,7 +171,7 @@ def aws_clients():
     s = boto3.session.Session()
     return (
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
-        s.client("ssm", config=Config(retries={"mode": "standard", "max_attempts": 5})),
+        s.client("ssm", config=Config(retries={"mode": "standard", "max_attempts": 5}, region_name="eu-west-1")),
     )
 
 
@@ -306,14 +307,21 @@ def key_join(*parts):
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def scope(cfg, step_override=None):
+def scope(project_id, cfg, step_override=None, build_id_override=None):
     """Resolve (bucket, key_prefix) for the current build/step context.
     step_override (--step) lets test steps address a build step's namespace
     instead of their own (which is empty). Resolved at pipeline-generation time."""
-    build = os.environ.get("BUILDKITE_BUILD_ID")
-    if not build:
-        die("BUILDKITE_BUILD_ID is not set — are we running inside a Buildkite job?")
+    build_id = build_id_override or os.environ.get("BUILDKITE_BUILD_ID")
+    if not build_id:
+        die("BUILDKITE_BUILD_ID is not set and no --build-id override was given. "
+            "Are we running inside a Buildkite job?")
+    
+    branch = os.environ.get("BUILDKITE_BRANCH")
+    tag = os.environ.get("BUILDKITE_TAG")
+    if not branch and not tag:
+        raise ValueError("BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?")
 
+    ref =  f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
     step = step_override or os.environ.get("BUILDKITE_STEP_KEY")
     if not step:
         die(
@@ -322,7 +330,7 @@ def scope(cfg, step_override=None):
         )
 
     bucket, prefix = parse_s3(cfg.destination)
-    return bucket, key_join(build, step, prefix)
+    return bucket, key_join(prefix, project_id, ref, step, build_id)
 
 
 def fmt_size(n):
@@ -376,7 +384,7 @@ def _s3_client(cfg, auth):
     return boto3.client("s3", **kwargs)
 
 
-def upload(pattern, parallel=4, concurrency=32):
+def upload(project_id, pattern, parallel=4, concurrency=32):
     """Glob files and upload to the current build/step prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
 
@@ -385,7 +393,16 @@ def upload(pattern, parallel=4, concurrency=32):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(cfg)
+    # TODO: igor
+    # bucket prefix shall be constructed as
+    # s3://bucker/prefix/{provided repo/project name}/refs/heads/{env.BUILDKITE_BRANCH or env.BUILDKITE_TAG }/builds
+    # /{env.BUILDKITE_BUILD_ID}/variants/{build slug}/builds/<build-id>/
+    #
+    # we will want to store a manifest per build with some kind of metadata
+    # we want to store artifacts under /artifacts subdir
+    # we want to store LATEST_SUCCESS text file under the build slug dir, which points to latest successful build for that slug
+
+    bucket, pfx = scope(project_id, cfg)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
@@ -407,7 +424,7 @@ def upload(pattern, parallel=4, concurrency=32):
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
-            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, rel), Config=tc)
+            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, "artifacts", rel), Config=tc)
 
         _with_retry(_do, rel)
 
@@ -417,6 +434,13 @@ def upload(pattern, parallel=4, concurrency=32):
     try:
         for fut in as_completed(futs):
             fut.result()
+        # once all files are uploaded we want to upload manifest.json with metadata, no use for it right now but doesn't hurt to have it
+        # TODO: (igor) upload it straight to the bucket, skip|remove suffix
+        meta = {
+            "file_count": len(files),
+            "uploaded_at": datetime.datetime.now().isoformat() + "Z",
+            "total_size_bytes": total_bytes,
+        }
     except KeyboardInterrupt:
         # Hard exit: ThreadPoolExecutor.shutdown(wait=True) would block for minutes
         # waiting for in-flight transfers. 130 = POSIX SIGINT convention.
@@ -465,6 +489,8 @@ def match_rules(rel, rules):
 
 
 def download(
+    project_id,
+    build_id,
     rules,
     step_override=None,
     output_dir=".",
@@ -483,7 +509,12 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(cfg, step_override)
+    bucket, pfx = scope(project_id, cfg, step_override, build_id)
+    # TODO: igor
+    # for download the path needs to be checked for multiple cases
+    # we have to check if desired branch/tag is present, if not we need to fall back to `master` or `main` and log it
+    # if build_id is LATEST_SUCCESSFUL we need to fetch path from this file, and check if it exists, if no file we need to print suitable error
+    # if build_id is something else we also need to check if it exists if not print suitable error 
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
@@ -492,7 +523,7 @@ def download(
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
-    list_client = _s3_client(cfg, auth)  # listing only; workers create their own
+    list_client = _s3_client(cfg, auth)  # listing only; workers create their own    
     objects = []
     for page in list_client.get_paginator("list_objects_v2").paginate(
         Bucket=bucket, Prefix=f"{pfx}/"
@@ -634,6 +665,8 @@ if __name__ == "__main__":
     cmd = args.pop(0)
     parallel = 4
     concurrency = 32
+    project_id = None
+    build_id = "LATEST_SUCCESSFUL"
 
     if cmd == "upload":
         pattern = "*.tar.zst"
@@ -645,10 +678,37 @@ if __name__ == "__main__":
             elif args[i] == "--concurrency":
                 concurrency = int(args[i + 1])
                 i += 2
+            elif args[i].startswith("--project-id"):
+                project_id = args[i + 1]
+                i += 2
             else:
                 pattern = args[i]
                 i += 1
-        upload(pattern, parallel, concurrency)
+            
+        if not project_id:
+            raise ValueError("project ID is required")
+        upload(project_id, pattern, parallel, concurrency)
+    
+    elif cmd == "set_latest":
+        # this is a separate step because sometimes we want to 
+        step = None
+        i = 0
+        while i < len(args):
+            if args[i] == "--step":
+                step = args[i + 1]
+                i += 2
+            elif args[i] == "--project-id":
+                project_id = args[i + 1]
+                i += 2
+            else:
+                die(f"unknown argument: {args[i]}")
+
+        if not step:
+            die("missing required --step argument")
+        if not project_id:
+            die("missing required --project-id argument")
+        # TODO: igor create LATEST_SUCCESSFUL text file pointing to build for given project
+        raise NotImplementedError("setting latest successful build is not implemented yet")
 
     elif cmd == "download":
         step = extract = None
@@ -659,6 +719,12 @@ if __name__ == "__main__":
         while i < len(args):
             if args[i] == "--step":
                 step = args[i + 1]
+                i += 2
+            elif args[i] == "--build-id":
+                build_id = args[i + 1]
+                i += 2
+            elif args[i] == "--project-id":
+                project_id = args[i + 1]
                 i += 2
             elif args[i] == "--extract":
                 extract = True
@@ -684,7 +750,7 @@ if __name__ == "__main__":
         if not patterns:
             patterns = ["*.tar.zst"]
         rules = parse_rules(patterns)
-        download(rules, step, out, extract and not no_extract, clean, parallel, concurrency)
+        download(project_id, rules, step, out, extract and not no_extract, clean, parallel, concurrency)
 
     else:
         die(f"unknown command: {cmd}")
