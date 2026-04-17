@@ -348,8 +348,11 @@ def scope(
     skip_build_id=False,
 ):
     """Resolve (bucket, key_prefix) for the current build/step context.
+    project_id scopes the artifacts to a specific project.
     step_override (--step) lets test steps address a build step's namespace
-    instead of their own (which is empty). Resolved at pipeline-generation time."""
+    instead of their own (which is empty). Resolved at pipeline-generation time.
+    build_id_override and ref_override allow pointing to specific pipeline executions.
+    skip_build_id skips the build ID in the path (useful for LATEST_SUCCESSFUL pointers)."""
 
     build_id, step, ref = _get_scope_context(build_id_override, step_override, ref_override)
 
@@ -428,6 +431,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
 def upload(project_id, pattern, parallel=4, concurrency=32):
     """Glob files and upload to the current build/step prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
+    Also uploads a manifest.json file containing metadata about the uploaded files.
 
     Creds are minted once before the pool — for R2, ensure TTL covers the full upload.
     """
@@ -619,6 +623,9 @@ def download(
     concurrency=32,
 ):
     """List matching artifacts under the step prefix and download/extract in parallel.
+    Uses project_id to locate the artifacts namespace.
+    Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
+    from main/master branch if missing on the current branch.
 
     --clean wipes output_dir first — needed because Buildkite retries reuse the same
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
