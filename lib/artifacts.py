@@ -834,7 +834,7 @@ if __name__ == "__main__":
             die("missing required --project-id argument")
         upload(project_id, pattern, parallel, concurrency)
 
-    elif cmd == "set_latest":
+    elif cmd == "set-latest":
         # this is a separate step because sometimes we want to
         step = None
         i = 0
