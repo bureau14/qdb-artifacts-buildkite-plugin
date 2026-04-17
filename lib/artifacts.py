@@ -200,7 +200,7 @@ def _check_placeholder(value, label):
         )
 
 
-def _env_or_ssm(ssm, env_name, ssm_name, with_decryption=False):
+def _env_or_ssm(ssm, env_name, ssm_name, with_decryption=True):
     """Env var with SSM fallback. Env takes precedence for per-job overrides."""
     return os.environ.get(env_name) or _ssm_get_optional(
         ssm, ssm_name, with_decryption=with_decryption
