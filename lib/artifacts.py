@@ -179,7 +179,7 @@ def aws_clients():
     )
 
 
-def _ssm_get_optional(ssm, name, with_decryption=False):
+def _ssm_get_optional(ssm, name, with_decryption=True):
     """Return SSM parameter value or None if absent. Re-raises non-NotFound errors
     so IAM misconfigurations surface explicitly."""
     try:
@@ -205,7 +205,7 @@ def _check_placeholder(value, label):
         )
 
 
-def _env_or_ssm(ssm, env_name, ssm_name, with_decryption=False):
+def _env_or_ssm(ssm, env_name, ssm_name, with_decryption=True):
     """Env var with SSM fallback. Env takes precedence for per-job overrides."""
     return os.environ.get(env_name) or _ssm_get_optional(
         ssm, ssm_name, with_decryption=with_decryption
