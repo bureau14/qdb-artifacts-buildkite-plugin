@@ -8,29 +8,57 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
   set -x
 fi
 
-# Exit early if no upload configured
-[[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && exit 0
-
-# Skip upload if the command failed — broken builds should not pollute
-# the artifact namespace that test steps read from.
-if [[ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" -ne 0 ]]; then
-  echo "~~~ :warning: Skipping artifact upload (command exited ${BUILDKITE_COMMAND_EXIT_STATUS})"
+# Exit early if neither upload nor set_latest is configured
+if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_SET_LATEST_PROJECT_ID:-}" ]]; then
   exit 0
 fi
 
-echo "~~~ :arrow_up: Uploading artifacts"
 
-args=(upload)
+# First upload files if env var for upload is set, if env var for set_latest is configured as well run that after upload
 
-# --parallel
-parallel="$(plugin_read_config UPLOAD_PARALLEL "")"
-[[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
+if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_PROJECT_ID:-}" ]]; then
+  echo "~~~ :arrow_up: Uploading artifacts and setting LATEST_SUCCESSFUL pointer"
+  
+  # Skip upload if the command failed — broken builds should not pollute
+  # the artifact namespace that test steps read from.
+  if [[ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" -ne 0 ]]; then
+    echo "~~~ :warning: Skipping artifact upload (command exited ${BUILDKITE_COMMAND_EXIT_STATUS})"
+    exit 0
+  fi
 
-# --concurrency
-concurrency="$(plugin_read_config UPLOAD_CONCURRENCY "")"
-[[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
+  args=(upload)
 
-# Upload pattern (upload.files)
-args+=("$(plugin_read_config UPLOAD_FILES)")
+  # --parallel
+  parallel="$(plugin_read_config UPLOAD_PARALLEL "")"
+  [[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
 
-run_artifacts_py "${args[@]}"
+  # --concurrency
+  concurrency="$(plugin_read_config UPLOAD_CONCURRENCY "")"
+  [[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
+
+  # --project-id
+  project_id="$(plugin_read_config UPLOAD_PROJECT_ID "")"
+  [[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
+
+  # Upload pattern (upload.files)
+  args+=("$(plugin_read_config UPLOAD_FILES)")
+
+  echo "~~~ :arrow_up: Uploading artifacts"
+  run_artifacts_py "${args[@]}"
+fi
+
+if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_SET_LATEST_PROJECT_ID:-}" ]]; then
+  echo "~~~ :pushpin: Setting LATEST_SUCCESSFUL pointer for artifacts"
+
+  args=(set-latest)
+
+  # --project-id
+  project_id="$(plugin_read_config SET_LATEST_PROJECT_ID "")"
+  [[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
+
+  # --step
+  step="$(plugin_read_config SET_LATEST_STEP "")"
+  [[ -n "${step}" ]] && args+=(--step "${step}")
+
+  run_artifacts_py "${args[@]}"
+fi

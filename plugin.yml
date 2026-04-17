@@ -78,4 +78,5 @@ configuration:
   oneOf:
     - required: [upload]
     - required: [download]
+    - required: [set_latest]
   additionalProperties: false

@@ -39,6 +39,14 @@ parallel="$(plugin_read_config DOWNLOAD_PARALLEL "")"
 concurrency="$(plugin_read_config DOWNLOAD_CONCURRENCY "")"
 [[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
 
+# --project-id
+project_id="$(plugin_read_config DOWNLOAD_PROJECT_ID "")"
+[[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
+
+# --build-id
+build_id="$(plugin_read_config DOWNLOAD_BUILD_ID "")"
+[[ -n "${build_id}" ]] && args+=(--build-id "${build_id}")
+
 # Collect file patterns from array env vars
 while IFS= read -r file; do
   args+=("${file}")
