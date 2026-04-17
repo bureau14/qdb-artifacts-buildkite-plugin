@@ -174,7 +174,7 @@ def aws_clients():
     )
 
 
-def _ssm_get_optional(ssm, name, with_decryption=False):
+def _ssm_get_optional(ssm, name, with_decryption=True):
     """Return SSM parameter value or None if absent. Re-raises non-NotFound errors
     so IAM misconfigurations surface explicitly."""
     try:
