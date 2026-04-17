@@ -311,7 +311,7 @@ def key_join(*parts):
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def _get_scope_context(build_id_override=None, step_override=None):
+def _get_scope_context(build_id_override=None, step_override=None, ref_override=None):
     build_id = build_id_override or os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
         die(
@@ -319,14 +319,17 @@ def _get_scope_context(build_id_override=None, step_override=None):
             "Are we running inside a Buildkite job?"
         )
 
-    branch = os.environ.get("BUILDKITE_BRANCH")
-    tag = os.environ.get("BUILDKITE_TAG")
-    if not branch and not tag:
-        raise ValueError(
-            "BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?"
-        )
+    ref = ref_override
+    if not ref_override:
+        branch = ref_override or os.environ.get("BUILDKITE_BRANCH")
+        tag = os.environ.get("BUILDKITE_TAG")
+        if not branch and not tag:
+            raise ValueError(
+                "BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?"
+            )
 
-    ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
+        ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
+ 
     step = step_override or os.environ.get("BUILDKITE_STEP_KEY")
     if not step:
         die(
@@ -336,15 +339,22 @@ def _get_scope_context(build_id_override=None, step_override=None):
     return build_id, step, ref
 
 
-def scope(project_id, cfg, step_override=None, build_id_override=None):
+def scope(project_id, cfg, step_override=None, build_id_override=None, ref_override=None, skip_build_id=False):
     """Resolve (bucket, key_prefix) for the current build/step context.
     step_override (--step) lets test steps address a build step's namespace
     instead of their own (which is empty). Resolved at pipeline-generation time."""
 
-    build_id, step, ref = _get_scope_context(build_id_override, step_override)
+    build_id, step, ref = _get_scope_context(build_id_override, step_override, ref_override)
 
     bucket, prefix = parse_s3(cfg.destination)
-    return bucket, key_join(prefix, project_id, ref, step, build_id)
+
+    if skip_build_id:
+        return bucket, key_join(prefix, project_id, ref, "variants", step)
+    
+    if build_id == "LATEST_SUCCESSFUL":
+        return bucket, key_join(prefix, project_id, ref, "variants", step, "LATEST_SUCCESSFUL")
+
+    return bucket, key_join(prefix, project_id, ref, "variants", step, "builds", build_id)
 
 
 def fmt_size(n):
@@ -510,7 +520,7 @@ def match_rules(rel, rules):
 def _check_artifacts_exist(s3, bucket, prefix):
     """Check if any objects exist under the given prefix."""
     response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
-    return "Contents" in response
+    return response.get("KeyCount") > 0
 
 
 def _read_latest_successful(s3, bucket, key):
@@ -526,40 +536,35 @@ def _read_latest_successful(s3, bucket, key):
 
 def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, step, build_id):
     s3 = _s3_client(cfg, auth)
-
-    def _build_prefix(r, b_id):
-        return key_join(dest_prefix, project_id, r, step, b_id)
-
     master_ref = "refs/heads/master"
 
     if build_id != "LATEST_SUCCESSFUL":
         # Attempt to find artifacts under the current ref.
         # If not found and ref is not master/main, it falls back to checking refs/heads/master
-        primary_prefix = _build_prefix(ref, build_id)
+        _, primary_prefix = scope(project_id, cfg, step_override=step, build_id_override=build_id, ref_override=ref)
         if _check_artifacts_exist(s3, bucket, primary_prefix):
             return primary_prefix
 
         if ref != master_ref and ref != "refs/heads/main":
-            fallback_prefix = _build_prefix(master_ref, build_id)
+            _, fallback_prefix = scope(project_id, cfg, step_override=step, build_id_override=build_id, ref_override=master_ref)
             if _check_artifacts_exist(s3, bucket, fallback_prefix):
                 return fallback_prefix
     else:
         # Reads the pointer file for the current ref.
         # If found, checks the target path for artifacts. If either the pointer file or target artifacts are missing, and ref is not master/main,
         # fall back to reading the refs/heads/master pointer file and checking that fallback path
-        pointer_key = _build_prefix(ref, "LATEST_SUCCESSFUL")
-        target_build_id = _read_latest_successful(s3, bucket, pointer_key)
+        target_build_id = _read_latest_successful(s3, bucket, dest_prefix)
 
         if target_build_id:
-            actual_prefix = _build_prefix(ref, target_build_id)
+            _, actual_prefix = scope(project_id, cfg, step_override=step, build_id_override=target_build_id, ref_override=ref)
             if _check_artifacts_exist(s3, bucket, actual_prefix):
                 return actual_prefix
 
         if ref != master_ref and ref != "refs/heads/main":
-            fallback_pointer_key = _build_prefix(master_ref, "LATEST_SUCCESSFUL")
+            _, fallback_pointer_key = scope(project_id, cfg, step_override=step, build_id_override="LATEST_SUCCESSFUL", ref_override=master_ref)
             fallback_target_build_id = _read_latest_successful(s3, bucket, fallback_pointer_key)
             if fallback_target_build_id:
-                actual_fallback_prefix = _build_prefix(master_ref, fallback_target_build_id)
+                _, actual_fallback_prefix = scope(project_id, cfg, step_override=step, build_id_override=fallback_target_build_id, ref_override=master_ref)
                 if _check_artifacts_exist(s3, bucket, actual_fallback_prefix):
                     return actual_fallback_prefix
 
@@ -591,9 +596,8 @@ def download(
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(project_id, cfg, step_override, build_id)
-
     actual_build_id, step, ref = _get_scope_context(
-        step_override, build_id
+        build_id, step_override
     )  # validate context early before starting downloads
     pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
 
@@ -680,7 +684,7 @@ def set_latest_successful(project_id, step):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(project_id, cfg, step_override=step)
+    bucket, pfx = scope(project_id, cfg, step_override=step, skip_build_id=True)
 
     build_id, _, ref = _get_scope_context(step_override=step)
 
