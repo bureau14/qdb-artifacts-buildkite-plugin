@@ -8,6 +8,9 @@ configuration:
     upload:
       type: object
       properties:
+        project_id:
+          type: string
+          description: "Unique project identifier for namespacing artifacts (e.g. 'quasardb')"
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
@@ -18,10 +21,17 @@ configuration:
           type: integer
           description: "Multipart threads per upload (default: 32)"
       required:
+        - project_id
         - files
     download:
       type: object
       properties:
+        project_id:
+          type: string
+          description: "Unique project identifier of the artifacts to download (e.g. 'quasardb')"
+        build_id:
+          type: string
+          description: "Build identifier to download from. Defaults to latest successful build of the current branch."
         step:
           type: string
           description: "Build step key to download from (cross-step)"
@@ -47,6 +57,7 @@ configuration:
             type: string
           description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
       required:
+        - project_id
         - step
         - files
     debug:
