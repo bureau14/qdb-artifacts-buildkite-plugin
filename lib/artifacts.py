@@ -174,7 +174,7 @@ def aws_clients():
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
         s.client(
             "ssm",
-            config=Config(retries={"mode": "standard", "max_attempts": 5}, region_name="eu-west-1"),
+            config=Config(retries={"mode": "standard", "max_attempts": 5}),
         ),
     )
 
