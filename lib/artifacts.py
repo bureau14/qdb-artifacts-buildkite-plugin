@@ -80,6 +80,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,11 +307,7 @@ def key_join(*parts):
     """Join S3 key segments, dropping blanks to avoid double slashes."""
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
-
-def scope(project_id, cfg, step_override=None, build_id_override=None):
-    """Resolve (bucket, key_prefix) for the current build/step context.
-    step_override (--step) lets test steps address a build step's namespace
-    instead of their own (which is empty). Resolved at pipeline-generation time."""
+def _get_scope_context(build_id_override=None, step_override=None):
     build_id = build_id_override or os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
         die("BUILDKITE_BUILD_ID is not set and no --build-id override was given. "
@@ -328,6 +325,15 @@ def scope(project_id, cfg, step_override=None, build_id_override=None):
             "BUILDKITE_STEP_KEY is not set and no --step override was given. "
             "Ensure the pipeline step has a 'key' field, or pass --step <key> explicitly"
         )
+    return build_id, step, ref
+
+
+def scope(project_id, cfg, step_override=None, build_id_override=None):
+    """Resolve (bucket, key_prefix) for the current build/step context.
+    step_override (--step) lets test steps address a build step's namespace
+    instead of their own (which is empty). Resolved at pipeline-generation time."""
+
+    build_id, step, ref = _get_scope_context(build_id_override, step_override)
 
     bucket, prefix = parse_s3(cfg.destination)
     return bucket, key_join(prefix, project_id, ref, step, build_id)
@@ -384,6 +390,17 @@ def _s3_client(cfg, auth):
     return boto3.client("s3", **kwargs)
 
 
+def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
+    manifest_key = key_join(prefix, "manifest.json")
+    _s3_client(cfg, auth).put_object(
+        Bucket=bucket,
+        Key=manifest_key,
+        Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
+        ContentType="application/json",
+        ServerSideEncryption="AES256",
+    )
+
+
 def upload(project_id, pattern, parallel=4, concurrency=32):
     """Glob files and upload to the current build/step prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -393,14 +410,6 @@ def upload(project_id, pattern, parallel=4, concurrency=32):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    # TODO: igor
-    # bucket prefix shall be constructed as
-    # s3://bucker/prefix/{provided repo/project name}/refs/heads/{env.BUILDKITE_BRANCH or env.BUILDKITE_TAG }/builds
-    # /{env.BUILDKITE_BUILD_ID}/variants/{build slug}/builds/<build-id>/
-    #
-    # we will want to store a manifest per build with some kind of metadata
-    # we want to store artifacts under /artifacts subdir
-    # we want to store LATEST_SUCCESS text file under the build slug dir, which points to latest successful build for that slug
 
     bucket, pfx = scope(project_id, cfg)
 
@@ -424,7 +433,7 @@ def upload(project_id, pattern, parallel=4, concurrency=32):
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
-            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, "artifacts", rel), Config=tc)
+            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, rel), Config=tc)
 
         _with_retry(_do, rel)
 
@@ -434,13 +443,16 @@ def upload(project_id, pattern, parallel=4, concurrency=32):
     try:
         for fut in as_completed(futs):
             fut.result()
-        # once all files are uploaded we want to upload manifest.json with metadata, no use for it right now but doesn't hurt to have it
-        # TODO: (igor) upload it straight to the bucket, skip|remove suffix
-        meta = {
+
+        # After uploads are done, write a manifest file with metadata about the uploaded artifacts.
+        # might come handy for debugging / validation / future features
+        manifest_payload = {
             "file_count": len(files),
+            "files": [f.relative_to(cwd).as_posix() for f in files],
             "uploaded_at": datetime.datetime.now().isoformat() + "Z",
             "total_size_bytes": total_bytes,
         }
+        _upload_manifest(bucket, pfx, manifest_payload, cfg, auth)
     except KeyboardInterrupt:
         # Hard exit: ThreadPoolExecutor.shutdown(wait=True) would block for minutes
         # waiting for in-flight transfers. 130 = POSIX SIGINT convention.
@@ -487,6 +499,65 @@ def match_rules(rel, rules):
             return entry_filter, strip_prefix
     return None, None
 
+def _check_artifacts_exist(s3, bucket, prefix):
+    """Check if any objects exist under the given prefix."""
+    response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
+    return "Contents" in response
+
+
+def _read_latest_successful(s3, bucket, key):
+    """Read the LATEST_SUCCESSFUL file from S3 to get the target build_id."""
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key)
+        return response["Body"].read().decode("utf-8").strip()
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return None
+        raise
+
+
+def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, step, build_id):
+    s3 = _s3_client(cfg, auth)
+
+    def _build_prefix(r, b_id):
+        return key_join(dest_prefix, project_id, r, step, b_id)
+
+    master_ref = "refs/heads/master"
+
+    if build_id != "LATEST_SUCCESSFUL":
+        # Attempt to find artifacts under the current ref.
+        # If not found and ref is not master/main, it falls back to checking refs/heads/master
+        primary_prefix = _build_prefix(ref, build_id)
+        if _check_artifacts_exist(s3, bucket, primary_prefix):
+            return primary_prefix
+
+        if ref != master_ref and ref != "refs/heads/main":
+            fallback_prefix = _build_prefix(master_ref, build_id)
+            if _check_artifacts_exist(s3, bucket, fallback_prefix):
+                return fallback_prefix
+    else:
+        # Reads the pointer file for the current ref.
+        # If found, checks the target path for artifacts. If either the pointer file or target artifacts are missing, and ref is not master/main,
+        # fall back to reading the refs/heads/master pointer file and checking that fallback path
+        pointer_key = _build_prefix(ref, "LATEST_SUCCESSFUL")
+        target_build_id = _read_latest_successful(s3, bucket, pointer_key)
+
+        if target_build_id:
+            actual_prefix = _build_prefix(ref, target_build_id)
+            if _check_artifacts_exist(s3, bucket, actual_prefix):
+                return actual_prefix
+
+        if ref != master_ref and ref != "refs/heads/main":
+            fallback_pointer_key = _build_prefix(master_ref, "LATEST_SUCCESSFUL")
+            fallback_target_build_id = _read_latest_successful(s3, bucket, fallback_pointer_key)
+            if fallback_target_build_id:
+                actual_fallback_prefix = _build_prefix(master_ref, fallback_target_build_id)
+                if _check_artifacts_exist(s3, bucket, actual_fallback_prefix):
+                    return actual_fallback_prefix
+
+    # Abort if we couldn't find any artifacts
+    die(f"Artifact path could not be resolved for project={project_id}, ref={ref}, step={step}, build_id={build_id} (and no fallbacks were available)")
+
 
 def download(
     project_id,
@@ -510,11 +581,9 @@ def download(
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(project_id, cfg, step_override, build_id)
-    # TODO: igor
-    # for download the path needs to be checked for multiple cases
-    # we have to check if desired branch/tag is present, if not we need to fall back to `master` or `main` and log it
-    # if build_id is LATEST_SUCCESSFUL we need to fetch path from this file, and check if it exists, if no file we need to print suitable error
-    # if build_id is something else we also need to check if it exists if not print suitable error 
+
+    actual_build_id, step, ref = _get_scope_context(step_override, build_id)  # validate context early before starting downloads
+    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
@@ -711,7 +780,8 @@ if __name__ == "__main__":
         raise NotImplementedError("setting latest successful build is not implemented yet")
 
     elif cmd == "download":
-        step = extract = None
+        step = None
+        extract = False
         no_extract = clean = False
         patterns = []
         out = "."
@@ -750,7 +820,7 @@ if __name__ == "__main__":
         if not patterns:
             patterns = ["*.tar.zst"]
         rules = parse_rules(patterns)
-        download(project_id, rules, step, out, extract and not no_extract, clean, parallel, concurrency)
+        download(project_id, build_id, rules, step, out, extract and not no_extract, clean, parallel, concurrency)
 
     else:
         die(f"unknown command: {cmd}")
