@@ -17,7 +17,7 @@ fi
 # First upload files if env var for upload is set, if env var for set_latest is configured as well run that after upload
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_PROJECT_ID:-}" ]]; then
-  echo "~~~ :arrow_up: Uploading artifacts and setting LATEST_SUCCESSFUL pointer"
+  echo "~~~ :arrow_up: Uploading artifacts"
   
   # Skip upload if the command failed — broken builds should not pollute
   # the artifact namespace that test steps read from.
