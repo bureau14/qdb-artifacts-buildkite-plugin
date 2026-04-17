@@ -396,8 +396,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
         Bucket=bucket,
         Key=manifest_key,
         Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
-        ContentType="application/json",
-        ServerSideEncryption="AES256",
+        ContentType="application/json"
     )
 
 
@@ -662,6 +661,25 @@ def download(
     )
 
 
+def set_latest_successful(project_id, step):
+    """Update the LATEST_SUCCESSFUL pointer file for the current ref to point to the current build ID.
+    This allows test steps to use --build-id LATEST_SUCCESSFUL to always get the latest green build's artifacts."""
+    _, ssm = aws_clients()
+    cfg = load_store_config(ssm)
+    auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
+    bucket, pfx = scope(project_id, cfg, step_override=step)
+
+    build_id, _, ref = _get_scope_context(step_override=step)
+
+    target_key = key_join(pfx, "LATEST_SUCCESSFUL")
+    _s3_client(cfg, auth).put_object(
+        Bucket=bucket,
+        Key=target_key,
+        Body=build_id.encode("utf-8"),
+        ContentType="text/plain",
+    )
+    log(f"Set {target_key} → {build_id} for ref {ref}")
+
 def _filter_tar_member(member, entry_filter, strip_prefix):
     """Apply filter + strip to a tar member. Returns mutated member or None to skip.
     member.name is mutated in-place (tarfile's path remapping convention)."""
@@ -776,8 +794,7 @@ if __name__ == "__main__":
             die("missing required --step argument")
         if not project_id:
             die("missing required --project-id argument")
-        # TODO: igor create LATEST_SUCCESSFUL text file pointing to build for given project
-        raise NotImplementedError("setting latest successful build is not implemented yet")
+        set_latest_successful(project_id, step)
 
     elif cmd == "download":
         step = None
