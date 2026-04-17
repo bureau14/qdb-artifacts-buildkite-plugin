@@ -172,7 +172,10 @@ def aws_clients():
     s = boto3.session.Session()
     return (
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
-        s.client("ssm", config=Config(retries={"mode": "standard", "max_attempts": 5}, region_name="eu-west-1")),
+        s.client(
+            "ssm",
+            config=Config(retries={"mode": "standard", "max_attempts": 5}, region_name="eu-west-1"),
+        ),
     )
 
 
@@ -307,18 +310,23 @@ def key_join(*parts):
     """Join S3 key segments, dropping blanks to avoid double slashes."""
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
+
 def _get_scope_context(build_id_override=None, step_override=None):
     build_id = build_id_override or os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
-        die("BUILDKITE_BUILD_ID is not set and no --build-id override was given. "
-            "Are we running inside a Buildkite job?")
-    
+        die(
+            "BUILDKITE_BUILD_ID is not set and no --build-id override was given. "
+            "Are we running inside a Buildkite job?"
+        )
+
     branch = os.environ.get("BUILDKITE_BRANCH")
     tag = os.environ.get("BUILDKITE_TAG")
     if not branch and not tag:
-        raise ValueError("BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?")
+        raise ValueError(
+            "BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?"
+        )
 
-    ref =  f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
+    ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
     step = step_override or os.environ.get("BUILDKITE_STEP_KEY")
     if not step:
         die(
@@ -396,7 +404,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
         Bucket=bucket,
         Key=manifest_key,
         Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
-        ContentType="application/json"
+        ContentType="application/json",
     )
 
 
@@ -498,6 +506,7 @@ def match_rules(rel, rules):
             return entry_filter, strip_prefix
     return None, None
 
+
 def _check_artifacts_exist(s3, bucket, prefix):
     """Check if any objects exist under the given prefix."""
     response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
@@ -555,7 +564,9 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
                     return actual_fallback_prefix
 
     # Abort if we couldn't find any artifacts
-    die(f"Artifact path could not be resolved for project={project_id}, ref={ref}, step={step}, build_id={build_id} (and no fallbacks were available)")
+    die(
+        f"Artifact path could not be resolved for project={project_id}, ref={ref}, step={step}, build_id={build_id} (and no fallbacks were available)"
+    )
 
 
 def download(
@@ -581,7 +592,9 @@ def download(
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(project_id, cfg, step_override, build_id)
 
-    actual_build_id, step, ref = _get_scope_context(step_override, build_id)  # validate context early before starting downloads
+    actual_build_id, step, ref = _get_scope_context(
+        step_override, build_id
+    )  # validate context early before starting downloads
     pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
 
     tc = TransferConfig(max_concurrency=concurrency)
@@ -591,7 +604,7 @@ def download(
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
-    list_client = _s3_client(cfg, auth)  # listing only; workers create their own    
+    list_client = _s3_client(cfg, auth)  # listing only; workers create their own
     objects = []
     for page in list_client.get_paginator("list_objects_v2").paginate(
         Bucket=bucket, Prefix=f"{pfx}/"
@@ -679,6 +692,7 @@ def set_latest_successful(project_id, step):
         ContentType="text/plain",
     )
     log(f"Set {target_key} → {build_id} for ref {ref}")
+
 
 def _filter_tar_member(member, entry_filter, strip_prefix):
     """Apply filter + strip to a tar member. Returns mutated member or None to skip.
@@ -771,13 +785,13 @@ if __name__ == "__main__":
             else:
                 pattern = args[i]
                 i += 1
-            
+
         if not project_id:
             raise ValueError("project ID is required")
         upload(project_id, pattern, parallel, concurrency)
-    
+
     elif cmd == "set_latest":
-        # this is a separate step because sometimes we want to 
+        # this is a separate step because sometimes we want to
         step = None
         i = 0
         while i < len(args):
@@ -837,7 +851,17 @@ if __name__ == "__main__":
         if not patterns:
             patterns = ["*.tar.zst"]
         rules = parse_rules(patterns)
-        download(project_id, build_id, rules, step, out, extract and not no_extract, clean, parallel, concurrency)
+        download(
+            project_id,
+            build_id,
+            rules,
+            step,
+            out,
+            extract and not no_extract,
+            clean,
+            parallel,
+            concurrency,
+        )
 
     else:
         die(f"unknown command: {cmd}")
