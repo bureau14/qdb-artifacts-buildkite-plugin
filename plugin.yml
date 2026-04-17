@@ -23,6 +23,18 @@ configuration:
       required:
         - project_id
         - files
+    set_latest:
+      type: object
+      properties:
+        project_id:
+          type: string
+          description: "Unique project identifier of the artifacts to mark as latest (e.g. 'quasardb')"
+        step:
+          type: string
+          description: "Artifact path to mark as latest successful build of the current step (e.g build-linux-amd64-haswell-release)"
+      required:
+        - project_id
+        - step
     download:
       type: object
       properties:

@@ -329,7 +329,7 @@ def _get_scope_context(build_id_override=None, step_override=None, ref_override=
             )
 
         ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
- 
+
     step = step_override or os.environ.get("BUILDKITE_STEP_KEY")
     if not step:
         die(
@@ -339,7 +339,14 @@ def _get_scope_context(build_id_override=None, step_override=None, ref_override=
     return build_id, step, ref
 
 
-def scope(project_id, cfg, step_override=None, build_id_override=None, ref_override=None, skip_build_id=False):
+def scope(
+    project_id,
+    cfg,
+    step_override=None,
+    build_id_override=None,
+    ref_override=None,
+    skip_build_id=False,
+):
     """Resolve (bucket, key_prefix) for the current build/step context.
     step_override (--step) lets test steps address a build step's namespace
     instead of their own (which is empty). Resolved at pipeline-generation time."""
@@ -350,7 +357,7 @@ def scope(project_id, cfg, step_override=None, build_id_override=None, ref_overr
 
     if skip_build_id:
         return bucket, key_join(prefix, project_id, ref, "variants", step)
-    
+
     if build_id == "LATEST_SUCCESSFUL":
         return bucket, key_join(prefix, project_id, ref, "variants", step, "LATEST_SUCCESSFUL")
 
@@ -541,12 +548,20 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
     if build_id != "LATEST_SUCCESSFUL":
         # Attempt to find artifacts under the current ref.
         # If not found and ref is not master/main, it falls back to checking refs/heads/master
-        _, primary_prefix = scope(project_id, cfg, step_override=step, build_id_override=build_id, ref_override=ref)
+        _, primary_prefix = scope(
+            project_id, cfg, step_override=step, build_id_override=build_id, ref_override=ref
+        )
         if _check_artifacts_exist(s3, bucket, primary_prefix):
             return primary_prefix
 
         if ref != master_ref and ref != "refs/heads/main":
-            _, fallback_prefix = scope(project_id, cfg, step_override=step, build_id_override=build_id, ref_override=master_ref)
+            _, fallback_prefix = scope(
+                project_id,
+                cfg,
+                step_override=step,
+                build_id_override=build_id,
+                ref_override=master_ref,
+            )
             if _check_artifacts_exist(s3, bucket, fallback_prefix):
                 return fallback_prefix
     else:
@@ -556,15 +571,33 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
         target_build_id = _read_latest_successful(s3, bucket, dest_prefix)
 
         if target_build_id:
-            _, actual_prefix = scope(project_id, cfg, step_override=step, build_id_override=target_build_id, ref_override=ref)
+            _, actual_prefix = scope(
+                project_id,
+                cfg,
+                step_override=step,
+                build_id_override=target_build_id,
+                ref_override=ref,
+            )
             if _check_artifacts_exist(s3, bucket, actual_prefix):
                 return actual_prefix
 
         if ref != master_ref and ref != "refs/heads/main":
-            _, fallback_pointer_key = scope(project_id, cfg, step_override=step, build_id_override="LATEST_SUCCESSFUL", ref_override=master_ref)
+            _, fallback_pointer_key = scope(
+                project_id,
+                cfg,
+                step_override=step,
+                build_id_override="LATEST_SUCCESSFUL",
+                ref_override=master_ref,
+            )
             fallback_target_build_id = _read_latest_successful(s3, bucket, fallback_pointer_key)
             if fallback_target_build_id:
-                _, actual_fallback_prefix = scope(project_id, cfg, step_override=step, build_id_override=fallback_target_build_id, ref_override=master_ref)
+                _, actual_fallback_prefix = scope(
+                    project_id,
+                    cfg,
+                    step_override=step,
+                    build_id_override=fallback_target_build_id,
+                    ref_override=master_ref,
+                )
                 if _check_artifacts_exist(s3, bucket, actual_fallback_prefix):
                     return actual_fallback_prefix
 
@@ -791,7 +824,7 @@ if __name__ == "__main__":
                 i += 1
 
         if not project_id:
-            raise ValueError("project ID is required")
+            die("missing required --project-id argument")
         upload(project_id, pattern, parallel, concurrency)
 
     elif cmd == "set_latest":
@@ -852,6 +885,8 @@ if __name__ == "__main__":
             else:
                 patterns.append(args[i])
                 i += 1
+        if not project_id:
+            die("missing required --project-id argument")
         if not patterns:
             patterns = ["*.tar.zst"]
         rules = parse_rules(patterns)
