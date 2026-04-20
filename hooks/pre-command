@@ -47,6 +47,10 @@ project_id="$(plugin_read_config DOWNLOAD_PROJECT_ID "")"
 build_id="$(plugin_read_config DOWNLOAD_BUILD_ID "")"
 [[ -n "${build_id}" ]] && args+=(--build-id "${build_id}")
 
+# --ref
+ref="$(plugin_read_config DOWNLOAD_REF "")"
+[[ -n "${ref}" ]] && args+=(--ref "${ref}")
+
 # Collect file patterns from array env vars
 while IFS= read -r file; do
   args+=("${file}")

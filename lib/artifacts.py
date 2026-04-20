@@ -614,6 +614,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
 def download(
     project_id,
     build_id,
+    ref_override,
     rules,
     step_override=None,
     output_dir=".",
@@ -637,7 +638,7 @@ def download(
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(project_id, cfg, step_override, build_id)
     actual_build_id, step, ref = _get_scope_context(
-        build_id, step_override
+        build_id, step_override, ref_override
     )  # validate context early before starting downloads
     pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
 
@@ -858,6 +859,7 @@ if __name__ == "__main__":
         step = None
         extract = False
         no_extract = clean = False
+        ref = None
         patterns = []
         out = "."
         i = 0
@@ -867,6 +869,9 @@ if __name__ == "__main__":
                 i += 2
             elif args[i] == "--build-id":
                 build_id = args[i + 1]
+                i += 2
+            elif args[i] == "--ref":
+                ref = args[i + 1]
                 i += 2
             elif args[i] == "--project-id":
                 project_id = args[i + 1]
@@ -900,6 +905,7 @@ if __name__ == "__main__":
         download(
             project_id,
             build_id,
+            ref,
             rules,
             step,
             out,
