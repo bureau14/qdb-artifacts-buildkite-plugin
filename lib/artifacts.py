@@ -636,7 +636,7 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(project_id, cfg, step_override, build_id)
+    bucket, pfx = scope(project_id, cfg, step_override, build_id, ref_override)
     actual_build_id, step, ref = _get_scope_context(
         build_id, step_override, ref_override
     )  # validate context early before starting downloads
