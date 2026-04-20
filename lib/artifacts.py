@@ -174,8 +174,7 @@ def aws_clients():
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
         s.client(
             "ssm",
-            config=Config(retries={"mode": "standard", "max_attempts": 5}),
-        ),
+            config=Config(retries={"mode": "standard", "max_attempts": 5}), region_name="eu-west-1")
     )
 
 
@@ -655,7 +654,7 @@ def download(
         Bucket=bucket, Prefix=f"{pfx}/"
     ):
         for item in page.get("Contents", []):
-            rel = item["Key"][len(pfx) + 1 :]  # path relative to step's artifact root
+            rel = item["Key"].split("/")[-1]
             if not rel:
                 continue
             ef, sp = match_rules(rel, rules)
@@ -685,6 +684,7 @@ def download(
                 tmp.close()
                 try:
                     _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
+                    strip_prefix = "artifacts/"
                     extract_local_archive(tmp_path, rel, out, entry_filter, strip_prefix)
                 finally:
                     try:
@@ -719,7 +719,7 @@ def download(
     )
 
 
-def set_latest_successful(project_id, step):
+def promote(project_id, step):
     """Update the LATEST_SUCCESSFUL pointer file for the current ref to point to the current build ID.
     This allows test steps to use --build-id LATEST_SUCCESSFUL to always get the latest green build's artifacts."""
     _, ssm = aws_clients()
@@ -835,7 +835,7 @@ if __name__ == "__main__":
             die("missing required --project-id argument")
         upload(project_id, pattern, parallel, concurrency)
 
-    elif cmd == "set-latest":
+    elif cmd == "promote":
         # this is a separate step because sometimes we want to
         step = None
         i = 0
@@ -853,7 +853,7 @@ if __name__ == "__main__":
             die("missing required --step argument")
         if not project_id:
             die("missing required --project-id argument")
-        set_latest_successful(project_id, step)
+        promote(project_id, step)
 
     elif cmd == "download":
         step = None

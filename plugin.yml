@@ -23,7 +23,7 @@ configuration:
       required:
         - project_id
         - files
-    set_latest:
+    promote:
       type: object
       properties:
         project_id:
@@ -78,5 +78,5 @@ configuration:
   oneOf:
     - required: [upload]
     - required: [download]
-    - required: [set_latest]
+    - required: [promote]
   additionalProperties: false

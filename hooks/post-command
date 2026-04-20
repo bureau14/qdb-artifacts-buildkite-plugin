@@ -8,13 +8,13 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
   set -x
 fi
 
-# Exit early if neither upload nor set_latest is configured
-if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_SET_LATEST_PROJECT_ID:-}" ]]; then
+# Exit early if neither upload nor promote is configured
+if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_PROJECT_ID:-}" ]]; then
   exit 0
 fi
 
 
-# First upload files if env var for upload is set, if env var for set_latest is configured as well run that after upload
+# First upload files if env var for upload is set, if env var for promote is configured as well run that after upload
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_PROJECT_ID:-}" ]]; then
   echo "~~~ :arrow_up: Uploading artifacts"
@@ -47,17 +47,17 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_PROJECT_ID:-}" ]]; then
   run_artifacts_py "${args[@]}"
 fi
 
-if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_SET_LATEST_PROJECT_ID:-}" ]]; then
-  echo "~~~ :pushpin: Setting LATEST_SUCCESSFUL pointer for artifacts"
+if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_PROJECT_ID:-}" ]]; then
+  echo "~~~ :pushpin: Promoting artifacts"
 
-  args=(set-latest)
+  args=(promote)
 
   # --project-id
-  project_id="$(plugin_read_config SET_LATEST_PROJECT_ID "")"
+  project_id="$(plugin_read_config PROMOTE_PROJECT_ID "")"
   [[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
 
   # --step
-  step="$(plugin_read_config SET_LATEST_STEP "")"
+  step="$(plugin_read_config PROMOTE_STEP "")"
   [[ -n "${step}" ]] && args+=(--step "${step}")
 
   run_artifacts_py "${args[@]}"
