@@ -646,7 +646,7 @@ def download(
         Bucket=bucket, Prefix=f"{pfx}/"
     ):
         for item in page.get("Contents", []):
-            rel = item["Key"].split("/")[-1]
+            rel = item["Key"][len(pfx) + 1 :]  # path relative to step's artifact root
             if not rel:
                 continue
             ef, sp = match_rules(rel, rules)
@@ -676,7 +676,6 @@ def download(
                 tmp.close()
                 try:
                     _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
-                    strip_prefix = "artifacts/"
                     extract_local_archive(tmp_path, rel, out, entry_filter, strip_prefix)
                 finally:
                     try:
