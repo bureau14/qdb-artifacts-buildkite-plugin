@@ -10,7 +10,7 @@ configuration:
       properties:
         project_id:
           type: string
-          description: "Unique project identifier for namespacing artifacts (e.g. 'quasardb')"
+          description: "Unique project identifier for namespacing artifacts (defaults to BUILDKITE_PIPELINE_NAME)"
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
@@ -21,32 +21,33 @@ configuration:
           type: integer
           description: "Multipart threads per upload (default: 32)"
       required:
-        - project_id
         - files
     promote:
       type: object
       properties:
         project_id:
           type: string
-          description: "Unique project identifier of the artifacts to mark as latest (e.g. 'quasardb')"
+          description: "Unique project identifier of the artifacts to mark as latest (defaults to BUILDKITE_PIPELINE_NAME)"
         step:
           type: string
           description: "Artifact path to mark as latest successful build of the current step (e.g build-linux-amd64-haswell-release)"
       required:
-        - project_id
         - step
     download:
       type: object
       properties:
         project_id:
           type: string
-          description: "Unique project identifier of the artifacts to download (e.g. 'quasardb')"
+          description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
         build_id:
           type: string
-          description: "Build identifier to download from. Defaults to latest successful build of the current branch."
+          description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id matches current pipeline, else LATEST_SUCCESSFUL."
         step:
           type: string
           description: "Build step key to download from (cross-step)"
+        ref:
+          type: string
+          description: "Override the git ref to download from (e.g. 'refs/heads/main')"
         output-dir:
           type: string
           description: "Download destination directory (default: '.')"
@@ -69,7 +70,6 @@ configuration:
             type: string
           description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
       required:
-        - project_id
         - step
         - files
     debug:

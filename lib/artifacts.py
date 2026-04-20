@@ -8,9 +8,9 @@ in-memory extraction, entry-level filtering, and two-level parallel transfers.
 
 Key layout
 ----------
-    s3://<bucket>/<build_id>/<step_key>/<dest_prefix>/<cwd_relative_path>
+    s3://<bucket>/<dest_prefix>/<project_id>/<ref>/variants/<step_key>/builds/<build_id>/<cwd_relative_path>
 
-Build ID isolates pipeline runs; step key separates producers so test steps can
+Project ID, ref, and build ID isolate pipeline runs; step key separates producers so test steps can
 address a specific build step's output via --step. CWD-relative paths preserve
 the original directory structure.
 
@@ -172,9 +172,7 @@ def aws_clients():
     s = boto3.session.Session()
     return (
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
-        s.client(
-            "ssm",
-            config=Config(retries={"mode": "standard", "max_attempts": 5}), region_name="eu-west-1")
+        s.client("ssm", config=Config(retries={"mode": "standard", "max_attempts": 5})),
     )
 
 
@@ -310,14 +308,7 @@ def key_join(*parts):
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def _get_scope_context(build_id_override=None, step_override=None, ref_override=None):
-    build_id = build_id_override or os.environ.get("BUILDKITE_BUILD_ID")
-    if not build_id:
-        die(
-            "BUILDKITE_BUILD_ID is not set and no --build-id override was given. "
-            "Are we running inside a Buildkite job?"
-        )
-
+def _get_scope_context(step_override=None, ref_override=None):
     ref = ref_override
     if not ref_override:
         branch = ref_override or os.environ.get("BUILDKITE_BRANCH")
@@ -335,14 +326,14 @@ def _get_scope_context(build_id_override=None, step_override=None, ref_override=
             "BUILDKITE_STEP_KEY is not set and no --step override was given. "
             "Ensure the pipeline step has a 'key' field, or pass --step <key> explicitly"
         )
-    return build_id, step, ref
+    return step, ref
 
 
 def scope(
     project_id,
+    build_id,
     cfg,
     step_override=None,
-    build_id_override=None,
     ref_override=None,
     skip_build_id=False,
 ):
@@ -350,10 +341,10 @@ def scope(
     project_id scopes the artifacts to a specific project.
     step_override (--step) lets test steps address a build step's namespace
     instead of their own (which is empty). Resolved at pipeline-generation time.
-    build_id_override and ref_override allow pointing to specific pipeline executions.
+    ref_override allows pointing to specific pipeline executions.
     skip_build_id skips the build ID in the path (useful for LATEST_SUCCESSFUL pointers)."""
 
-    build_id, step, ref = _get_scope_context(build_id_override, step_override, ref_override)
+    step, ref = _get_scope_context(step_override, ref_override)
 
     bucket, prefix = parse_s3(cfg.destination)
 
@@ -427,7 +418,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, pattern, parallel=4, concurrency=32):
+def upload(project_id, build_id, pattern, parallel=4, concurrency=32):
     """Glob files and upload to the current build/step prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Also uploads a manifest.json file containing metadata about the uploaded files.
@@ -438,7 +429,7 @@ def upload(project_id, pattern, parallel=4, concurrency=32):
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
 
-    bucket, pfx = scope(project_id, cfg)
+    bucket, pfx = scope(project_id, build_id, cfg)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
@@ -551,18 +542,16 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
     if build_id != "LATEST_SUCCESSFUL":
         # Attempt to find artifacts under the current ref.
         # If not found and ref is not master/main, it falls back to checking refs/heads/master
-        _, primary_prefix = scope(
-            project_id, cfg, step_override=step, build_id_override=build_id, ref_override=ref
-        )
+        _, primary_prefix = scope(project_id, build_id, cfg, step_override=step, ref_override=ref)
         if _check_artifacts_exist(s3, bucket, primary_prefix):
             return primary_prefix
 
         if ref != master_ref and ref != "refs/heads/main":
             _, fallback_prefix = scope(
                 project_id,
+                build_id,
                 cfg,
                 step_override=step,
-                build_id_override=build_id,
                 ref_override=master_ref,
             )
             if _check_artifacts_exist(s3, bucket, fallback_prefix):
@@ -576,9 +565,9 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
         if target_build_id:
             _, actual_prefix = scope(
                 project_id,
+                target_build_id,
                 cfg,
                 step_override=step,
-                build_id_override=target_build_id,
                 ref_override=ref,
             )
             if _check_artifacts_exist(s3, bucket, actual_prefix):
@@ -587,18 +576,18 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
         if ref != master_ref and ref != "refs/heads/main":
             _, fallback_pointer_key = scope(
                 project_id,
+                "LATEST_SUCCESSFUL",
                 cfg,
                 step_override=step,
-                build_id_override="LATEST_SUCCESSFUL",
                 ref_override=master_ref,
             )
             fallback_target_build_id = _read_latest_successful(s3, bucket, fallback_pointer_key)
             if fallback_target_build_id:
                 _, actual_fallback_prefix = scope(
                     project_id,
+                    fallback_target_build_id,
                     cfg,
                     step_override=step,
-                    build_id_override=fallback_target_build_id,
                     ref_override=master_ref,
                 )
                 if _check_artifacts_exist(s3, bucket, actual_fallback_prefix):
@@ -623,9 +612,11 @@ def download(
     concurrency=32,
 ):
     """List matching artifacts under the step prefix and download/extract in parallel.
-    Uses project_id to locate the artifacts namespace.
+    Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
+    to the current BUILDKITE_PIPELINE_NAME.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
-    from main/master branch if missing on the current branch.
+    from main/master branch if missing on the current branch. If build_id is omitted, it defaults
+    to BUILDKITE_BUILD_ID if downloading from the current pipeline, otherwise LATEST_SUCCESSFUL.
 
     --clean wipes output_dir first — needed because Buildkite retries reuse the same
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
@@ -635,10 +626,11 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(project_id, cfg, step_override, build_id, ref_override)
-    actual_build_id, step, ref = _get_scope_context(
-        build_id, step_override, ref_override
+    bucket, pfx = scope(project_id, build_id, cfg, step_override, ref_override)
+    step, ref = _get_scope_context(
+        step_override, ref_override
     )  # validate context early before starting downloads
+    actual_build_id = build_id
     pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
 
     tc = TransferConfig(max_concurrency=concurrency)
@@ -719,15 +711,15 @@ def download(
     )
 
 
-def promote(project_id, step):
+def promote(project_id, build_id, step):
     """Update the LATEST_SUCCESSFUL pointer file for the current ref to point to the current build ID.
     This allows test steps to use --build-id LATEST_SUCCESSFUL to always get the latest green build's artifacts."""
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(project_id, cfg, step_override=step, skip_build_id=True)
+    bucket, pfx = scope(project_id, build_id, cfg, step_override=step, skip_build_id=True)
 
-    build_id, _, ref = _get_scope_context(step_override=step)
+    step, ref = _get_scope_context(step_override=step)
 
     target_key = key_join(pfx, "LATEST_SUCCESSFUL")
     _s3_client(cfg, auth).put_object(
@@ -811,8 +803,8 @@ if __name__ == "__main__":
     cmd = args.pop(0)
     parallel = 4
     concurrency = 32
-    project_id = None
-    build_id = "LATEST_SUCCESSFUL"
+    cmd_project_id = None
+    cmd_build_id = None
 
     if cmd == "upload":
         pattern = "*.tar.zst"
@@ -824,16 +816,25 @@ if __name__ == "__main__":
             elif args[i] == "--concurrency":
                 concurrency = int(args[i + 1])
                 i += 2
-            elif args[i].startswith("--project-id"):
-                project_id = args[i + 1]
+            elif args[i] == "--project-id":
+                cmd_project_id = args[i + 1]
+                i += 2
+            elif args[i] == "--build-id":
+                cmd_build_id = args[i + 1]
                 i += 2
             else:
                 pattern = args[i]
                 i += 1
 
+        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
-            die("missing required --project-id argument")
-        upload(project_id, pattern, parallel, concurrency)
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+
+        build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
+        if not build_id:
+            die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+
+        upload(project_id, build_id, pattern, parallel, concurrency)
 
     elif cmd == "promote":
         # this is a separate step because sometimes we want to
@@ -844,16 +845,26 @@ if __name__ == "__main__":
                 step = args[i + 1]
                 i += 2
             elif args[i] == "--project-id":
-                project_id = args[i + 1]
+                cmd_project_id = args[i + 1]
+                i += 2
+            elif args[i] == "--build-id":
+                cmd_build_id = args[i + 1]
                 i += 2
             else:
                 die(f"unknown argument: {args[i]}")
 
         if not step:
             die("missing required --step argument")
+
+        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
-            die("missing required --project-id argument")
-        promote(project_id, step)
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+
+        build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
+        if not build_id:
+            die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+
+        promote(project_id, build_id, step)
 
     elif cmd == "download":
         step = None
@@ -868,13 +879,13 @@ if __name__ == "__main__":
                 step = args[i + 1]
                 i += 2
             elif args[i] == "--build-id":
-                build_id = args[i + 1]
+                cmd_build_id = args[i + 1]
                 i += 2
             elif args[i] == "--ref":
                 ref = args[i + 1]
                 i += 2
             elif args[i] == "--project-id":
-                project_id = args[i + 1]
+                cmd_project_id = args[i + 1]
                 i += 2
             elif args[i] == "--extract":
                 extract = True
@@ -897,8 +908,25 @@ if __name__ == "__main__":
             else:
                 patterns.append(args[i])
                 i += 1
+
+        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_NAME")
+        project_id = cmd_project_id or pipeline_name
         if not project_id:
-            die("missing required --project-id argument")
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+
+        # In download mode
+        # If running for same project / pipeline and no --build-id override, default to current build ID.
+        # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
+        # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
+        build_id = cmd_build_id
+        if not build_id:
+            if cmd_project_id is None or cmd_project_id == pipeline_name:
+                build_id = os.environ.get("BUILDKITE_BUILD_ID")
+                if not build_id:
+                    die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+            else:
+                build_id = "LATEST_SUCCESSFUL"
+
         if not patterns:
             patterns = ["*.tar.zst"]
         rules = parse_rules(patterns)
