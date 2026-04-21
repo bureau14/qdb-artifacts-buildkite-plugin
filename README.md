@@ -40,6 +40,25 @@ steps:
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
+            step: build-linux-amd64-release
+            output-dir: artifacts
+            extract: true
+            clean: true
+            files:
+              - "*-c-api.tar.zst!lib/*"
+              - "*-server.tar.zst!bin/*"
+              - "*-tests.tar.zst!bin/*"
+```
+
+### Download (cross-project, with extraction and entry filtering)
+
+```yaml
+steps:
+  - label: ":test_tube: Build depending on quasardb artifacts"
+    command: ./build.sh
+    plugins:
+      - bureau14/qdb-artifacts#v1.0.0:
+          download:
             project_id: quasardb
             step: build-linux-amd64-release
             output-dir: artifacts
