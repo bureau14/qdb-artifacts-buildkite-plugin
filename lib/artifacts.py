@@ -538,7 +538,7 @@ def _read_latest_successful(s3, bucket, key):
 def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, step, build_id):
     s3 = _s3_client(cfg, auth)
     master_refs = {"refs/heads/master", "refs/heads/main"}
-    
+
     # Define the sequence of refs to check:
     # We want to check the current ref first, if its not master/main
     # If the current ref is not present, we want to check master/main as a fallback
@@ -548,14 +548,16 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
 
     for current_ref in refs_to_check:
         effective_build_id = build_id
-        
+
         # 1. Resolve build_id if it's a "LATEST" pointer
         if build_id == "LATEST_SUCCESSFUL":
             # For the primary ref, use dest_prefix; for fallback, get key from scope
             if current_ref == ref:
                 pointer_key = dest_prefix
             else:
-                pointer_key = scope(project_id, build_id, cfg, step_override=step, ref_override=current_ref)[1]
+                pointer_key = scope(
+                    project_id, build_id, cfg, step_override=step, ref_override=current_ref
+                )[1]
 
             effective_build_id = _read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
@@ -563,18 +565,18 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
 
         # 2. Resolve the actual artifact prefix
         _, prefix = scope(
-            project_id, 
-            effective_build_id, 
-            cfg, 
-            step_override=step, 
-            ref_override=current_ref
+            project_id, effective_build_id, cfg, step_override=step, ref_override=current_ref
         )
 
         # 3. Check if artifacts exist at this prefix, if not continue to the next ref in the fallback sequence
         if _check_artifacts_exist(s3, bucket, prefix):
             return prefix
 
-    die(f"Artifact path could not be resolved for project={project_id}, ref={ref}, "f"step={step}, build_id={build_id} (and no fallbacks were available)")
+    die(
+        f"Artifact path could not be resolved for project={project_id}, ref={ref}, "
+        f"step={step}, build_id={build_id} (and no fallbacks were available)"
+    )
+
 
 def download(
     project_id,
