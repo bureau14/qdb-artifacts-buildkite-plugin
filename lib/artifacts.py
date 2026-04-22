@@ -404,7 +404,7 @@ def upload(project_id, build_id, git_ref, variant, pattern, parallel=4, concurre
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
 
-    bucket, pfx = scope(cfg, project_id, build_id, git_ref, variant)
+    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
