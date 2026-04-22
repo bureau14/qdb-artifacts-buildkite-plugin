@@ -325,7 +325,9 @@ def scope(
         return bucket, key_join(prefix, project_id, git_ref, "variants", variant)
 
     if build_id == "LATEST_SUCCESSFUL":
-        return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "LATEST_SUCCESSFUL")
+        return bucket, key_join(
+            prefix, project_id, git_ref, "variants", variant, "LATEST_SUCCESSFUL"
+        )
 
     return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "builds", build_id)
 
@@ -576,7 +578,9 @@ def download(
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(project_id, build_id, cfg, variant, git_ref)
     actual_build_id = build_id
-    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, git_ref, variant, actual_build_id)
+    pfx = _validate_artifact_path(
+        cfg, auth, bucket, pfx, project_id, git_ref, variant, actual_build_id
+    )
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
