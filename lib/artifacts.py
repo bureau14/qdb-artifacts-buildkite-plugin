@@ -10,16 +10,13 @@ Key layout
 ----------
     s3://<bucket>/<dest_prefix>/<project_id>/<ref>/variants/<variant_key>/builds/<build_id>/<cwd_relative_path>
 
-Project ID, ref, and build ID isolate pipeline runs; variant key separates producers so test steps can
-address a specific build variant's output via --variant. CWD-relative paths preserve
+Project ID, ref, and build ID isolate pipeline runs; variant key separates different build variants. CWD-relative paths preserve
 the original directory structure.
 
 Cross-step sharing
 ------------------
-Build steps upload variant keys. Test steps download with
-``--variant linux-amd64-release`` to look in the build step's namespace
-(otherwise they'd look in their own empty namespace). The --variant value is
-substituted at pipeline-generation time.
+Build steps upload under variant key. Test steps download with
+``--variant linux-amd64-release`` to look in the variant namespace. The --variant value is substituted at pipeline-generation time.
 
 Backends
 --------
