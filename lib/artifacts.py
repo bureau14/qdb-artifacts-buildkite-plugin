@@ -306,9 +306,9 @@ def key_join(*parts):
 
 
 def scope(
+    cfg,
     project_id,
     build_id,
-    cfg,
     variant,
     git_ref,
     skip_build_id=False,
@@ -316,7 +316,7 @@ def scope(
     """Resolve (bucket, key_prefix) for the current build/variant context.
     project_id scopes the artifacts to a specific project.
     variant (--variant) specifies os/arch/etc. to use. Resolved at pipeline-generation time.
-    git_ref (--ref) specifies the Git reference (branch or tag) to use.
+    git_ref (--git-ref) specifies the Git reference (branch or tag) to use.
     skip_build_id skips the build ID in the path (used for LATEST_SUCCESSFUL pointers)."""
 
     bucket, prefix = parse_s3(cfg.destination)
@@ -404,7 +404,7 @@ def upload(project_id, build_id, git_ref, variant, pattern, parallel=4, concurre
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
 
-    bucket, pfx = scope(project_id, build_id, git_ref, cfg, variant)
+    bucket, pfx = scope(cfg, project_id, build_id, git_ref, variant)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
@@ -530,14 +530,14 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
             if current_ref == ref:
                 pointer_key = dest_prefix
             else:
-                pointer_key = scope(project_id, build_id, cfg, variant, current_ref)[1]
+                pointer_key = scope(cfg, project_id, build_id, variant, current_ref)[1]
 
             effective_build_id = _read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
                 continue
 
         # 2. Resolve the actual artifact prefix
-        _, prefix = scope(project_id, effective_build_id, cfg, variant, current_ref)
+        _, prefix = scope(cfg, project_id, effective_build_id, variant, current_ref)
 
         # 3. Check if artifacts exist at this prefix, if not continue to the next ref in the fallback sequence
         if _check_artifacts_exist(s3, bucket, prefix):
@@ -576,7 +576,7 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(project_id, build_id, cfg, variant, git_ref)
+    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
     actual_build_id = build_id
     pfx = _validate_artifact_path(
         cfg, auth, bucket, pfx, project_id, git_ref, variant, actual_build_id
@@ -665,7 +665,7 @@ def promote(project_id, build_id, git_ref, variant):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(project_id, build_id, cfg, variant, git_ref, skip_build_id=True)
+    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref, skip_build_id=True)
 
     target_key = key_join(pfx, "LATEST_SUCCESSFUL")
     _s3_client(cfg, auth).put_object(
@@ -871,6 +871,9 @@ if __name__ == "__main__":
             else:
                 patterns.append(args[i])
                 i += 1
+
+        if not git_ref:
+            die("missing required --git-ref argument")
 
         pipeline_name = os.environ.get("BUILDKITE_PIPELINE_NAME")
         project_id = cmd_project_id or pipeline_name
