@@ -8,17 +8,17 @@ in-memory extraction, entry-level filtering, and two-level parallel transfers.
 
 Key layout
 ----------
-    s3://<bucket>/<dest_prefix>/<project_id>/<ref>/variants/<step_key>/builds/<build_id>/<cwd_relative_path>
+    s3://<bucket>/<dest_prefix>/<project_id>/<ref>/variants/<variant_key>/builds/<build_id>/<cwd_relative_path>
 
-Project ID, ref, and build ID isolate pipeline runs; step key separates producers so test steps can
-address a specific build step's output via --step. CWD-relative paths preserve
+Project ID, ref, and build ID isolate pipeline runs; variant key separates producers so test steps can
+address a specific build variant's output via --variant. CWD-relative paths preserve
 the original directory structure.
 
 Cross-step sharing
 ------------------
-Build steps upload under their own step key. Test steps download with
-``--step build-linux-amd64-release`` to look in the build step's namespace
-(otherwise they'd look in their own empty namespace). The --step value is
+Build steps upload variant keys. Test steps download with
+``--variant linux-amd64-release`` to look in the build step's namespace
+(otherwise they'd look in their own empty namespace). The --variant value is
 substituted at pipeline-generation time.
 
 Backends
@@ -66,7 +66,7 @@ Usage
 
     # download + extract (test step, cross-step, entry-filtered)
     python3 .buildkite/tools/artifacts.py download \\
-        --step build-linux-amd64-release --extract --clean --output-dir artifacts \\
+        --variant build-linux-amd64-release --extract --clean --output-dir artifacts \\
         '*-c-api.tar.zst!lib/*' '*-server.tar.zst!bin/*' '*-tests.tar.zst!bin/*'
 """
 
@@ -308,7 +308,7 @@ def key_join(*parts):
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def _get_scope_context(step_override=None, ref_override=None):
+def _get_scope_context(ref_override=None):
     ref = ref_override
     if not ref_override:
         branch = ref_override or os.environ.get("BUILDKITE_BRANCH")
@@ -320,41 +320,34 @@ def _get_scope_context(step_override=None, ref_override=None):
 
         ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
 
-    step = step_override or os.environ.get("BUILDKITE_STEP_KEY")
-    if not step:
-        die(
-            "BUILDKITE_STEP_KEY is not set and no --step override was given. "
-            "Ensure the pipeline step has a 'key' field, or pass --step <key> explicitly"
-        )
-    return step, ref
+    return ref
 
 
 def scope(
     project_id,
     build_id,
     cfg,
-    step_override=None,
+    variant,
     ref_override=None,
     skip_build_id=False,
 ):
-    """Resolve (bucket, key_prefix) for the current build/step context.
+    """Resolve (bucket, key_prefix) for the current build/variant context.
     project_id scopes the artifacts to a specific project.
-    step_override (--step) lets test steps address a build step's namespace
-    instead of their own (which is empty). Resolved at pipeline-generation time.
+    variant (--variant) specifies os/arch/etc. to use. Resolved at pipeline-generation time.
     ref_override allows pointing to specific pipeline executions.
     skip_build_id skips the build ID in the path (used for LATEST_SUCCESSFUL pointers)."""
 
-    step, ref = _get_scope_context(step_override, ref_override)
+    ref = _get_scope_context(ref_override)
 
     bucket, prefix = parse_s3(cfg.destination)
 
     if skip_build_id:
-        return bucket, key_join(prefix, project_id, ref, "variants", step)
+        return bucket, key_join(prefix, project_id, ref, "variants", variant)
 
     if build_id == "LATEST_SUCCESSFUL":
-        return bucket, key_join(prefix, project_id, ref, "variants", step, "LATEST_SUCCESSFUL")
+        return bucket, key_join(prefix, project_id, ref, "variants", variant, "LATEST_SUCCESSFUL")
 
-    return bucket, key_join(prefix, project_id, ref, "variants", step, "builds", build_id)
+    return bucket, key_join(prefix, project_id, ref, "variants", variant, "builds", build_id)
 
 
 def fmt_size(n):
@@ -418,8 +411,8 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, build_id, pattern, parallel=4, concurrency=32):
-    """Glob files and upload to the current build/step prefix. CWD-relative paths
+def upload(project_id, build_id, variant, pattern, parallel=4, concurrency=32):
+    """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
 
@@ -429,7 +422,7 @@ def upload(project_id, build_id, pattern, parallel=4, concurrency=32):
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
 
-    bucket, pfx = scope(project_id, build_id, cfg)
+    bucket, pfx = scope(project_id, build_id, cfg, variant)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
@@ -535,7 +528,7 @@ def _read_latest_successful(s3, bucket, key):
         raise
 
 
-def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, step, build_id):
+def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, variant, build_id):
     s3 = _s3_client(cfg, auth)
     master_refs = {"refs/heads/master", "refs/heads/main"}
 
@@ -555,18 +548,14 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
             if current_ref == ref:
                 pointer_key = dest_prefix
             else:
-                pointer_key = scope(
-                    project_id, build_id, cfg, step_override=step, ref_override=current_ref
-                )[1]
+                pointer_key = scope(project_id, build_id, cfg, variant, current_ref)[1]
 
             effective_build_id = _read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
                 continue
 
         # 2. Resolve the actual artifact prefix
-        _, prefix = scope(
-            project_id, effective_build_id, cfg, step_override=step, ref_override=current_ref
-        )
+        _, prefix = scope(project_id, effective_build_id, cfg, variant, current_ref)
 
         # 3. Check if artifacts exist at this prefix, if not continue to the next ref in the fallback sequence
         if _check_artifacts_exist(s3, bucket, prefix):
@@ -574,7 +563,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, ste
 
     die(
         f"Artifact path could not be resolved for project={project_id}, ref={ref}, "
-        f"step={step}, build_id={build_id} (and no fallbacks were available)"
+        f"variant={variant}, build_id={build_id} (and no fallbacks were available)"
     )
 
 
@@ -583,14 +572,14 @@ def download(
     build_id,
     ref_override,
     rules,
-    step_override=None,
+    variant,
     output_dir=".",
     extract=False,
     clean=False,
     parallel=4,
     concurrency=32,
 ):
-    """List matching artifacts under the step prefix and download/extract in parallel.
+    """List matching artifacts under the variant prefix and download/extract in parallel.
     Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
     to the current BUILDKITE_PIPELINE_NAME.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
@@ -605,12 +594,10 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(project_id, build_id, cfg, step_override, ref_override)
-    step, ref = _get_scope_context(
-        step_override, ref_override
-    )  # validate context early before starting downloads
+    bucket, pfx = scope(project_id, build_id, cfg, variant, ref_override)
+    ref = _get_scope_context(ref_override)
     actual_build_id = build_id
-    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, step, actual_build_id)
+    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, variant, actual_build_id)
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
@@ -625,7 +612,7 @@ def download(
         Bucket=bucket, Prefix=f"{pfx}/"
     ):
         for item in page.get("Contents", []):
-            rel = item["Key"][len(pfx) + 1 :]  # path relative to step's artifact root
+            rel = item["Key"][len(pfx) + 1 :]  # path relative to variant's artifact root
             if not rel:
                 continue
             ef, sp = match_rules(rel, rules)
@@ -689,15 +676,15 @@ def download(
     )
 
 
-def promote(project_id, build_id, step):
+def promote(project_id, build_id, variant):
     """Update the LATEST_SUCCESSFUL pointer file for the current ref to point to the current build ID.
     This allows test steps to use --build-id LATEST_SUCCESSFUL to always get the latest green build's artifacts."""
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(project_id, build_id, cfg, step_override=step, skip_build_id=True)
+    bucket, pfx = scope(project_id, build_id, cfg, variant, skip_build_id=True)
 
-    step, ref = _get_scope_context(step_override=step)
+    ref = _get_scope_context()
 
     target_key = key_join(pfx, "LATEST_SUCCESSFUL")
     _s3_client(cfg, auth).put_object(
@@ -785,10 +772,14 @@ if __name__ == "__main__":
     cmd_build_id = None
 
     if cmd == "upload":
+        variant = None
         pattern = "*.tar.zst"
         i = 0
         while i < len(args):
-            if args[i] == "--parallel":
+            if args[i] == "--variant":
+                variant = args[i + 1]
+                i += 2
+            elif args[i] == "--parallel":
                 parallel = int(args[i + 1])
                 i += 2
             elif args[i] == "--concurrency":
@@ -804,6 +795,9 @@ if __name__ == "__main__":
                 pattern = args[i]
                 i += 1
 
+        if not variant:
+            die("missing required --variant argument")
+
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
@@ -812,15 +806,15 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, pattern, parallel, concurrency)
+        upload(project_id, build_id, variant, pattern, parallel, concurrency)
 
     elif cmd == "promote":
-        # this is a separate step because sometimes we want to
-        step = None
+        # this is a separate variant because sometimes we want to
+        variant = None
         i = 0
         while i < len(args):
-            if args[i] == "--step":
-                step = args[i + 1]
+            if args[i] == "--variant":
+                variant = args[i + 1]
                 i += 2
             elif args[i] == "--project-id":
                 cmd_project_id = args[i + 1]
@@ -831,8 +825,8 @@ if __name__ == "__main__":
             else:
                 die(f"unknown argument: {args[i]}")
 
-        if not step:
-            die("missing required --step argument")
+        if not variant:
+            die("missing required --variant argument")
 
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
@@ -842,10 +836,10 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        promote(project_id, build_id, step)
+        promote(project_id, build_id, variant)
 
     elif cmd == "download":
-        step = None
+        variant = None
         extract = False
         no_extract = clean = False
         ref = None
@@ -853,8 +847,8 @@ if __name__ == "__main__":
         out = "."
         i = 0
         while i < len(args):
-            if args[i] == "--step":
-                step = args[i + 1]
+            if args[i] == "--variant":
+                variant = args[i + 1]
                 i += 2
             elif args[i] == "--build-id":
                 cmd_build_id = args[i + 1]
@@ -892,6 +886,9 @@ if __name__ == "__main__":
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
 
+        if not variant:
+            die("missing required --variant argument")
+
         # In download mode
         # If running for same project / pipeline and no --build-id override, default to current build ID.
         # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
@@ -913,7 +910,7 @@ if __name__ == "__main__":
             build_id,
             ref,
             rules,
-            step,
+            variant,
             out,
             extract and not no_extract,
             clean,

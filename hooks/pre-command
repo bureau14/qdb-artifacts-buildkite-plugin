@@ -15,9 +15,9 @@ echo "~~~ :arrow_down: Downloading artifacts"
 
 args=(download)
 
-# --step
-step="$(plugin_read_config DOWNLOAD_STEP "")"
-[[ -n "${step}" ]] && args+=(--step "${step}")
+# --variant
+variant="$(plugin_read_config DOWNLOAD_VARIANT "")"
+[[ -n "${variant}" ]] && args+=(--variant "${variant}")
 
 # --output-dir
 output_dir="$(plugin_read_config DOWNLOAD_OUTPUT_DIR ".")"

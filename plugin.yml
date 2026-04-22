@@ -11,6 +11,9 @@ configuration:
         project_id:
           type: string
           description: "Unique project identifier for namespacing artifacts (defaults to BUILDKITE_PIPELINE_NAME)"
+        variant:
+          type: string
+          description: "Build variant key to upload to"
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
@@ -21,6 +24,7 @@ configuration:
           type: integer
           description: "Multipart threads per upload (default: 32)"
       required:
+        - variant
         - files
     promote:
       type: object
@@ -28,11 +32,11 @@ configuration:
         project_id:
           type: string
           description: "Unique project identifier of the artifacts to mark as latest (defaults to BUILDKITE_PIPELINE_NAME)"
-        step:
+        variant:
           type: string
-          description: "Artifact path to mark as latest successful build of the current step (e.g build-linux-amd64-haswell-release)"
+          description: "Artifact path to mark as latest successful build of the current variant (e.g linux-amd64-haswell-release)"
       required:
-        - step
+        - variant
     download:
       type: object
       properties:
@@ -42,9 +46,9 @@ configuration:
         build_id:
           type: string
           description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id matches current pipeline, else LATEST_SUCCESSFUL."
-        step:
+        variant:
           type: string
-          description: "Build step key to download from (cross-step)"
+          description: "Build variant key to download from (cross-step)"
         ref:
           type: string
           description: "Override the git ref to download from (e.g. 'refs/heads/main')"
@@ -70,7 +74,7 @@ configuration:
             type: string
           description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
       required:
-        - step
+        - variant
         - files
     debug:
       type: boolean

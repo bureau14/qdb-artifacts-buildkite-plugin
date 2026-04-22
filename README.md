@@ -4,11 +4,11 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 
 ## What it does
 
-- **Upload** — after a build step's command completes successfully, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<step_key>/builds/<build_id>/…`, preserving directory structure, and generating a manifest file.
+- **Upload** — after a build step's command completes successfully, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<variant>/builds/<build_id>/…`, preserving directory structure, and generating a manifest file.
 - **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional streaming in-memory extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
 - **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
 
-Artifacts are scoped by project ID, git ref, build ID, and step key, so each pipeline run is isolated and test steps can address a specific build step's output.
+Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipeline run is isolated and test steps can address a specific build step's output.
 
 ## Requirements
 
@@ -27,6 +27,7 @@ steps:
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
           upload:
+            variant: "linux-amd64-release"
             project_id: quasardb
             files: "artifacts/**/*.tar.zst"
 ```
@@ -40,7 +41,7 @@ steps:
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
-            step: build-linux-amd64-release
+            variant: "linux-amd64-release"
             output-dir: artifacts
             extract: true
             clean: true
@@ -60,7 +61,7 @@ steps:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
             project_id: quasardb
-            step: build-linux-amd64-release
+            variant: "linux-amd64-release"
             output-dir: artifacts
             extract: true
             clean: true
@@ -76,8 +77,7 @@ steps:
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       download:
-        project_id: quasardb
-        step: build-linux-amd64-release
+        variant: "linux-amd64-release"
         output-dir: dist
         files:
           - "*.tar.zst"
@@ -89,6 +89,7 @@ plugins:
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       upload:
+        variant: "linux-amd64-release"
         project_id: quasardb
         files: "dist/**/*.tar.zst"
         parallel: 8
@@ -110,6 +111,7 @@ plugins:
 
 | Key           | Type    | Required | Description                                                             |
 | ------------- | ------- | -------- | ----------------------------------------------------------------------- |
+| `variant`     | string  | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).              |
 | `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_NAME`. |
 | `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
@@ -120,7 +122,7 @@ plugins:
 | Key          | Type   | Required | Description                                                                                   |
 | ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
 | `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_NAME`.        |
-| `step`       | string | ✓        | Artifact path to mark as latest successful build of the current step.                         |
+| `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                          |
 
 ### `download` object keys
 
@@ -128,7 +130,7 @@ plugins:
 | ------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_NAME`.                  |
 | `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline, else `LATEST_SUCCESSFUL`. |
-| `step`        | string           | ✓        | Key of the build step to download artifacts from (cross-step).                                  |
+| `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
 | `ref`         | string           |          | Override the git ref to download from (e.g. `refs/heads/main`). Defaults to the current ref.    |
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
@@ -189,4 +191,3 @@ plugins:
         files: "artifacts/**/*.tar.zst"
       debug: true
 ```
-
