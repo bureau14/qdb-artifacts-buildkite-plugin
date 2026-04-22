@@ -305,46 +305,29 @@ def key_join(*parts):
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def _get_scope_context(ref_override=None):
-    ref = ref_override
-    if not ref_override:
-        branch = ref_override or os.environ.get("BUILDKITE_BRANCH")
-        tag = os.environ.get("BUILDKITE_TAG")
-        if not branch and not tag:
-            raise ValueError(
-                "BUILDKITE_BRANCH and BUILDKITE_TAG are both empty — are we running inside a Buildkite job?"
-            )
-
-        ref = f"refs/tags/{tag}" if tag else f"refs/heads/{branch}"
-
-    return ref
-
-
 def scope(
     project_id,
     build_id,
     cfg,
     variant,
-    ref_override=None,
+    git_ref,
     skip_build_id=False,
 ):
     """Resolve (bucket, key_prefix) for the current build/variant context.
     project_id scopes the artifacts to a specific project.
     variant (--variant) specifies os/arch/etc. to use. Resolved at pipeline-generation time.
-    ref_override allows pointing to specific pipeline executions.
+    git_ref (--ref) specifies the Git reference (branch or tag) to use.
     skip_build_id skips the build ID in the path (used for LATEST_SUCCESSFUL pointers)."""
-
-    ref = _get_scope_context(ref_override)
 
     bucket, prefix = parse_s3(cfg.destination)
 
     if skip_build_id:
-        return bucket, key_join(prefix, project_id, ref, "variants", variant)
+        return bucket, key_join(prefix, project_id, git_ref, "variants", variant)
 
     if build_id == "LATEST_SUCCESSFUL":
-        return bucket, key_join(prefix, project_id, ref, "variants", variant, "LATEST_SUCCESSFUL")
+        return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "LATEST_SUCCESSFUL")
 
-    return bucket, key_join(prefix, project_id, ref, "variants", variant, "builds", build_id)
+    return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "builds", build_id)
 
 
 def fmt_size(n):
@@ -408,7 +391,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, build_id, variant, pattern, parallel=4, concurrency=32):
+def upload(project_id, build_id, git_ref, variant, pattern, parallel=4, concurrency=32):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
@@ -419,7 +402,7 @@ def upload(project_id, build_id, variant, pattern, parallel=4, concurrency=32):
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
 
-    bucket, pfx = scope(project_id, build_id, cfg, variant)
+    bucket, pfx = scope(project_id, build_id, git_ref, cfg, variant)
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
@@ -567,7 +550,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
 def download(
     project_id,
     build_id,
-    ref_override,
+    git_ref,
     rules,
     variant,
     output_dir=".",
@@ -591,10 +574,9 @@ def download(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, pfx = scope(project_id, build_id, cfg, variant, ref_override)
-    ref = _get_scope_context(ref_override)
+    bucket, pfx = scope(project_id, build_id, cfg, variant, git_ref)
     actual_build_id = build_id
-    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, ref, variant, actual_build_id)
+    pfx = _validate_artifact_path(cfg, auth, bucket, pfx, project_id, git_ref, variant, actual_build_id)
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
@@ -673,15 +655,13 @@ def download(
     )
 
 
-def promote(project_id, build_id, variant):
+def promote(project_id, build_id, git_ref, variant):
     """Update the LATEST_SUCCESSFUL pointer file for the current ref to point to the current build ID.
     This allows test steps to use --build-id LATEST_SUCCESSFUL to always get the latest green build's artifacts."""
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(project_id, build_id, cfg, variant, skip_build_id=True)
-
-    ref = _get_scope_context()
+    bucket, pfx = scope(project_id, build_id, cfg, variant, git_ref, skip_build_id=True)
 
     target_key = key_join(pfx, "LATEST_SUCCESSFUL")
     _s3_client(cfg, auth).put_object(
@@ -690,7 +670,7 @@ def promote(project_id, build_id, variant):
         Body=build_id.encode("utf-8"),
         ContentType="text/plain",
     )
-    log(f"Set {target_key} → {build_id} for ref {ref}")
+    log(f"Set {target_key} → {build_id} for ref {git_ref}")
 
 
 def _filter_tar_member(member, entry_filter, strip_prefix):
@@ -767,9 +747,10 @@ if __name__ == "__main__":
     concurrency = 32
     cmd_project_id = None
     cmd_build_id = None
+    variant = None
+    git_ref = None
 
     if cmd == "upload":
-        variant = None
         pattern = "*.tar.zst"
         i = 0
         while i < len(args):
@@ -788,12 +769,17 @@ if __name__ == "__main__":
             elif args[i] == "--build-id":
                 cmd_build_id = args[i + 1]
                 i += 2
+            elif args[i] == "--git-ref":
+                git_ref = args[i + 1]
+                i += 2
             else:
                 pattern = args[i]
                 i += 1
 
         if not variant:
             die("missing required --variant argument")
+        if not git_ref:
+            die("missing required --git-ref argument")
 
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
@@ -803,11 +789,10 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, variant, pattern, parallel, concurrency)
+        upload(project_id, build_id, git_ref, variant, pattern, parallel, concurrency)
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to
-        variant = None
         i = 0
         while i < len(args):
             if args[i] == "--variant":
@@ -819,11 +804,16 @@ if __name__ == "__main__":
             elif args[i] == "--build-id":
                 cmd_build_id = args[i + 1]
                 i += 2
+            elif args[i] == "--git-ref":
+                git_ref = args[i + 1]
+                i += 2
             else:
                 die(f"unknown argument: {args[i]}")
 
         if not variant:
             die("missing required --variant argument")
+        if not git_ref:
+            die("missing required --git-ref argument")
 
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
         if not project_id:
@@ -833,7 +823,7 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        promote(project_id, build_id, variant)
+        promote(project_id, build_id, git_ref, variant)
 
     elif cmd == "download":
         variant = None
@@ -850,8 +840,8 @@ if __name__ == "__main__":
             elif args[i] == "--build-id":
                 cmd_build_id = args[i + 1]
                 i += 2
-            elif args[i] == "--ref":
-                ref = args[i + 1]
+            elif args[i] == "--git-ref":
+                git_ref = args[i + 1]
                 i += 2
             elif args[i] == "--project-id":
                 cmd_project_id = args[i + 1]
@@ -905,7 +895,7 @@ if __name__ == "__main__":
         download(
             project_id,
             build_id,
-            ref,
+            git_ref,
             rules,
             variant,
             out,

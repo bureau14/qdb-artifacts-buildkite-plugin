@@ -14,6 +14,9 @@ configuration:
         variant:
           type: string
           description: "Build variant key to upload to"
+        git_ref:
+          type: string
+          description: "Git ref to download from (e.g. 'refs/heads/main')"
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
@@ -26,6 +29,7 @@ configuration:
       required:
         - variant
         - files
+        - git_ref
     promote:
       type: object
       properties:
@@ -35,8 +39,12 @@ configuration:
         variant:
           type: string
           description: "Artifact path to mark as latest successful build of the current variant (e.g linux-amd64-haswell-release)"
+        git_ref:
+          type: string
+          description: "Git ref to promote (e.g. 'refs/heads/main')"
       required:
         - variant
+        - git_ref
     download:
       type: object
       properties:
@@ -49,9 +57,9 @@ configuration:
         variant:
           type: string
           description: "Build variant key to download from (cross-step)"
-        ref:
+        git_ref:
           type: string
-          description: "Override the git ref to download from (e.g. 'refs/heads/main')"
+          description: "Git ref to download from (e.g. 'refs/heads/main')"
         output-dir:
           type: string
           description: "Download destination directory (default: '.')"
@@ -76,6 +84,7 @@ configuration:
       required:
         - variant
         - files
+        - git_ref
     debug:
       type: boolean
       description: "Enable bash debug tracing"

@@ -28,6 +28,7 @@ steps:
       - bureau14/qdb-artifacts#v1.0.0:
           upload:
             variant: "linux-amd64-release"
+            git_ref: "refs/heads/main"
             files: "artifacts/**/*.tar.zst"
 ```
 
@@ -41,6 +42,7 @@ steps:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
             variant: "linux-amd64-release"
+            git_ref: "refs/heads/main"
             output-dir: artifacts
             extract: true
             clean: true
@@ -61,6 +63,7 @@ steps:
           download:
             project_id: quasardb
             variant: "linux-amd64-release"
+            git_ref: "refs/heads/main"
             output-dir: artifacts
             extract: true
             clean: true
@@ -77,6 +80,7 @@ plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       download:
         variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
         output-dir: dist
         files:
           - "*.tar.zst"
@@ -89,10 +93,23 @@ plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       upload:
         variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
         project_id: quasardb
         files: "dist/**/*.tar.zst"
         parallel: 8
         concurrency: 16
+```
+
+### Upload and promote in one step
+
+```yaml
+plugins:
+  - bureau14/qdb-artifacts#v1.0.0:
+      upload:
+        variant: "linux-amd64-release"
+        files: "dist/**/*.tar.zst"
+      promote:
+        variant: "linux-amd64-release"
 ```
 
 ## Configuration reference
@@ -101,9 +118,9 @@ plugins:
 
 | Key          | Type    | Description                                                        |
 | ------------ | ------- | ------------------------------------------------------------------ |
-| `upload`     | object  | Upload configuration block. Mutually exclusive with `download` and `promote`. |
-| `download`   | object  | Download configuration block. Mutually exclusive with `upload` and `promote`. |
-| `promote`    | object  | Updates the LATEST_SUCCESSFUL pointer. Mutually exclusive.         |
+| `upload`     | object  | Upload configuration block.                                        |
+| `download`   | object  | Download configuration block.                                      |
+| `promote`    | object  | Updates the LATEST_SUCCESSFUL pointer.                             |
 | `debug`      | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`. |
 
 ### `upload` object keys
@@ -111,6 +128,7 @@ plugins:
 | Key           | Type    | Required | Description                                                             |
 | ------------- | ------- | -------- | ----------------------------------------------------------------------- |
 | `variant`     | string  | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).              |
+| `git_ref`     | string  | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                         |
 | `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_NAME`. |
 | `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
@@ -122,6 +140,7 @@ plugins:
 | ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
 | `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_NAME`.        |
 | `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                          |
+| `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                  |
 
 ### `download` object keys
 
@@ -130,7 +149,7 @@ plugins:
 | `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_NAME`.                  |
 | `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline, else `LATEST_SUCCESSFUL`. |
 | `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
-| `ref`         | string           |          | Override the git ref to download from (e.g. `refs/heads/main`). Defaults to the current ref.    |
+| `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
 | `extract`     | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.           |
@@ -187,6 +206,8 @@ Set `debug: true` in the plugin config to enable `set -x` tracing in all hooks:
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       upload:
+        variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
         files: "artifacts/**/*.tar.zst"
       debug: true
 ```

@@ -10,21 +10,21 @@ fi
 
 # Exit early if neither upload nor promote is configured
 if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then
+  echo "No upload or promote configuration found, skipping artifact upload/promote steps"
   exit 0
 fi
 
+# Skip upload if the command failed — broken builds should not pollute
+# the artifact namespace that test steps read from.
+if [[ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" -ne 0 ]]; then
+  echo "~~~ :warning: Skipping artifact upload (command exited ${BUILDKITE_COMMAND_EXIT_STATUS})"
+  exit 0
+fi
 
 # First upload files if env var for upload is set, if env var for promote is configured as well run that after upload
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
   echo "~~~ :arrow_up: Uploading artifacts"
-  
-  # Skip upload if the command failed — broken builds should not pollute
-  # the artifact namespace that test steps read from.
-  if [[ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" -ne 0 ]]; then
-    echo "~~~ :warning: Skipping artifact upload (command exited ${BUILDKITE_COMMAND_EXIT_STATUS})"
-    exit 0
-  fi
 
   args=(upload)
 
@@ -43,6 +43,10 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
   # --variant
   variant="$(plugin_read_config UPLOAD_VARIANT "")"
   [[ -n "${variant}" ]] && args+=(--variant "${variant}")
+
+  # --git-ref
+  git_ref="$(plugin_read_config UPLOAD_GIT_REF "")"
+  [[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")
 
   # Upload pattern (upload.files)
   args+=("$(plugin_read_config UPLOAD_FILES)")
@@ -63,6 +67,10 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then
   # --build-id
   build_id="$(plugin_read_config PROMOTE_BUILD_ID "")"
   [[ -n "${build_id}" ]] && args+=(--build-id "${build_id}")
+
+  # --git-ref
+  git_ref="$(plugin_read_config PROMOTE_GIT_REF "")"
+  [[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")
 
   # --variant
   variant="$(plugin_read_config PROMOTE_VARIANT "")"
