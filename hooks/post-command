@@ -51,7 +51,6 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
   # Upload pattern (upload.files)
   args+=("$(plugin_read_config UPLOAD_FILES)")
 
-  echo "~~~ :arrow_up: Uploading artifacts"
   run_artifacts_py "${args[@]}"
 fi
 
