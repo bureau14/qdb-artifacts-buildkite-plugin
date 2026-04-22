@@ -28,7 +28,6 @@ steps:
       - bureau14/qdb-artifacts#v1.0.0:
           upload:
             variant: "linux-amd64-release"
-            project_id: quasardb
             files: "artifacts/**/*.tar.zst"
 ```
 
