@@ -9,7 +9,7 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
 fi
 
 # Exit early if neither upload nor promote is configured
-if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then
+if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]] && [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then
   echo "No upload or promote configuration found, skipping artifact upload/promote steps"
   exit 0
 fi
@@ -23,7 +23,7 @@ fi
 
 # First upload files if env var for upload is set, if env var for promote is configured as well run that after upload
 
-if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
+if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]]; then
   echo "~~~ :arrow_up: Uploading artifacts"
 
   args=(upload)
