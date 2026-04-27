@@ -393,7 +393,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, build_id, git_ref, variant, pattern, parallel=4, concurrency=32):
+def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
@@ -409,10 +409,15 @@ def upload(project_id, build_id, git_ref, variant, pattern, parallel=4, concurre
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
     files = sorted(
-        {Path(f).resolve() for f in glob.glob(pattern, recursive=True) if Path(f).is_file()}
+        {
+            Path(f).resolve()
+            for p in patterns
+            for f in glob.glob(p, recursive=True)
+            if Path(f).is_file()
+        }
     )
     if not files:
-        die(f"no files matched: {pattern}")
+        die(f"no files matched: {patterns}")
 
     total_bytes = sum(f.stat().st_size for f in files)
     log(
@@ -755,7 +760,7 @@ if __name__ == "__main__":
     git_ref = None
 
     if cmd == "upload":
-        pattern = "*.tar.zst"
+        patterns = []
         i = 0
         while i < len(args):
             if args[i] == "--variant":
@@ -777,9 +782,11 @@ if __name__ == "__main__":
                 git_ref = args[i + 1]
                 i += 2
             else:
-                pattern = args[i]
+                patterns.append(args[i])
                 i += 1
 
+        if not patterns:
+            patterns = ["*.tar.zst"]
         if not variant:
             die("missing required --variant argument")
         if not git_ref:
@@ -793,7 +800,7 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, git_ref, variant, pattern, parallel, concurrency)
+        upload(project_id, build_id, git_ref, variant, patterns, parallel, concurrency)
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to
