@@ -554,7 +554,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
     )
 
 
-def download(
+def _download(
     project_id,
     build_id,
     git_ref,
@@ -562,7 +562,6 @@ def download(
     variant,
     output_dir=".",
     extract=False,
-    clean=False,
     parallel=4,
     concurrency=32,
 ):
@@ -589,9 +588,6 @@ def download(
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
-    if clean and out.exists():
-        log(f"Cleaning {out}")
-        shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
     list_client = _s3_client(cfg, auth)  # listing only; workers create their own
@@ -662,6 +658,28 @@ def download(
         f"Downloaded {len(objects)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
     )
+
+
+def download(projects_config, dirs_to_clean):
+    for d in dirs_to_clean:
+        if d.exists():
+            log(f"Cleaning {d}")
+            shutil.rmtree(d)
+
+    for p in projects_config:
+        rules = parse_rules(p["files"])
+        _download(
+            project_id=p["resolved_project_id"],
+            build_id=p["resolved_build_id"],
+            git_ref=p["git_ref"],
+            rules=rules,
+            variant=p["variant"],
+            output_dir=p["output_dir"],
+            extract=p["extract"],
+            clean=False,
+            parallel=p["parallel"],
+            concurrency=p["concurrency"],
+        )
 
 
 def promote(project_id, build_id, git_ref, variant):
@@ -754,6 +772,7 @@ def _get_env_bool(val, default=False):
         return default
     return str(val).strip().lower() in ("true", "1", "on", "yes")
 
+
 def parse_download_projects_from_env():
     """Parse the Buildkite plugin's download.projects[] schema from environment variables."""
     projects = []
@@ -763,7 +782,7 @@ def parse_download_projects_from_env():
         variant = os.environ.get(f"{prefix}VARIANT")
         if not variant:
             break
-            
+
         p = {
             "variant": variant,
             "git_ref": os.environ.get(f"{prefix}GIT_REF"),
@@ -773,14 +792,14 @@ def parse_download_projects_from_env():
             "extract": _get_env_bool(os.environ.get(f"{prefix}EXTRACT")),
             "parallel": int(os.environ.get(f"{prefix}PARALLEL", "4")),
             "concurrency": int(os.environ.get(f"{prefix}CONCURRENCY", "32")),
-            "files": []
+            "files": [],
         }
-        
+
         j = 0
         while True:
             file_val = os.environ.get(f"{prefix}FILES_{j}")
             if not file_val:
-                # buildkite plugin handles single item arrays sometimes by removing the _0 suffix
+                # buildkite plugin handles single item arrays by removing the _0 suffix
                 if j == 0:
                     single_file = os.environ.get(f"{prefix}FILES")
                     if single_file:
@@ -788,11 +807,12 @@ def parse_download_projects_from_env():
                 break
             p["files"].append(file_val)
             j += 1
-            
+
         projects.append(p)
         i += 1
-        
+
     return projects
+
 
 if __name__ == "__main__":
     args = sys.argv[1:]
@@ -887,11 +907,13 @@ if __name__ == "__main__":
             die("no download projects configured")
 
         pipeline_name = os.environ.get("BUILDKITE_PIPELINE_NAME")
-        
-        # 1) Resolve defaults and gather clean targets
+
+        # Resolve defaults and gather clean targets
         dirs_to_clean = set()
-        global_clean = _get_env_bool(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN"))
-        
+        global_clean = _get_env_bool(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN")
+        )
+
         for p in projects_config:
             if not p.get("git_ref"):
                 die(f"missing required git_ref in download project config: {p}")
@@ -899,12 +921,16 @@ if __name__ == "__main__":
                 die(f"missing required variant in download project config: {p}")
             if not p.get("files"):
                 p["files"] = ["*.tar.zst"]
-                
+
             project_id = p.get("project_id") or pipeline_name
             if not project_id:
                 die("missing required project_id and BUILDKITE_PIPELINE_NAME is not set")
             p["resolved_project_id"] = project_id
-            
+
+            # In download mode
+            # If running for same project / pipeline and no --build-id override, default to current build ID.
+            # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
+            # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
             build_id = p.get("build_id")
             if not build_id:
                 if not p.get("project_id") or p.get("project_id") == pipeline_name:
@@ -914,33 +940,12 @@ if __name__ == "__main__":
                 else:
                     build_id = "LATEST_SUCCESSFUL"
             p["resolved_build_id"] = build_id
-            
+
             out_dir = Path(p["output_dir"]).resolve()
             if global_clean:
                 dirs_to_clean.add(out_dir)
 
-        # 2) Perform one-time cleanups
-        for d in dirs_to_clean:
-            if d.exists():
-                log(f"Cleaning {d}")
-                shutil.rmtree(d)
-
-        # 3) Execute downloads
-        for p in projects_config:
-            rules = parse_rules(p["files"])
-            # Call download with clean=False because we already cleaned
-            download(
-                project_id=p["resolved_project_id"],
-                build_id=p["resolved_build_id"],
-                git_ref=p["git_ref"],
-                rules=rules,
-                variant=p["variant"],
-                output_dir=p["output_dir"],
-                extract=p["extract"],
-                clean=False,
-                parallel=p["parallel"],
-                concurrency=p["concurrency"],
-            )
+        download(projects_config, dirs_to_clean)
 
     else:
         die(f"unknown command: {cmd}")
