@@ -48,43 +48,51 @@ configuration:
     download:
       type: object
       properties:
-        project_id:
-          type: string
-          description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
-        build_id:
-          type: string
-          description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id matches current pipeline, else LATEST_SUCCESSFUL."
-        variant:
-          type: string
-          description: "Build variant key to download from (cross-step)"
-        git_ref:
-          type: string
-          description: "Git ref to download from (e.g. 'refs/heads/main')"
-        output-dir:
-          type: string
-          description: "Download destination directory (default: '.')"
-        extract:
-          type: boolean
-          description: "Stream-extract archives on download"
         clean:
           type: boolean
           description: "Remove output directory before downloading"
-        parallel:
-          type: integer
-          description: "Files downloaded simultaneously (default: 4)"
-        concurrency:
-          type: integer
-          description: "Multipart threads per download (default: 32)"
-        files:
+        projects:
           type: array
           minItems: 1
           items:
-            type: string
-          description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
+            type: object
+            properties:
+              project_id:
+                type: string
+                description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
+              build_id:
+                type: string
+                description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id matches current pipeline, else LATEST_SUCCESSFUL."
+              variant:
+                type: string
+                description: "Build variant key to download from (cross-step)"
+              git_ref:
+                type: string
+                description: "Git ref to download from (e.g. 'refs/heads/main')"
+              output-dir:
+                type: string
+                description: "Download destination directory (default: '.')"
+              extract:
+                type: boolean
+                description: "Stream-extract archives on download"
+              parallel:
+                type: integer
+                description: "Files downloaded simultaneously (default: 4)"
+              concurrency:
+                type: integer
+                description: "Multipart threads per download (default: 32)"
+              files:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
+            required:
+              - variant
+              - files
+              - git_ref
       required:
-        - variant
-        - files
-        - git_ref
+        - projects
     debug:
       type: boolean
       description: "Enable bash debug tracing"

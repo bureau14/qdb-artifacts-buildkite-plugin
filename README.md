@@ -41,15 +41,16 @@ steps:
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
-            variant: "linux-amd64-release"
-            git_ref: "refs/heads/main"
-            output-dir: artifacts
-            extract: true
             clean: true
-            files:
-              - "*-c-api.tar.zst!lib/*"
-              - "*-server.tar.zst!bin/*"
-              - "*-tests.tar.zst!bin/*"
+            projects:
+              - variant: "linux-amd64-release"
+                git_ref: "refs/heads/main"
+                output-dir: artifacts
+                extract: true
+                files:
+                  - "*-c-api.tar.zst!lib/*"
+                  - "*-server.tar.zst!bin/*"
+                  - "*-tests.tar.zst!bin/*"
 ```
 
 ### Download (cross-project, with extraction and entry filtering)
@@ -61,16 +62,17 @@ steps:
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
           download:
-            project_id: quasardb
-            variant: "linux-amd64-release"
-            git_ref: "refs/heads/main"
-            output-dir: artifacts
-            extract: true
             clean: true
-            files:
-              - "*-c-api.tar.zst!lib/*"
-              - "*-server.tar.zst!bin/*"
-              - "*-tests.tar.zst!bin/*"
+            projects:
+              - project_id: quasardb
+                variant: "linux-amd64-release"
+                git_ref: "refs/heads/main"
+                output-dir: artifacts
+                extract: true
+                files:
+                  - "*-c-api.tar.zst!lib/*"
+                  - "*-server.tar.zst!bin/*"
+                  - "*-tests.tar.zst!bin/*"
 ```
 
 ### Download without extraction
@@ -79,11 +81,12 @@ steps:
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       download:
-        variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
-        output-dir: dist
-        files:
-          - "*.tar.zst"
+        projects:
+          - variant: "linux-amd64-release"
+            git_ref: "refs/heads/main"
+            output-dir: dist
+            files:
+              - "*.tar.zst"
 ```
 
 ### Upload with tuned parallelism
@@ -144,6 +147,13 @@ plugins:
 
 ### `download` object keys
 
+| Key          | Type  | Required | Description                                            |
+| ------------ | ----- | -------- | ------------------------------------------------------ |
+| `projects`   | array | ✓        | List of projects to download artifacts from.           |
+| `clean`      | boolean |        | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
+
+#### `projects` item keys
+
 | Key           | Type             | Required | Description                                                                                     |
 | ------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_NAME`.                  |
@@ -153,7 +163,6 @@ plugins:
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
 | `extract`     | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.           |
-| `clean`       | boolean          |          | Remove `output-dir` before downloading. Useful for retried jobs. Default: `false`.              |
 | `parallel`    | integer          |          | Files downloaded simultaneously. Default: `4`.                                                  |
 | `concurrency` | integer          |          | Multipart threads per download. Default: `32`.                                                  |
 
