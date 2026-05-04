@@ -660,7 +660,7 @@ def _download(
     )
 
 
-def download(projects_config, dirs_to_clean):
+def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
     for d in dirs_to_clean:
         if d.exists():
             log(f"Cleaning {d}")
@@ -676,9 +676,8 @@ def download(projects_config, dirs_to_clean):
             variant=p["variant"],
             output_dir=p["output_dir"],
             extract=p["extract"],
-            clean=False,
-            parallel=p["parallel"],
-            concurrency=p["concurrency"],
+            parallel=parallel,
+            concurrency=concurrency,
         )
 
 
@@ -790,8 +789,6 @@ def parse_download_projects_from_env():
             "build_id": os.environ.get(f"{prefix}BUILD_ID"),
             "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),
             "extract": _get_env_bool(os.environ.get(f"{prefix}EXTRACT")),
-            "parallel": int(os.environ.get(f"{prefix}PARALLEL", "4")),
-            "concurrency": int(os.environ.get(f"{prefix}CONCURRENCY", "32")),
             "files": [],
         }
 
@@ -913,6 +910,8 @@ if __name__ == "__main__":
         global_clean = _get_env_bool(
             os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN")
         )
+        global_parallel = int(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PARALLEL", "4"))
+        global_concurrency = int(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CONCURRENCY", "32"))
 
         for p in projects_config:
             if not p.get("git_ref"):
@@ -945,7 +944,7 @@ if __name__ == "__main__":
             if global_clean:
                 dirs_to_clean.add(out_dir)
 
-        download(projects_config, dirs_to_clean)
+        download(projects_config, dirs_to_clean, global_parallel, global_concurrency)
 
     else:
         die(f"unknown command: {cmd}")

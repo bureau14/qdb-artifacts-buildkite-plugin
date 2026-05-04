@@ -51,6 +51,12 @@ configuration:
         clean:
           type: boolean
           description: "Remove output directory before downloading"
+        parallel:
+          type: integer
+          description: "Files downloaded simultaneously across all projects (default: 4)"
+        concurrency:
+          type: integer
+          description: "Multipart threads per download (default: 32)"
         projects:
           type: array
           minItems: 1
@@ -75,12 +81,6 @@ configuration:
               extract:
                 type: boolean
                 description: "Stream-extract archives on download"
-              parallel:
-                type: integer
-                description: "Files downloaded simultaneously (default: 4)"
-              concurrency:
-                type: integer
-                description: "Multipart threads per download (default: 32)"
               files:
                 type: array
                 minItems: 1

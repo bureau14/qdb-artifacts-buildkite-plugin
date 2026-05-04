@@ -151,6 +151,8 @@ plugins:
 | ------------ | ----- | -------- | ------------------------------------------------------ |
 | `projects`   | array | ✓        | List of projects to download artifacts from.           |
 | `clean`      | boolean |        | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
+| `parallel`    | integer          |          | Files downloaded simultaneously. Default: `4`.                                                  |
+| `concurrency` | integer          |          | Multipart threads per download. Default: `32`.                                                  |
 
 #### `projects` item keys
 
@@ -163,8 +165,6 @@ plugins:
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
 | `extract`     | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.           |
-| `parallel`    | integer          |          | Files downloaded simultaneously. Default: `4`.                                                  |
-| `concurrency` | integer          |          | Multipart threads per download. Default: `32`.                                                  |
 
 ### Entry filtering
 
