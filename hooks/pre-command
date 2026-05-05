@@ -8,52 +8,12 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
   set -x
 fi
 
-# Exit early if no download configured
-[[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_FILES_0:-}" ]] && exit 0
+# Exit early if no download projects configured
+if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PROJECTS_0_VARIANT:-}" ]]; then
+  exit 0
+fi
 
 echo "~~~ :arrow_down: Downloading artifacts"
 
-args=(download)
+run_artifacts_py download
 
-# --variant
-variant="$(plugin_read_config DOWNLOAD_VARIANT "")"
-[[ -n "${variant}" ]] && args+=(--variant "${variant}")
-
-# --output-dir
-output_dir="$(plugin_read_config DOWNLOAD_OUTPUT_DIR ".")"
-args+=(--output-dir "${output_dir}")
-
-# --extract
-[[ "$(plugin_read_config DOWNLOAD_EXTRACT false)" =~ ^(true|on|1)$ ]] \
-  && args+=(--extract)
-
-# --clean
-[[ "$(plugin_read_config DOWNLOAD_CLEAN false)" =~ ^(true|on|1)$ ]] \
-  && args+=(--clean)
-
-# --parallel
-parallel="$(plugin_read_config DOWNLOAD_PARALLEL "")"
-[[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
-
-# --concurrency
-concurrency="$(plugin_read_config DOWNLOAD_CONCURRENCY "")"
-[[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
-
-# --project-id
-project_id="$(plugin_read_config DOWNLOAD_PROJECT_ID "")"
-[[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
-
-# --build-id
-build_id="$(plugin_read_config DOWNLOAD_BUILD_ID "")"
-[[ -n "${build_id}" ]] && args+=(--build-id "${build_id}")
-
-# --git-ref
-git_ref="$(plugin_read_config DOWNLOAD_GIT_REF "")"
-[[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")
-
-# Collect file patterns from array env vars
-while IFS= read -r file; do
-  args+=("${file}")
-done < <(plugin_read_list DOWNLOAD_FILES)
-
-run_artifacts_py "${args[@]}"

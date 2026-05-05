@@ -571,7 +571,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
     )
 
 
-def download(
+def _download(
     project_id,
     build_id,
     git_ref,
@@ -579,7 +579,6 @@ def download(
     variant,
     output_dir=".",
     extract=False,
-    clean=False,
     parallel=4,
     concurrency=32,
 ):
@@ -606,9 +605,6 @@ def download(
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
-    if clean and out.exists():
-        log(f"Cleaning {out}")
-        shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
     list_client = _s3_client(cfg, auth)  # listing only; workers create their own
@@ -679,6 +675,27 @@ def download(
         f"Downloaded {len(objects)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
     )
+
+
+def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
+    for d in dirs_to_clean:
+        if d.exists():
+            log(f"Cleaning {d}")
+            shutil.rmtree(d)
+
+    for p in projects_config:
+        rules = parse_rules(p["files"])
+        _download(
+            project_id=p["resolved_project_id"],
+            build_id=p["resolved_build_id"],
+            git_ref=p["git_ref"],
+            rules=rules,
+            variant=p["variant"],
+            output_dir=p["output_dir"],
+            extract=p["extract"],
+            parallel=parallel,
+            concurrency=concurrency,
+        )
 
 
 def promote(project_id, build_id, git_ref, variant):
@@ -764,6 +781,51 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
 
     else:
         die(f"unsupported archive format: {rel}")
+
+
+def _get_env_bool(val, default=False):
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("true", "1", "on", "yes")
+
+
+def parse_download_projects_from_env():
+    """Parse the Buildkite plugin's download.projects[] schema from environment variables."""
+    projects = []
+    i = 0
+    while True:
+        prefix = f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PROJECTS_{i}_"
+        variant = os.environ.get(f"{prefix}VARIANT")
+        if not variant:
+            break
+
+        p = {
+            "variant": variant,
+            "git_ref": os.environ.get(f"{prefix}GIT_REF"),
+            "project_id": os.environ.get(f"{prefix}PROJECT_ID"),
+            "build_id": os.environ.get(f"{prefix}BUILD_ID"),
+            "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),
+            "extract": _get_env_bool(os.environ.get(f"{prefix}EXTRACT")),
+            "files": [],
+        }
+
+        j = 0
+        while True:
+            file_val = os.environ.get(f"{prefix}FILES_{j}")
+            if not file_val:
+                # buildkite plugin handles single item arrays by removing the _0 suffix
+                if j == 0:
+                    single_file = os.environ.get(f"{prefix}FILES")
+                    if single_file:
+                        p["files"].append(single_file)
+                break
+            p["files"].append(file_val)
+            j += 1
+
+        projects.append(p)
+        i += 1
+
+    return projects
 
 
 if __name__ == "__main__":
@@ -858,87 +920,56 @@ if __name__ == "__main__":
         promote(project_id, build_id, git_ref, variant)
 
     elif cmd == "download":
-        variant = None
-        extract = False
-        no_extract = clean = False
-        ref = None
-        patterns = []
-        out = "."
-        i = 0
-        while i < len(args):
-            if args[i] == "--variant":
-                variant = args[i + 1]
-                i += 2
-            elif args[i] == "--build-id":
-                cmd_build_id = args[i + 1]
-                i += 2
-            elif args[i] == "--git-ref":
-                git_ref = args[i + 1]
-                i += 2
-            elif args[i] == "--project-id":
-                cmd_project_id = args[i + 1]
-                i += 2
-            elif args[i] == "--extract":
-                extract = True
-                i += 1
-            elif args[i] == "--no-extract":
-                no_extract = True
-                i += 1
-            elif args[i] == "--output-dir":
-                out = args[i + 1]
-                i += 2
-            elif args[i] == "--clean":
-                clean = True
-                i += 1
-            elif args[i] == "--parallel":
-                parallel = int(args[i + 1])
-                i += 2
-            elif args[i] == "--concurrency":
-                concurrency = int(args[i + 1])
-                i += 2
-            else:
-                patterns.append(args[i])
-                i += 1
+        projects_config = parse_download_projects_from_env()
+        if not projects_config:
+            die("no download projects configured")
 
-        if not git_ref:
-            die("missing required --git-ref argument")
+        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
 
-        pipeline_slug = os.environ.get("BUILDKITE_PIPELINE_SLUG")
-        project_id = cmd_project_id or pipeline_slug
-        if not project_id:
-            die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
-
-        if not variant:
-            die("missing required --variant argument")
-
-        # In download mode
-        # If running for same project / pipeline and no --build-id override, default to current build ID.
-        # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
-        # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
-        build_id = cmd_build_id
-        if not build_id:
-            if cmd_project_id is None or cmd_project_id == pipeline_slug:
-                build_id = os.environ.get("BUILDKITE_BUILD_ID")
-                if not build_id:
-                    die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
-            else:
-                build_id = "LATEST_SUCCESSFUL"
-
-        if not patterns:
-            patterns = ["*.tar.zst"]
-        rules = parse_rules(patterns)
-        download(
-            project_id,
-            build_id,
-            git_ref,
-            rules,
-            variant,
-            out,
-            extract and not no_extract,
-            clean,
-            parallel,
-            concurrency,
+        # Resolve defaults and gather clean targets
+        dirs_to_clean = set()
+        global_clean = _get_env_bool(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN")
         )
+        global_parallel = int(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PARALLEL", "4")
+        )
+        global_concurrency = int(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CONCURRENCY", "32")
+        )
+
+        for p in projects_config:
+            if not p.get("git_ref"):
+                die(f"missing required git_ref in download project config: {p}")
+            if not p.get("variant"):
+                die(f"missing required variant in download project config: {p}")
+            if not p.get("files"):
+                p["files"] = ["*.tar.zst"]
+
+            project_id = p.get("project_id") or pipeline_name
+            if not project_id:
+                die("missing required project_id and BUILDKITE_PIPELINE_SLUG is not set")
+            p["resolved_project_id"] = project_id
+
+            # In download mode
+            # If running for same project / pipeline and no --build-id override, default to current build ID.
+            # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
+            # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
+            build_id = p.get("build_id")
+            if not build_id:
+                if not p.get("project_id") or p.get("project_id") == pipeline_name:
+                    build_id = os.environ.get("BUILDKITE_BUILD_ID")
+                    if not build_id:
+                        die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+                else:
+                    build_id = "LATEST_SUCCESSFUL"
+            p["resolved_build_id"] = build_id
+
+            out_dir = Path(p["output_dir"]).resolve()
+            if global_clean:
+                dirs_to_clean.add(out_dir)
+
+        download(projects_config, dirs_to_clean, global_parallel, global_concurrency)
 
     else:
         die(f"unknown command: {cmd}")
