@@ -32,6 +32,25 @@ steps:
             files: "artifacts/**/*.tar.zst"
 ```
 
+### Upload with base directory stripped
+
+You can use `base_dir` to strip a directory prefix from the uploaded S3 keys, similar to `tar -C`.
+
+```yaml
+steps:
+  - label: ":hammer: Build Wheels"
+    command: python setup.py bdist_wheel
+    plugins:
+      - bureau14/qdb-artifacts#v1.0.0:
+          upload:
+            variant: "linux-amd64-release-python"
+            git_ref: "refs/heads/main"
+            files: "dist/quasardb*.whl"
+            base_dir: "dist"
+```
+
+In this example, a file located at `dist/quasardb.whl` will be uploaded such that its object key suffix is `quasardb.whl` rather than `dist/quasardb.whl`.
+
 ### Download (test step, cross-step, with extraction and entry filtering)
 
 ```yaml
@@ -134,6 +153,7 @@ plugins:
 | `git_ref`     | string  | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                         |
 | `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_NAME`. |
 | `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
+| `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
 

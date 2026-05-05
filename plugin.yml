@@ -20,6 +20,9 @@ configuration:
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
+        base_dir:
+          type: string
+          description: "Optional base directory to strip from uploaded object keys (e.g. 'dist')"
         parallel:
           type: integer
           description: "Files uploaded simultaneously (default: 4)"
