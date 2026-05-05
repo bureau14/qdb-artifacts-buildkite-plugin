@@ -44,6 +44,10 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]] || [[ -n "${BUI
   variant="$(plugin_read_config UPLOAD_VARIANT "")"
   [[ -n "${variant}" ]] && args+=(--variant "${variant}")
 
+  # --base-dir
+  base_dir="$(plugin_read_config UPLOAD_BASE_DIR "")"
+  [[ -n "${base_dir}" ]] && args+=(--base-dir "${base_dir}")
+
   # --git-ref
   git_ref="$(plugin_read_config UPLOAD_GIT_REF "")"
   [[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")

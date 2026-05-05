@@ -393,7 +393,9 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32):
+def upload(
+    project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None
+):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
@@ -408,6 +410,13 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
+
+    base_path = cwd
+    if base_dir:
+        base_path = Path(base_dir).resolve()
+        if not base_path.is_dir():
+            die(f"--base-dir {base_dir!r} does not exist or is not a directory")
+
     files = sorted(
         {
             Path(f).resolve()
@@ -419,6 +428,13 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
     if not files:
         die(f"no files matched: {patterns}")
 
+    if base_dir:
+        for f in files:
+            try:
+                f.relative_to(base_path)
+            except ValueError:
+                die(f"file {f} is not under base_dir {base_dir}")
+
     total_bytes = sum(f.stat().st_size for f in files)
     log(
         f"Uploading {len(files)} artifact(s) ({fmt_size(total_bytes)}) to "
@@ -427,7 +443,7 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
     log(f"  parallel={parallel}, concurrency={concurrency}")
 
     def _upload_one(f):
-        rel = f.relative_to(cwd).as_posix()
+        rel = f.relative_to(base_path).as_posix()
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
@@ -446,9 +462,10 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
         # might come handy for debugging / validation / future features
         manifest_payload = {
             "file_count": len(files),
-            "files": [f.relative_to(cwd).as_posix() for f in files],
+            "files": [f.relative_to(base_path).as_posix() for f in files],
             "uploaded_at": datetime.datetime.now().isoformat() + "Z",
             "total_size_bytes": total_bytes,
+            "base_dir": base_dir,
         }
         _upload_manifest(bucket, pfx, manifest_payload, cfg, auth)
     except KeyboardInterrupt:
@@ -761,10 +778,14 @@ if __name__ == "__main__":
 
     if cmd == "upload":
         patterns = []
+        base_dir = None
         i = 0
         while i < len(args):
             if args[i] == "--variant":
                 variant = args[i + 1]
+                i += 2
+            elif args[i] == "--base-dir":
+                base_dir = args[i + 1]
                 i += 2
             elif args[i] == "--parallel":
                 parallel = int(args[i + 1])
@@ -800,7 +821,7 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, git_ref, variant, patterns, parallel, concurrency)
+        upload(project_id, build_id, git_ref, variant, patterns, parallel, concurrency, base_dir)
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to
