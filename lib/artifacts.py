@@ -910,8 +910,12 @@ if __name__ == "__main__":
         global_clean = _get_env_bool(
             os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN")
         )
-        global_parallel = int(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PARALLEL", "4"))
-        global_concurrency = int(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CONCURRENCY", "32"))
+        global_parallel = int(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PARALLEL", "4")
+        )
+        global_concurrency = int(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CONCURRENCY", "32")
+        )
 
         for p in projects_config:
             if not p.get("git_ref"):
