@@ -568,7 +568,7 @@ def download(
 ):
     """List matching artifacts under the variant prefix and download/extract in parallel.
     Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
-    to the current BUILDKITE_PIPELINE_NAME.
+    to the current BUILDKITE_PIPELINE_SLUG.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
     from main/master branch if missing on the current branch. If build_id is omitted, it defaults
     to BUILDKITE_BUILD_ID if downloading from the current pipeline, otherwise LATEST_SUCCESSFUL.
