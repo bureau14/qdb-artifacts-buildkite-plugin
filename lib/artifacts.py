@@ -585,7 +585,7 @@ def download(
 ):
     """List matching artifacts under the variant prefix and download/extract in parallel.
     Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
-    to the current BUILDKITE_PIPELINE_NAME.
+    to the current BUILDKITE_PIPELINE_SLUG.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
     from main/master branch if missing on the current branch. If build_id is omitted, it defaults
     to BUILDKITE_BUILD_ID if downloading from the current pipeline, otherwise LATEST_SUCCESSFUL.
@@ -813,9 +813,9 @@ if __name__ == "__main__":
         if not git_ref:
             die("missing required --git-ref argument")
 
-        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
+        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
         if not project_id:
-            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
 
         build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
         if not build_id:
@@ -847,9 +847,9 @@ if __name__ == "__main__":
         if not git_ref:
             die("missing required --git-ref argument")
 
-        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_NAME")
+        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
         if not project_id:
-            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
 
         build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
         if not build_id:
@@ -903,10 +903,10 @@ if __name__ == "__main__":
         if not git_ref:
             die("missing required --git-ref argument")
 
-        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_NAME")
-        project_id = cmd_project_id or pipeline_name
+        pipeline_slug = os.environ.get("BUILDKITE_PIPELINE_SLUG")
+        project_id = cmd_project_id or pipeline_slug
         if not project_id:
-            die("missing required --project-id argument and BUILDKITE_PIPELINE_NAME is not set")
+            die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
 
         if not variant:
             die("missing required --variant argument")
@@ -917,7 +917,7 @@ if __name__ == "__main__":
         # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
         build_id = cmd_build_id
         if not build_id:
-            if cmd_project_id is None or cmd_project_id == pipeline_name:
+            if cmd_project_id is None or cmd_project_id == pipeline_slug:
                 build_id = os.environ.get("BUILDKITE_BUILD_ID")
                 if not build_id:
                     die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
