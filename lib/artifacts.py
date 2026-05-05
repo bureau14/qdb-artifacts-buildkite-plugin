@@ -393,7 +393,9 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None):
+def upload(
+    project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None
+):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
@@ -408,13 +410,13 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
 
     tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
-    
+
     base_path = cwd
     if base_dir:
         base_path = Path(base_dir).resolve()
         if not base_path.is_dir():
             die(f"--base-dir {base_dir!r} does not exist or is not a directory")
-    
+
     files = sorted(
         {
             Path(f).resolve()
@@ -425,7 +427,7 @@ def upload(project_id, build_id, git_ref, variant, patterns, parallel=4, concurr
     )
     if not files:
         die(f"no files matched: {patterns}")
-        
+
     if base_dir:
         for f in files:
             try:
