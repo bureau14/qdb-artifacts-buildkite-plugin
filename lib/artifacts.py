@@ -182,9 +182,19 @@ def aws_clients():
     """Return (s3, ssm) clients for config resolution and listing only.
     Per-transfer clients are created separately in each worker thread."""
     s = boto3.session.Session()
+    region_name = os.environ.get("AWS_DEFAULT_REGION", "eu-west-1")
     return (
         s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
-        s.client("ssm", config=Config(retries={"mode": "standard", "max_attempts": 5})),
+        s.client(
+            "ssm",
+            config=Config(
+                region_name=region_name,
+                retries={
+                    "mode": "standard",
+                    "max_attempts": 5,
+                },
+            ),
+        ),
     )
 
 
@@ -615,9 +625,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
                 if current_ref == ref
                 else scope(cfg, project_id, build_id, variant, current_ref)[1]
             )
-            effective_build_id, pointer_lastmod = _read_latest_successful(
-                s3, bucket, pointer_key
-            )
+            effective_build_id, pointer_lastmod = _read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
                 log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
                 attempts.append(
@@ -633,10 +641,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
             mtime_str = (
                 pointer_lastmod.strftime("%Y-%m-%d %H:%M:%SZ") if pointer_lastmod else "unknown"
             )
-            log(
-                f"  LATEST_SUCCESSFUL -> {effective_build_id} "
-                f"(pointer mtime {mtime_str})"
-            )
+            log(f"  LATEST_SUCCESSFUL -> {effective_build_id} (pointer mtime {mtime_str})")
 
         _, prefix = scope(cfg, project_id, effective_build_id, variant, current_ref)
 
@@ -738,9 +743,7 @@ def _download(
     if manifest and manifest.get("uploaded_at"):
         try:
             ua = manifest["uploaded_at"].rstrip("Z")
-            built_at = datetime.datetime.fromisoformat(ua).replace(
-                tzinfo=datetime.timezone.utc
-            )
+            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.timezone.utc)
         except (ValueError, TypeError):
             built_at = None
     if built_at is None:
@@ -839,10 +842,7 @@ def _download(
                 f"[{elapsed:.1f}s, {fmt_size(speed)}/s]"
             )
         else:
-            log(
-                f"  done : {rel} -> {out / rel}  "
-                f"[{elapsed:.1f}s, {fmt_size(speed)}/s]"
-            )
+            log(f"  done : {rel} -> {out / rel}  [{elapsed:.1f}s, {fmt_size(speed)}/s]")
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
