@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import subprocess
 
 """Artifact upload/download for Buildkite CI pipelines (AWS S3 + Cloudflare R2).
 
@@ -417,6 +418,24 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
         ContentType="application/json",
     )
 
+def _create_buildkite_annotation(prefix, files):
+    if not os.environ.get("BUILDKITE"):
+        log(f"  BUILDKITE env var not set; skipping adding Buildkite annotation")
+        return
+    job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
+    uri = "https://cicd-assets.quasar.ai"
+    body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(f"- [{file}]({key_join(uri, prefix, file)})" for file in files)
+    try:
+        subprocess.run(
+            ["buildkite-agent", "annotation", "create", "--style=info", "--context=artifacts", "--scope=job", "--priority=10"],
+            input=body,
+            text=True,
+            check=True,
+        )
+    except Exception as e:
+        log(f"  :warning Failed to create Buildkite annotation: {e}")
+    
+
 
 def upload(
     project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None
@@ -479,6 +498,7 @@ def upload(
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
     futs = {pool.submit(_upload_one, f): f for f in files}
+    relative_files_path = [f.relative_to(base_path).as_posix() for f in files]
     try:
         for fut in as_completed(futs):
             fut.result()
@@ -487,7 +507,7 @@ def upload(
         # might come handy for debugging / validation / future features
         manifest_payload = {
             "file_count": len(files),
-            "files": [f.relative_to(base_path).as_posix() for f in files],
+            "files": relative_files_path,
             "uploaded_at": datetime.datetime.now().isoformat() + "Z",
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
@@ -501,6 +521,7 @@ def upload(
 
     elapsed = time.monotonic() - t0
     avg_speed = total_bytes / elapsed if elapsed > 0 else 0
+    _create_buildkite_annotation(pfx, relative_files_path)
     log(
         f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
