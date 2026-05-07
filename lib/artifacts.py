@@ -261,7 +261,9 @@ def load_store_config(ssm):
     # Applies to both backends; mainly for local MinIO / dev setups.
     endpoint_url = os.environ.get("ARTIFACTS_ENDPOINT_URL")
 
-    bucket_domain = os.environ.get("ARTIFACTS_BUCKET_DOMAIN") or _ssm_get_optional(ssm, BUCKET_DOMAIN_SSM_PARAM)
+    bucket_domain = os.environ.get("ARTIFACTS_BUCKET_DOMAIN") or _ssm_get_optional(
+        ssm, BUCKET_DOMAIN_SSM_PARAM
+    )
 
     if backend == "r2":
         endpoint_url = endpoint_url or _ssm_get_optional(ssm, ENDPOINT_URL_SSM_PARAM)
@@ -424,6 +426,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
         ContentType="application/json",
     )
 
+
 def _create_buildkite_annotation(bucket_domain, prefix, files):
     if not os.environ.get("BUILDKITE"):
         log(f"  BUILDKITE env var not set; skipping adding Buildkite annotation")
@@ -434,7 +437,9 @@ def _create_buildkite_annotation(bucket_domain, prefix, files):
     log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = f"https://{bucket_domain}"
-    body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(f"- [{file}]({key_join(uri, prefix, file)})" for file in files)
+    body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(
+        f"- [{file}]({key_join(uri, prefix, file)})" for file in files
+    )
     buildkite_agent_exec = "buildkite-agent"
     if os.name == "nt":
         buildkite_agent_exec += ".exe"
@@ -456,7 +461,6 @@ def _create_buildkite_annotation(bucket_domain, prefix, files):
         subprocess.run(args, check=True)
     except Exception as e:
         log(f"  :warning Failed to create Buildkite annotation: {e}")
-    
 
 
 def upload(
