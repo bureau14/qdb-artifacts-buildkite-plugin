@@ -8,6 +8,8 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 - **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
 - **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
 
+Uploaded artifacts are stored with `Content-Disposition: attachment; filename="<basename>"` so browser/open-link downloads use attachment behavior with the original file name.
+
 Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipeline run is isolated and test steps can address a specific build step's output.
 
 ## Requirements

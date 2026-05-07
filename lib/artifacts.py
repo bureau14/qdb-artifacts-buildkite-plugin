@@ -518,7 +518,13 @@ def upload(
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
-            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, rel), Config=tc)
+            _s3_client(cfg, auth).upload_file(
+                str(f),
+                bucket,
+                key_join(pfx, rel),
+                ExtraArgs={"ContentDisposition": f'attachment; filename="{f.name}"'},
+                Config=tc,
+            )
 
         _with_retry(_do, rel)
 
