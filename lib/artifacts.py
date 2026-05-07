@@ -131,6 +131,21 @@ class ObjectAuth:
     secret_access_key: str | None = None
 
 
+@dataclass(frozen=True)
+class ResolvedBuild:
+    """Resolved artifact location after applying LATEST_SUCCESSFUL and
+    default-branch fallback. Carries enough context for downstream logging
+    (whether a fallback was applied, when the build was created)."""
+
+    requested_ref: str
+    requested_build_id: str
+    ref: str
+    build_id: str
+    prefix: str
+    fallback_applied: bool
+    pointer_lastmod: datetime.datetime | None  # mtime of LATEST_SUCCESSFUL pointer, if used
+
+
 def die(msg):
     print(f"[artifacts] ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -522,53 +537,150 @@ def _check_artifacts_exist(s3, bucket, prefix):
 
 
 def _read_latest_successful(s3, bucket, key):
-    """Read the LATEST_SUCCESSFUL file from S3 to get the target build_id."""
+    """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
+    (None, None) if absent. The pointer mtime is useful as a build-age proxy
+    when the build itself has no manifest.json."""
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
-        return response["Body"].read().decode("utf-8").strip()
+        bid = response["Body"].read().decode("utf-8").strip()
+        return bid, response.get("LastModified")
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
-            return None
+            return None, None
         raise
 
 
-def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, variant, build_id):
-    s3 = _s3_client(cfg, auth)
-    master_refs = {"refs/heads/master", "refs/heads/main"}
+def _read_manifest(s3, bucket, prefix):
+    """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
+    error -- this is purely informational and must never break the download."""
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key_join(prefix, "manifest.json"))
+        return json.loads(response["Body"].read())
+    except Exception:
+        return None
 
-    # Define the sequence of refs to check:
-    # We want to check the current ref first, if its not master/main
-    # If the current ref is not present, we want to check master/main as a fallback
+
+def _fmt_age(t):
+    """Format a UTC datetime as 'Nd Nh ago' / 'Nh Nm ago' / 'Nm ago' for log
+    readability. Naive datetimes are assumed UTC."""
+    if t is None:
+        return "unknown"
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    delta = datetime.datetime.now(datetime.timezone.utc) - t
+    s = int(delta.total_seconds())
+    if s < 0:
+        return "in the future"
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        return f"{s // 60}m ago"
+    if s < 86400:
+        h, m = divmod(s, 3600)
+        m //= 60
+        return f"{h}h {m}m ago" if m else f"{h}h ago"
+    d, rem = divmod(s, 86400)
+    h = rem // 3600
+    return f"{d}d {h}h ago" if h else f"{d}d ago"
+
+
+def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, variant, build_id):
+    """Resolve the artifact prefix, logging every attempt as it goes.
+
+    Walks [requested_ref, refs/heads/master, refs/heads/main] in order, resolving
+    LATEST_SUCCESSFUL pointers when needed and skipping refs whose prefix is empty.
+    Returns a ResolvedBuild describing the winning attempt. On failure, dies with
+    a structured trace listing every attempt that was tried and why each failed.
+    """
+    s3 = _s3_client(cfg, auth)
+    master_refs = ("refs/heads/master", "refs/heads/main")
+
     refs_to_check = [ref]
     if ref not in master_refs:
-        refs_to_check += master_refs
+        refs_to_check += list(master_refs)
+
+    # Each entry: dict(ref, resolved_build_id_or_None, prefix_or_None, status, detail)
+    attempts = []
 
     for current_ref in refs_to_check:
+        log(f"resolve attempt: ref={current_ref} build={build_id}")
+        pointer_lastmod = None
         effective_build_id = build_id
 
-        # 1. Resolve build_id if it's a "LATEST" pointer
         if build_id == "LATEST_SUCCESSFUL":
-            # For the primary ref, use dest_prefix; for fallback, get key from scope
-            if current_ref == ref:
-                pointer_key = dest_prefix
-            else:
-                pointer_key = scope(cfg, project_id, build_id, variant, current_ref)[1]
-
-            effective_build_id = _read_latest_successful(s3, bucket, pointer_key)
+            # For the primary ref, dest_prefix already points at the LATEST_SUCCESSFUL
+            # pointer key (scope() appends LATEST_SUCCESSFUL). For fallbacks, recompute.
+            pointer_key = (
+                dest_prefix
+                if current_ref == ref
+                else scope(cfg, project_id, build_id, variant, current_ref)[1]
+            )
+            effective_build_id, pointer_lastmod = _read_latest_successful(
+                s3, bucket, pointer_key
+            )
             if not effective_build_id:
+                log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
+                attempts.append(
+                    {
+                        "ref": current_ref,
+                        "build_id": None,
+                        "prefix": None,
+                        "status": "no-pointer",
+                        "detail": f"s3://{bucket}/{pointer_key}",
+                    }
+                )
                 continue
+            mtime_str = (
+                pointer_lastmod.strftime("%Y-%m-%d %H:%M:%SZ") if pointer_lastmod else "unknown"
+            )
+            log(
+                f"  LATEST_SUCCESSFUL -> {effective_build_id} "
+                f"(pointer mtime {mtime_str})"
+            )
 
-        # 2. Resolve the actual artifact prefix
         _, prefix = scope(cfg, project_id, effective_build_id, variant, current_ref)
 
-        # 3. Check if artifacts exist at this prefix, if not continue to the next ref in the fallback sequence
         if _check_artifacts_exist(s3, bucket, prefix):
-            return prefix
+            log(f"  prefix s3://{bucket}/{prefix}/ has objects -> MATCH")
+            return ResolvedBuild(
+                requested_ref=ref,
+                requested_build_id=build_id,
+                ref=current_ref,
+                build_id=effective_build_id,
+                prefix=prefix,
+                fallback_applied=(current_ref != ref),
+                pointer_lastmod=pointer_lastmod,
+            )
 
-    die(
-        f"Artifact path could not be resolved for project={project_id}, ref={ref}, "
-        f"variant={variant}, build_id={build_id} (and no fallbacks were available)"
-    )
+        log(f"  prefix s3://{bucket}/{prefix}/ has no objects, skipping")
+        attempts.append(
+            {
+                "ref": current_ref,
+                "build_id": effective_build_id,
+                "prefix": prefix,
+                "status": "empty",
+                "detail": f"s3://{bucket}/{prefix}/",
+            }
+        )
+
+    lines = [
+        f"Artifact path could not be resolved for project={project_id}, "
+        f"variant={variant}, requested_ref={ref}, requested_build_id={build_id}.",
+        f"Attempts ({len(attempts)}):",
+    ]
+    for a in attempts:
+        if a["status"] == "no-pointer":
+            lines.append(
+                f"  - ref={a['ref']}: LATEST_SUCCESSFUL pointer not found at {a['detail']}"
+            )
+        elif a["status"] == "empty":
+            lines.append(
+                f"  - ref={a['ref']} build={a['build_id']}: "
+                f"prefix {a['detail']} contained no objects"
+            )
+        else:
+            lines.append(f"  - ref={a['ref']}: {a['status']} ({a['detail']})")
+    die("\n".join(lines))
 
 
 def _download(
@@ -598,24 +710,64 @@ def _download(
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
-    actual_build_id = build_id
-    pfx = _validate_artifact_path(
-        cfg, auth, bucket, pfx, project_id, git_ref, variant, actual_build_id
+    resolved = _validate_artifact_path(
+        cfg, auth, bucket, pfx, project_id, git_ref, variant, build_id
     )
+    pfx = resolved.prefix
+
+    list_client = _s3_client(cfg, auth)  # listing only; workers create their own
+
+    if resolved.fallback_applied:
+        log(
+            f"WARNING: falling back from ref={resolved.requested_ref} to "
+            f"ref={resolved.ref} (no artifacts on the requested ref)"
+        )
+
+    # Canonical resolved-build summary -- emitted once per project, before any transfer.
+    manifest = _read_manifest(list_client, bucket, pfx)
+    log(f"resolved build for project={project_id} variant={variant}:")
+    fallback_note = (
+        f"  (fallback from {resolved.requested_ref})" if resolved.fallback_applied else ""
+    )
+    log(f"  ref       = {resolved.ref}{fallback_note}")
+    bid_note = (
+        " (via LATEST_SUCCESSFUL)" if resolved.requested_build_id == "LATEST_SUCCESSFUL" else ""
+    )
+    log(f"  build_id  = {resolved.build_id}{bid_note}")
+    built_at = None
+    if manifest and manifest.get("uploaded_at"):
+        try:
+            ua = manifest["uploaded_at"].rstrip("Z")
+            built_at = datetime.datetime.fromisoformat(ua).replace(
+                tzinfo=datetime.timezone.utc
+            )
+        except (ValueError, TypeError):
+            built_at = None
+    if built_at is None:
+        built_at = resolved.pointer_lastmod
+    if built_at is not None:
+        log(f"  built at  = {built_at.strftime('%Y-%m-%d %H:%M:%SZ')} ({_fmt_age(built_at)})")
+    log(f"  prefix    = s3://{bucket}/{pfx}/")
+    if manifest:
+        log(
+            f"  contents  = {manifest.get('file_count', '?')} file(s), "
+            f"{fmt_size(manifest.get('total_size_bytes', 0))}"
+        )
 
     tc = TransferConfig(max_concurrency=concurrency)
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
-    list_client = _s3_client(cfg, auth)  # listing only; workers create their own
     objects = []
+    present_keys = []  # everything at the prefix except manifest.json, for diagnostics
     for page in list_client.get_paginator("list_objects_v2").paginate(
         Bucket=bucket, Prefix=f"{pfx}/"
     ):
         for item in page.get("Contents", []):
             rel = item["Key"][len(pfx) + 1 :]  # path relative to variant's artifact root
-            if not rel:
+            if not rel or rel == "manifest.json":
                 continue
+            present_keys.append(rel)
             ef, sp = match_rules(rel, rules)
             matched = any(fnmatch.fnmatch(rel, ag) for ag, _, _ in rules)
             if matched:
@@ -623,7 +775,24 @@ def _download(
 
     if not objects:
         rule_strs = [f"{ag}!{ef}" if ef else ag for ag, ef, _ in rules]
-        die(f"no artifacts matched: {rule_strs}")
+        lines = [
+            "no artifacts matched the configured rules.",
+            f"  rules    : {rule_strs}",
+            f"  prefix   : s3://{bucket}/{pfx}/",
+        ]
+        if present_keys:
+            sample = present_keys[:20]
+            lines.append(f"  present  : {len(present_keys)} object(s) at this prefix, e.g.")
+            for k in sample:
+                lines.append(f"               {k}")
+            if len(present_keys) > len(sample):
+                lines.append(f"               ... and {len(present_keys) - len(sample)} more")
+            lines.append("  hint: archive extension or variant name probably mismatched.")
+        else:
+            # _validate_artifact_path only returns a prefix where _check_artifacts_exist
+            # was True, so reaching here means the only object was manifest.json.
+            lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
+        die("\n".join(lines))
 
     total_bytes = sum(sz for _, _, sz, _, _ in objects)
     log(
@@ -633,7 +802,7 @@ def _download(
     log(f"  parallel={parallel}, concurrency={concurrency}")
 
     def _download_one(key, rel, sz, entry_filter, strip_prefix):
-        log(f"  {rel} ({fmt_size(sz)})")
+        log(f"  start: {rel} ({fmt_size(sz)})")
         ft0 = time.monotonic()
 
         def _do():
@@ -657,7 +826,23 @@ def _download(
         _with_retry(_do, rel)
         elapsed = time.monotonic() - ft0
         speed = sz / elapsed if elapsed > 0 else 0
-        log(f"           done in {elapsed:.1f}s ({fmt_size(speed)}/s)")
+        # Loud destination line. rel is repeated so parallel-interleaved logs are still parseable.
+        if extract:
+            extras = []
+            if entry_filter:
+                extras.append(f"filter={entry_filter}")
+            if strip_prefix:
+                extras.append(f"strip={strip_prefix}")
+            extra_str = f"  ({', '.join(extras)})" if extras else ""
+            log(
+                f"  done : {rel} -> extracted into {out}/{extra_str}  "
+                f"[{elapsed:.1f}s, {fmt_size(speed)}/s]"
+            )
+        else:
+            log(
+                f"  done : {rel} -> {out / rel}  "
+                f"[{elapsed:.1f}s, {fmt_size(speed)}/s]"
+            )
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
