@@ -5,7 +5,7 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 ## What it does
 
 - **Upload** — after a build step's command completes successfully, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<variant>/builds/<build_id>/…`, preserving directory structure, and generating a manifest file.
-- **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional streaming in-memory extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
+- **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
 - **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
 
 Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipeline run is isolated and test steps can address a specific build step's output.
@@ -93,6 +93,12 @@ steps:
                   - "*-server.tar.zst!bin/*"
                   - "*-tests.tar.zst!bin/*"
 ```
+
+Download defaults used by the plugin:
+
+- If `project_id` is omitted, it defaults to the current pipeline (`BUILDKITE_PIPELINE_SLUG`).
+- If `build_id` is omitted and `project_id` is set to current or omitted, it defaults to `BUILDKITE_BUILD_ID`.
+- If `build_id` is omitted and `project_id` points to another pipeline, it defaults to `LATEST_SUCCESSFUL`.
 
 ### Download without extraction
 
