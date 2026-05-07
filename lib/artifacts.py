@@ -108,6 +108,7 @@ ENDPOINT_URL_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/endp
 R2_ACCOUNT_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/account-id"
 R2_ACCESS_KEY_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/access-key-id"
 R2_SECRET_ACCESS_KEY_SSM_PARAM = "/services/buildkite/credentials/artifacts/r2/secret-access-key"
+BUCKET_DOMAIN_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/bucket-domain"
 
 
 @dataclass(frozen=True)  # frozen → safe to share across worker threads
@@ -120,6 +121,7 @@ class StoreConfig:
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
+    bucket_domain: str | None = None
 
 
 @dataclass(frozen=True)
@@ -259,6 +261,8 @@ def load_store_config(ssm):
     # Applies to both backends; mainly for local MinIO / dev setups.
     endpoint_url = os.environ.get("ARTIFACTS_ENDPOINT_URL")
 
+    bucket_domain = os.environ.get("ARTIFACTS_BUCKET_DOMAIN") or _ssm_get_optional(ssm, BUCKET_DOMAIN_SSM_PARAM)
+
     if backend == "r2":
         endpoint_url = endpoint_url or _ssm_get_optional(ssm, ENDPOINT_URL_SSM_PARAM)
 
@@ -308,12 +312,14 @@ def load_store_config(ssm):
             r2_account_id=r2_account_id,
             r2_access_key_id=r2_access_key_id,
             r2_secret_access_key=r2_secret_access_key,
+            bucket_domain=bucket_domain,
         )
 
     return StoreConfig(
         backend=backend,
         destination=destination,
         endpoint_url=endpoint_url,
+        bucket_domain=bucket_domain,
     )
 
 
@@ -418,13 +424,16 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
         ContentType="application/json",
     )
 
-def _create_buildkite_annotation(prefix, files):
+def _create_buildkite_annotation(bucket_domain, prefix, files):
     if not os.environ.get("BUILDKITE"):
         log(f"  BUILDKITE env var not set; skipping adding Buildkite annotation")
         return
+    if not bucket_domain:
+        log(f"  bucket domain not configured; skipping adding Buildkite annotation")
+        return
     log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
-    uri = "https://cicd-assets.quasar.ai"
+    uri = f"https://{bucket_domain}"
     body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(f"- [{file}]({key_join(uri, prefix, file)})" for file in files)
     args = [
         "buildkite-agent",
@@ -531,7 +540,7 @@ def upload(
 
     elapsed = time.monotonic() - t0
     avg_speed = total_bytes / elapsed if elapsed > 0 else 0
-    _create_buildkite_annotation(pfx, relative_files_path)
+    _create_buildkite_annotation(cfg.bucket_domain, pfx, relative_files_path)
     log(
         f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
