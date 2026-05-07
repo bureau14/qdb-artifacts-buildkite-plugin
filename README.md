@@ -128,6 +128,20 @@ plugins:
         concurrency: 16
 ```
 
+### Upload without Buildkite annotation
+
+Set `create_buildkite_annotation: false` to skip creating the Buildkite job annotation after upload.
+
+```yaml
+plugins:
+  - bureau14/qdb-artifacts#v1.0.0:
+      upload:
+        variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
+        files: "dist/**/*.tar.zst"
+        create_buildkite_annotation: false
+```
+
 ### Upload and promote in one step
 
 ```yaml
@@ -162,6 +176,7 @@ plugins:
 | `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
+| `create_buildkite_annotation` | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
 
 ### `promote` object keys
 

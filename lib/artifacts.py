@@ -457,7 +457,15 @@ def _create_buildkite_annotation(bucket_domain, prefix, files):
 
 
 def upload(
-    project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None
+    project_id,
+    build_id,
+    git_ref,
+    variant,
+    patterns,
+    parallel=4,
+    concurrency=32,
+    base_dir=None,
+    create_buildkite_annotation=True,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -540,7 +548,10 @@ def upload(
 
     elapsed = time.monotonic() - t0
     avg_speed = total_bytes / elapsed if elapsed > 0 else 0
-    _create_buildkite_annotation(cfg.bucket_domain, pfx, relative_files_path)
+    if create_buildkite_annotation:
+        _create_buildkite_annotation(cfg.bucket_domain, pfx, relative_files_path)
+    else:
+        log("  create_buildkite_annotation=false; skipping Buildkite annotation")
     log(
         f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
@@ -1100,6 +1111,11 @@ if __name__ == "__main__":
         if not git_ref:
             die("missing required --git-ref argument")
 
+        create_buildkite_annotation = _get_env_bool(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_CREATE_BUILDKITE_ANNOTATION"),
+            default=True,
+        )
+
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
@@ -1108,7 +1124,17 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, git_ref, variant, patterns, parallel, concurrency, base_dir)
+        upload(
+            project_id,
+            build_id,
+            git_ref,
+            variant,
+            patterns,
+            parallel,
+            concurrency,
+            base_dir,
+            create_buildkite_annotation,
+        )
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to
