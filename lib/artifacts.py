@@ -422,16 +422,26 @@ def _create_buildkite_annotation(prefix, files):
     if not os.environ.get("BUILDKITE"):
         log(f"  BUILDKITE env var not set; skipping adding Buildkite annotation")
         return
+    log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = "https://cicd-assets.quasar.ai"
     body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(f"- [{file}]({key_join(uri, prefix, file)})" for file in files)
+    args = [
+        "buildkite-agent",
+        "annotate",
+        body,
+        "--context",
+        "artifacts",
+        "--style",
+        "info",
+        "--priority",
+        "10",
+        "--scope",
+        "job",
+    ]
+    log(f"  running command: {' '.join(args)}")
     try:
-        subprocess.run(
-            ["buildkite-agent", "annotation", "create", "--style=info", "--context=artifacts", "--scope=job", "--priority=10"],
-            input=body,
-            text=True,
-            check=True,
-        )
+        subprocess.run(args, check=True)
     except Exception as e:
         log(f"  :warning Failed to create Buildkite annotation: {e}")
     
