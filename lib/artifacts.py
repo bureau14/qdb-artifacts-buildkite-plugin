@@ -435,8 +435,11 @@ def _create_buildkite_annotation(bucket_domain, prefix, files):
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = f"https://{bucket_domain}"
     body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(f"- [{file}]({key_join(uri, prefix, file)})" for file in files)
+    buildkite_agent_exec = "buildkite-agent"
+    if os.name == "nt":
+        buildkite_agent_exec += ".exe"
     args = [
-        "buildkite-agent",
+        buildkite_agent_exec,
         "annotate",
         body,
         "--context",
