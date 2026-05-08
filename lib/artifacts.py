@@ -321,6 +321,7 @@ def load_store_config(ssm):
         backend=backend,
         destination=destination,
         endpoint_url=endpoint_url,
+        artifacts_domain=artifacts_domain,
     )
 
 
