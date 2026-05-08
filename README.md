@@ -132,7 +132,7 @@ plugins:
 
 ### Upload without Buildkite annotation
 
-Set `create_buildkite_annotation: false` to skip creating the Buildkite job annotation after upload.
+Set `annotate: false` to skip creating the Buildkite job annotation after upload.
 
 ```yaml
 plugins:
@@ -141,7 +141,7 @@ plugins:
         variant: "linux-amd64-release"
         git_ref: "refs/heads/main"
         files: "dist/**/*.tar.zst"
-        create_buildkite_annotation: false
+        annotate: false
 ```
 
 ### Upload and promote in one step
@@ -178,7 +178,7 @@ plugins:
 | `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
-| `create_buildkite_annotation` | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
+| `annotate`    | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
 
 ### `promote` object keys
 
@@ -245,6 +245,7 @@ Config is resolved in order: **environment variable → SSM parameter → defaul
 | R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`    | _(R2 only)_  |
 | R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id` | _(R2 only)_  |
 | R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`     | _(R2 only)_  |
+| Artifacts domain     | `ARTIFACTS_DOMAIN`             | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain`| _(optional)_ |
 
 For **AWS S3**, the agent's IAM role is used — no explicit credentials needed.
 

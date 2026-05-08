@@ -29,7 +29,7 @@ configuration:
         concurrency:
           type: integer
           description: "Multipart threads per upload (default: 32)"
-        create_buildkite_annotation:
+        annotate:
           type: boolean
           description: "Create a Buildkite job annotation listing uploaded artifacts (default: true)"
       required:
