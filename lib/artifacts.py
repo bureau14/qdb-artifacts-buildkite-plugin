@@ -430,11 +430,11 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
 def _create_buildkite_annotation(bucket_domain, prefix, files):
     if not os.environ.get("BUILDKITE"):
         log(
-            f"  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
+            "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
         )
         return
     if not bucket_domain:
-        log(f"  bucket domain not configured; skipping adding Buildkite annotation")
+        log("  bucket domain not configured; skipping adding Buildkite annotation")
         return
     log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
