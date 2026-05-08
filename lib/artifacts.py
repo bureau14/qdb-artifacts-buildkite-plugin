@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import subprocess
 
 """Artifact upload/download for Buildkite CI pipelines (AWS S3 + Cloudflare R2).
 
@@ -107,6 +108,7 @@ ENDPOINT_URL_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/endp
 R2_ACCOUNT_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/account-id"
 R2_ACCESS_KEY_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/access-key-id"
 R2_SECRET_ACCESS_KEY_SSM_PARAM = "/services/buildkite/credentials/artifacts/r2/secret-access-key"
+ARTIFACTS_DOMAIN_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/artifacts-domain"
 
 
 @dataclass(frozen=True)  # frozen → safe to share across worker threads
@@ -119,6 +121,7 @@ class StoreConfig:
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
+    artifacts_domain: str | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +261,10 @@ def load_store_config(ssm):
     # Applies to both backends; mainly for local MinIO / dev setups.
     endpoint_url = os.environ.get("ARTIFACTS_ENDPOINT_URL")
 
+    artifacts_domain = os.environ.get("ARTIFACTS_DOMAIN") or _ssm_get_optional(
+        ssm, ARTIFACTS_DOMAIN_SSM_PARAM
+    )
+
     if backend == "r2":
         endpoint_url = endpoint_url or _ssm_get_optional(ssm, ENDPOINT_URL_SSM_PARAM)
 
@@ -307,12 +314,14 @@ def load_store_config(ssm):
             r2_account_id=r2_account_id,
             r2_access_key_id=r2_access_key_id,
             r2_secret_access_key=r2_secret_access_key,
+            artifacts_domain=artifacts_domain,
         )
 
     return StoreConfig(
         backend=backend,
         destination=destination,
         endpoint_url=endpoint_url,
+        artifacts_domain=artifacts_domain,
     )
 
 
@@ -418,8 +427,58 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
+def _create_buildkite_annotation(artifacts_domain, prefix, files):
+    if not os.environ.get("BUILDKITE"):
+        log(
+            "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
+        )
+        return
+    if not artifacts_domain:
+        log("  Artifacts domain not configured; skipping adding Buildkite annotation")
+        return
+    log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
+    job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
+    uri = f"https://{artifacts_domain}"
+    body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(
+        f"- [{file}]({key_join(uri, prefix, file)})" for file in files
+    )
+
+    # We could use REST API calls here and avoid depending on the binary (and calling it from subprocess) but REST API has some limitations that make it less ideal:
+    # - auth tokens are per user not per organization, token will stop working when account is removed
+    # - API rate limits are low, you can hit them if you have a lot of builds uploading artifacts at the same time, would need a backoff and retry mechanism
+    buildkite_agent_exec = "buildkite-agent"
+    if os.name == "nt":
+        buildkite_agent_exec += ".exe"
+    args = [
+        buildkite_agent_exec,
+        "annotate",
+        body,
+        "--context",
+        "artifacts",
+        "--style",
+        "info",
+        "--priority",
+        "10",
+        "--scope",
+        "job",
+    ]
+    log(f"  running command: {' '.join(args)}")
+    try:
+        subprocess.run(args, check=True)
+    except Exception as e:
+        log(f"  :warning Failed to create Buildkite annotation: {e}")
+
+
 def upload(
-    project_id, build_id, git_ref, variant, patterns, parallel=4, concurrency=32, base_dir=None
+    project_id,
+    build_id,
+    git_ref,
+    variant,
+    patterns,
+    parallel=4,
+    concurrency=32,
+    base_dir=None,
+    annotate=True,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -472,13 +531,20 @@ def upload(
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
-            _s3_client(cfg, auth).upload_file(str(f), bucket, key_join(pfx, rel), Config=tc)
+            _s3_client(cfg, auth).upload_file(
+                str(f),
+                bucket,
+                key_join(pfx, rel),
+                ExtraArgs={"ContentDisposition": f'attachment; filename="{f.name}"'},
+                Config=tc,
+            )
 
         _with_retry(_do, rel)
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
     futs = {pool.submit(_upload_one, f): f for f in files}
+    relative_files_path = [f.relative_to(base_path).as_posix() for f in files]
     try:
         for fut in as_completed(futs):
             fut.result()
@@ -487,7 +553,7 @@ def upload(
         # might come handy for debugging / validation / future features
         manifest_payload = {
             "file_count": len(files),
-            "files": [f.relative_to(base_path).as_posix() for f in files],
+            "files": relative_files_path,
             "uploaded_at": datetime.datetime.now().isoformat() + "Z",
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
@@ -501,6 +567,10 @@ def upload(
 
     elapsed = time.monotonic() - t0
     avg_speed = total_bytes / elapsed if elapsed > 0 else 0
+    if annotate:
+        _create_buildkite_annotation(cfg.artifacts_domain, pfx, relative_files_path)
+    else:
+        log("  annotate=false; skipping Buildkite annotation")
     log(
         f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
@@ -1060,6 +1130,11 @@ if __name__ == "__main__":
         if not git_ref:
             die("missing required --git-ref argument")
 
+        annotate = _get_env_bool(
+            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_ANNOTATE"),
+            default=True,
+        )
+
         project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
@@ -1068,7 +1143,17 @@ if __name__ == "__main__":
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-        upload(project_id, build_id, git_ref, variant, patterns, parallel, concurrency, base_dir)
+        upload(
+            project_id,
+            build_id,
+            git_ref,
+            variant,
+            patterns,
+            parallel,
+            concurrency,
+            base_dir,
+            annotate,
+        )
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to

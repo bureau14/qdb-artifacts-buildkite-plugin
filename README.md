@@ -8,6 +8,8 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 - **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
 - **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
 
+Uploaded artifacts are stored with `Content-Disposition: attachment` so browsers won't try to display them, instead prompting to download the file.
+
 Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipeline run is isolated and test steps can address a specific build step's output.
 
 ## Requirements
@@ -128,6 +130,20 @@ plugins:
         concurrency: 16
 ```
 
+### Upload without Buildkite annotation
+
+Set `annotate: false` to skip creating the Buildkite job annotation after upload.
+
+```yaml
+plugins:
+  - bureau14/qdb-artifacts#v1.0.0:
+      upload:
+        variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
+        files: "dist/**/*.tar.zst"
+        annotate: false
+```
+
 ### Upload and promote in one step
 
 ```yaml
@@ -162,6 +178,7 @@ plugins:
 | `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
+| `annotate`    | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
 
 ### `promote` object keys
 
@@ -228,6 +245,7 @@ Config is resolved in order: **environment variable → SSM parameter → defaul
 | R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`    | _(R2 only)_  |
 | R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id` | _(R2 only)_  |
 | R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`     | _(R2 only)_  |
+| Artifacts domain     | `ARTIFACTS_DOMAIN`             | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain`| _(optional)_ |
 
 For **AWS S3**, the agent's IAM role is used — no explicit credentials needed.
 
