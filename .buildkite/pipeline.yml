@@ -1,5 +1,5 @@
 agents:
-  queue: "default-debian-aarch64"
+  queue: "default-debian-amd64"
 
 steps:
   - label: "Lint code (Ruff)"
