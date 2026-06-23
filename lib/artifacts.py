@@ -49,7 +49,7 @@ filesystem as the output directory using boto3's transfer manager (parallel rang
 GETs), then extracted from the local file, then the temp file is removed.
   .tar.gz  — tarfile 'r:gz' mode (seekable)
   .tar.zst — zstandard.stream_reader → tarfile 'r|'
-  .zip     — zipfile.ZipFile (seekable local file)
+  .zip | .jar    — zipfile.ZipFile (seekable local file)
 
 Entry filtering
 ---------------
@@ -1017,7 +1017,7 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
                 with tarfile.open(fileobj=reader, mode="r|") as tar:
                     _extract_tar(tar, out, entry_filter, strip_prefix)
 
-    elif rel.endswith(".zip"):
+    elif rel.endswith(".zip") or rel.endswith(".jar"):
         with zipfile.ZipFile(path, "r") as zf:
             for info in zf.infolist():
                 name = info.filename
