@@ -63,6 +63,12 @@ Download project config can set ``exclude`` archive globs. Exclusions are matche
 against the artifact path after ``files`` includes match, and excluded artifacts
 are not downloaded or extracted.
 
+Upload exclusions
+-----------------
+Upload config can set ``exclude`` file globs. Exclusions are matched against the
+uploaded artifact path after ``files`` includes match, and excluded files are not
+uploaded or listed in the manifest/annotation.
+
 Usage
 -----
     # upload (build step)
@@ -485,6 +491,7 @@ def upload(
     concurrency=32,
     base_dir=None,
     annotate=True,
+    exclude_patterns=None,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -507,7 +514,7 @@ def upload(
         if not base_path.is_dir():
             die(f"--base-dir {base_dir!r} does not exist or is not a directory")
 
-    files = sorted(
+    matched_files = sorted(
         {
             Path(f).resolve()
             for p in patterns
@@ -515,15 +522,23 @@ def upload(
             if Path(f).is_file()
         }
     )
-    if not files:
+    if not matched_files:
         die(f"no files matched: {patterns}")
 
     if base_dir:
-        for f in files:
+        for f in matched_files:
             try:
                 f.relative_to(base_path)
             except ValueError:
                 die(f"file {f} is not under base_dir {base_dir}")
+
+    files = [
+        f
+        for f in matched_files
+        if not is_excluded(f.relative_to(base_path).as_posix(), exclude_patterns)
+    ]
+    if not files:
+        die(f"no files left after applying exclude patterns: {exclude_patterns or []}")
 
     total_bytes = sum(f.stat().st_size for f in files)
     log(
@@ -531,6 +546,8 @@ def upload(
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
     )
     log(f"  parallel={parallel}, concurrency={concurrency}")
+    if exclude_patterns:
+        log(f"  exclude={exclude_patterns}")
 
     def _upload_one(f):
         rel = f.relative_to(base_path).as_posix()
@@ -1119,6 +1136,7 @@ if __name__ == "__main__":
     if cmd == "upload":
         patterns = []
         base_dir = None
+        exclude_patterns = []
         i = 0
         while i < len(args):
             if args[i] == "--variant":
@@ -1141,6 +1159,9 @@ if __name__ == "__main__":
                 i += 2
             elif args[i] == "--git-ref":
                 git_ref = args[i + 1]
+                i += 2
+            elif args[i] == "--exclude":
+                exclude_patterns.append(args[i + 1])
                 i += 2
             else:
                 patterns.append(args[i])
@@ -1176,6 +1197,7 @@ if __name__ == "__main__":
             concurrency,
             base_dir,
             annotate,
+            exclude_patterns,
         )
 
     elif cmd == "promote":

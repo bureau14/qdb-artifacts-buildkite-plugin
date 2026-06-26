@@ -52,6 +52,11 @@ if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]] || [[ -n "${BUI
   git_ref="$(plugin_read_config UPLOAD_GIT_REF "")"
   [[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")
 
+  # --exclude
+  while IFS= read -r exclude; do
+    args+=(--exclude "${exclude}")
+  done < <(plugin_read_list UPLOAD_EXCLUDE)
+
   # Collect file patterns from array env vars
   # Support both singular and plural forms of the env var for backward compatibility
   if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
