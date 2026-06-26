@@ -57,6 +57,12 @@ Patterns like ``*-server.tar.zst!bin/*`` match archives by glob, extract only
 entries matching ``bin/*``, and strip the ``bin/`` prefix from output paths.
 Test steps use this to pull only executables/libraries from component archives.
 
+Download exclusions
+-------------------
+Download project config can set ``exclude`` archive globs. Exclusions are matched
+against the artifact path after ``files`` includes match, and excluded artifacts
+are not downloaded or extracted.
+
 Usage
 -----
     # upload (build step)
@@ -610,6 +616,11 @@ def match_rules(rel, rules):
     return None, None
 
 
+def is_excluded(rel, exclude_patterns):
+    """Return True when rel matches any configured exclude archive glob."""
+    return any(fnmatch.fnmatch(rel, pat) for pat in exclude_patterns or [])
+
+
 def _check_artifacts_exist(s3, bucket, prefix):
     """Check if any objects exist under the given prefix."""
     response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
@@ -764,6 +775,7 @@ def _download(
     git_ref,
     rules,
     variant,
+    exclude_patterns=None,
     output_dir=".",
     extract=False,
     parallel=4,
@@ -841,9 +853,9 @@ def _download(
             if not rel or rel == "manifest.json":
                 continue
             present_keys.append(rel)
-            ef, sp = match_rules(rel, rules)
             matched = any(fnmatch.fnmatch(rel, ag) for ag, _, _ in rules)
-            if matched:
+            if matched and not is_excluded(rel, exclude_patterns):
+                ef, sp = match_rules(rel, rules)
                 objects.append((item["Key"], rel, item["Size"], ef, sp))
 
     if not objects:
@@ -851,6 +863,7 @@ def _download(
         lines = [
             "no artifacts matched the configured rules.",
             f"  rules    : {rule_strs}",
+            f"  exclude  : {exclude_patterns or []}",
             f"  prefix   : s3://{bucket}/{pfx}/",
         ]
         if present_keys:
@@ -946,6 +959,7 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             git_ref=p["git_ref"],
             rules=rules,
             variant=p["variant"],
+            exclude_patterns=p.get("exclude", []),
             output_dir=p["output_dir"],
             extract=p["extract"],
             parallel=parallel,
@@ -1044,6 +1058,27 @@ def _get_env_bool(val, default=False):
     return str(val).strip().lower() in ("true", "1", "on", "yes")
 
 
+def _get_env_array(prefix, key):
+    """Read a Buildkite plugin array env value.
+
+    Buildkite exposes multi-item arrays as KEY_0, KEY_1, ... and single-item
+    arrays as KEY without the _0 suffix.
+    """
+    values = []
+    j = 0
+    while True:
+        val = os.environ.get(f"{prefix}{key}_{j}")
+        if not val:
+            if j == 0:
+                single_val = os.environ.get(f"{prefix}{key}")
+                if single_val:
+                    values.append(single_val)
+            break
+        values.append(val)
+        j += 1
+    return values
+
+
 def parse_download_projects_from_env():
     """Parse the Buildkite plugin's download.projects[] schema from environment variables."""
     projects = []
@@ -1061,21 +1096,9 @@ def parse_download_projects_from_env():
             "build_id": os.environ.get(f"{prefix}BUILD_ID"),
             "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),
             "extract": _get_env_bool(os.environ.get(f"{prefix}EXTRACT")),
-            "files": [],
+            "files": _get_env_array(prefix, "FILES"),
+            "exclude": _get_env_array(prefix, "EXCLUDE"),
         }
-
-        j = 0
-        while True:
-            file_val = os.environ.get(f"{prefix}FILES_{j}")
-            if not file_val:
-                # buildkite plugin handles single item arrays by removing the _0 suffix
-                if j == 0:
-                    single_file = os.environ.get(f"{prefix}FILES")
-                    if single_file:
-                        p["files"].append(single_file)
-                break
-            p["files"].append(file_val)
-            j += 1
 
         projects.append(p)
         i += 1

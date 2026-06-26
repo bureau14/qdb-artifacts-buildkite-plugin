@@ -116,6 +116,27 @@ plugins:
               - "*.tar.zst"
 ```
 
+### Download with exclusions
+
+Use `exclude` to skip artifacts after the `files` patterns have matched. Exclude
+patterns are matched against the artifact path, not archive entries.
+
+```yaml
+plugins:
+  - bureau14/qdb-artifacts#v1.0.0:
+      download:
+        projects:
+          - project_id: "qdb-api-jni"
+            variant: "linux-amd64-release"
+            git_ref: "refs/heads/main"
+            output-dir: "artifacts/javadoc"
+            extract: true
+            files:
+              - "jni-*-javadoc.jar"
+            exclude:
+              - "jni-*-test-javadoc.jar"
+```
+
 ### Upload with tuned parallelism
 
 ```yaml
@@ -206,6 +227,7 @@ plugins:
 | `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
 | `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
+| `exclude`     | array of strings |          | Archive glob patterns to skip after `files` patterns have matched.                              |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
 | `extract`     | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.           |
 
