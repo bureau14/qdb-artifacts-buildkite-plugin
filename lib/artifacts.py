@@ -1209,7 +1209,9 @@ if __name__ == "__main__":
         annotate = upload_config["annotate"]
 
         project_id = (
-            cmd_project_id or upload_config["project_id"] or os.environ.get("BUILDKITE_PIPELINE_SLUG")
+            cmd_project_id
+            or upload_config["project_id"]
+            or os.environ.get("BUILDKITE_PIPELINE_SLUG")
         )
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
