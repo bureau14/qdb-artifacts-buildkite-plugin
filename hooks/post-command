@@ -25,49 +25,7 @@ fi
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]] || [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
   echo "~~~ :arrow_up: Uploading artifacts"
-
-  args=(upload)
-
-  # --parallel
-  parallel="$(plugin_read_config UPLOAD_PARALLEL "")"
-  [[ -n "${parallel}" ]] && args+=(--parallel "${parallel}")
-
-  # --concurrency
-  concurrency="$(plugin_read_config UPLOAD_CONCURRENCY "")"
-  [[ -n "${concurrency}" ]] && args+=(--concurrency "${concurrency}")
-
-  # --project-id
-  project_id="$(plugin_read_config UPLOAD_PROJECT_ID "")"
-  [[ -n "${project_id}" ]] && args+=(--project-id "${project_id}")
-
-  # --variant
-  variant="$(plugin_read_config UPLOAD_VARIANT "")"
-  [[ -n "${variant}" ]] && args+=(--variant "${variant}")
-
-  # --base-dir
-  base_dir="$(plugin_read_config UPLOAD_BASE_DIR "")"
-  [[ -n "${base_dir}" ]] && args+=(--base-dir "${base_dir}")
-
-  # --git-ref
-  git_ref="$(plugin_read_config UPLOAD_GIT_REF "")"
-  [[ -n "${git_ref}" ]] && args+=(--git-ref "${git_ref}")
-
-  # --exclude
-  while IFS= read -r exclude; do
-    args+=(--exclude "${exclude}")
-  done < <(plugin_read_list UPLOAD_EXCLUDE)
-
-  # Collect file patterns from array env vars
-  # Support both singular and plural forms of the env var for backward compatibility
-  if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
-    args+=("${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES}")
-  else
-    while IFS= read -r file; do
-      args+=("${file}")
-    done < <(plugin_read_list UPLOAD_FILES)
-  fi
-
-  run_artifacts_py "${args[@]}"
+  run_artifacts_py upload
 fi
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then

@@ -1096,6 +1096,23 @@ def _get_env_array(prefix, key):
     return values
 
 
+def parse_upload_config_from_env():
+    """Parse the Buildkite plugin's upload schema from environment variables."""
+    prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_"
+    return {
+        "variant": os.environ.get(f"{prefix}VARIANT"),
+        "git_ref": os.environ.get(f"{prefix}GIT_REF"),
+        "project_id": os.environ.get(f"{prefix}PROJECT_ID"),
+        "build_id": os.environ.get(f"{prefix}BUILD_ID"),
+        "base_dir": os.environ.get(f"{prefix}BASE_DIR"),
+        "parallel": os.environ.get(f"{prefix}PARALLEL"),
+        "concurrency": os.environ.get(f"{prefix}CONCURRENCY"),
+        "annotate": _get_env_bool(os.environ.get(f"{prefix}ANNOTATE"), default=True),
+        "files": _get_env_array(prefix, "FILES"),
+        "exclude": _get_env_array(prefix, "EXCLUDE"),
+    }
+
+
 def parse_download_projects_from_env():
     """Parse the Buildkite plugin's download.projects[] schema from environment variables."""
     projects = []
@@ -1134,9 +1151,12 @@ if __name__ == "__main__":
     git_ref = None
 
     if cmd == "upload":
+        upload_config = parse_upload_config_from_env()
         patterns = []
         base_dir = None
         exclude_patterns = []
+        parallel = None
+        concurrency = None
         i = 0
         while i < len(args):
             if args[i] == "--variant":
@@ -1168,22 +1188,33 @@ if __name__ == "__main__":
                 i += 1
 
         if not patterns:
-            patterns = ["*.tar.zst"]
+            patterns = upload_config["files"] or ["*.tar.zst"]
+        if not exclude_patterns:
+            exclude_patterns = upload_config["exclude"]
+        if not base_dir:
+            base_dir = upload_config["base_dir"]
+        if not variant:
+            variant = upload_config["variant"]
+        if not git_ref:
+            git_ref = upload_config["git_ref"]
+        if parallel is None:
+            parallel = int(upload_config["parallel"] or "4")
+        if concurrency is None:
+            concurrency = int(upload_config["concurrency"] or "32")
         if not variant:
             die("missing required --variant argument")
         if not git_ref:
             die("missing required --git-ref argument")
 
-        annotate = _get_env_bool(
-            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_ANNOTATE"),
-            default=True,
-        )
+        annotate = upload_config["annotate"]
 
-        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
+        project_id = (
+            cmd_project_id or upload_config["project_id"] or os.environ.get("BUILDKITE_PIPELINE_SLUG")
+        )
         if not project_id:
             die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
 
-        build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
+        build_id = cmd_build_id or upload_config["build_id"] or os.environ.get("BUILDKITE_BUILD_ID")
         if not build_id:
             die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
