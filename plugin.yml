@@ -114,7 +114,7 @@ configuration:
     debug:
       type: boolean
       description: "Enable bash debug tracing"
-  oneOf:
+  anyOf:
     - required: [upload]
     - required: [download]
     - required: [promote]

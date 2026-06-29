@@ -190,9 +190,11 @@ plugins:
   - bureau14/qdb-artifacts#v1.0.0:
       upload:
         variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
         files: "dist/**/*.tar.zst"
       promote:
         variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
 ```
 
 ## Configuration reference
