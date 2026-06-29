@@ -23,6 +23,12 @@ configuration:
         base_dir:
           type: string
           description: "Optional base directory to strip from uploaded object keys (e.g. 'dist')"
+        exclude:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: "Glob patterns to exclude from upload after files have matched (e.g. '*-debug.tar.zst')"
         parallel:
           type: integer
           description: "Files uploaded simultaneously (default: 4)"
@@ -93,6 +99,12 @@ configuration:
                 items:
                   type: string
                 description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
+              exclude:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                description: "Archive globs to exclude from download after files have matched (e.g. '*-test-javadoc.jar')"
             required:
               - variant
               - files

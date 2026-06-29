@@ -57,6 +57,18 @@ Patterns like ``*-server.tar.zst!bin/*`` match archives by glob, extract only
 entries matching ``bin/*``, and strip the ``bin/`` prefix from output paths.
 Test steps use this to pull only executables/libraries from component archives.
 
+Download exclusions
+-------------------
+Download project config can set ``exclude`` archive globs. Exclusions are matched
+against the artifact path after ``files`` includes match, and excluded artifacts
+are not downloaded or extracted.
+
+Upload exclusions
+-----------------
+Upload config can set ``exclude`` file globs. Exclusions are matched against the
+uploaded artifact path after ``files`` includes match, and excluded files are not
+uploaded or listed in the manifest/annotation.
+
 Usage
 -----
     # upload (build step)
@@ -479,6 +491,7 @@ def upload(
     concurrency=32,
     base_dir=None,
     annotate=True,
+    exclude_patterns=None,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -501,7 +514,7 @@ def upload(
         if not base_path.is_dir():
             die(f"--base-dir {base_dir!r} does not exist or is not a directory")
 
-    files = sorted(
+    matched_files = sorted(
         {
             Path(f).resolve()
             for p in patterns
@@ -509,15 +522,23 @@ def upload(
             if Path(f).is_file()
         }
     )
-    if not files:
+    if not matched_files:
         die(f"no files matched: {patterns}")
 
     if base_dir:
-        for f in files:
+        for f in matched_files:
             try:
                 f.relative_to(base_path)
             except ValueError:
                 die(f"file {f} is not under base_dir {base_dir}")
+
+    files = [
+        f
+        for f in matched_files
+        if not is_excluded(f.relative_to(base_path).as_posix(), exclude_patterns)
+    ]
+    if not files:
+        die(f"no files left after applying exclude patterns: {exclude_patterns or []}")
 
     total_bytes = sum(f.stat().st_size for f in files)
     log(
@@ -525,6 +546,8 @@ def upload(
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
     )
     log(f"  parallel={parallel}, concurrency={concurrency}")
+    if exclude_patterns:
+        log(f"  exclude={exclude_patterns}")
 
     def _upload_one(f):
         rel = f.relative_to(base_path).as_posix()
@@ -608,6 +631,11 @@ def match_rules(rel, rules):
         if fnmatch.fnmatch(rel, archive_glob):
             return entry_filter, strip_prefix
     return None, None
+
+
+def is_excluded(rel, exclude_patterns):
+    """Return True when rel matches any configured exclude archive glob."""
+    return any(fnmatch.fnmatch(rel, pat) for pat in exclude_patterns or [])
 
 
 def _check_artifacts_exist(s3, bucket, prefix):
@@ -764,6 +792,7 @@ def _download(
     git_ref,
     rules,
     variant,
+    exclude_patterns=None,
     output_dir=".",
     extract=False,
     parallel=4,
@@ -841,9 +870,9 @@ def _download(
             if not rel or rel == "manifest.json":
                 continue
             present_keys.append(rel)
-            ef, sp = match_rules(rel, rules)
             matched = any(fnmatch.fnmatch(rel, ag) for ag, _, _ in rules)
-            if matched:
+            if matched and not is_excluded(rel, exclude_patterns):
+                ef, sp = match_rules(rel, rules)
                 objects.append((item["Key"], rel, item["Size"], ef, sp))
 
     if not objects:
@@ -851,6 +880,7 @@ def _download(
         lines = [
             "no artifacts matched the configured rules.",
             f"  rules    : {rule_strs}",
+            f"  exclude  : {exclude_patterns or []}",
             f"  prefix   : s3://{bucket}/{pfx}/",
         ]
         if present_keys:
@@ -946,6 +976,7 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             git_ref=p["git_ref"],
             rules=rules,
             variant=p["variant"],
+            exclude_patterns=p.get("exclude", []),
             output_dir=p["output_dir"],
             extract=p["extract"],
             parallel=parallel,
@@ -1044,6 +1075,44 @@ def _get_env_bool(val, default=False):
     return str(val).strip().lower() in ("true", "1", "on", "yes")
 
 
+def _get_env_array(prefix, key):
+    """Read a Buildkite plugin array env value.
+
+    Buildkite exposes multi-item arrays as KEY_0, KEY_1, ... and single-item
+    arrays as KEY without the _0 suffix.
+    """
+    values = []
+    j = 0
+    while True:
+        val = os.environ.get(f"{prefix}{key}_{j}")
+        if not val:
+            if j == 0:
+                single_val = os.environ.get(f"{prefix}{key}")
+                if single_val:
+                    values.append(single_val)
+            break
+        values.append(val)
+        j += 1
+    return values
+
+
+def parse_upload_config_from_env():
+    """Parse the Buildkite plugin's upload schema from environment variables."""
+    prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_"
+    return {
+        "variant": os.environ.get(f"{prefix}VARIANT"),
+        "git_ref": os.environ.get(f"{prefix}GIT_REF"),
+        "project_id": os.environ.get(f"{prefix}PROJECT_ID"),
+        "build_id": os.environ.get(f"{prefix}BUILD_ID"),
+        "base_dir": os.environ.get(f"{prefix}BASE_DIR"),
+        "parallel": os.environ.get(f"{prefix}PARALLEL"),
+        "concurrency": os.environ.get(f"{prefix}CONCURRENCY"),
+        "annotate": _get_env_bool(os.environ.get(f"{prefix}ANNOTATE"), default=True),
+        "files": _get_env_array(prefix, "FILES"),
+        "exclude": _get_env_array(prefix, "EXCLUDE"),
+    }
+
+
 def parse_download_projects_from_env():
     """Parse the Buildkite plugin's download.projects[] schema from environment variables."""
     projects = []
@@ -1061,21 +1130,9 @@ def parse_download_projects_from_env():
             "build_id": os.environ.get(f"{prefix}BUILD_ID"),
             "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),
             "extract": _get_env_bool(os.environ.get(f"{prefix}EXTRACT")),
-            "files": [],
+            "files": _get_env_array(prefix, "FILES"),
+            "exclude": _get_env_array(prefix, "EXCLUDE"),
         }
-
-        j = 0
-        while True:
-            file_val = os.environ.get(f"{prefix}FILES_{j}")
-            if not file_val:
-                # buildkite plugin handles single item arrays by removing the _0 suffix
-                if j == 0:
-                    single_file = os.environ.get(f"{prefix}FILES")
-                    if single_file:
-                        p["files"].append(single_file)
-                break
-            p["files"].append(file_val)
-            j += 1
 
         projects.append(p)
         i += 1
@@ -1083,76 +1140,60 @@ def parse_download_projects_from_env():
     return projects
 
 
+def parse_download_config_from_env():
+    """Parse the Buildkite plugin's download schema from environment variables."""
+    prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_"
+    return {
+        "clean": _get_env_bool(os.environ.get(f"{prefix}CLEAN")),
+        "parallel": int(os.environ.get(f"{prefix}PARALLEL", "4")),
+        "concurrency": int(os.environ.get(f"{prefix}CONCURRENCY", "32")),
+        "projects": parse_download_projects_from_env(),
+    }
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     cmd = args.pop(0)
-    parallel = 4
-    concurrency = 32
     cmd_project_id = None
     cmd_build_id = None
     variant = None
     git_ref = None
 
     if cmd == "upload":
-        patterns = []
-        base_dir = None
-        i = 0
-        while i < len(args):
-            if args[i] == "--variant":
-                variant = args[i + 1]
-                i += 2
-            elif args[i] == "--base-dir":
-                base_dir = args[i + 1]
-                i += 2
-            elif args[i] == "--parallel":
-                parallel = int(args[i + 1])
-                i += 2
-            elif args[i] == "--concurrency":
-                concurrency = int(args[i + 1])
-                i += 2
-            elif args[i] == "--project-id":
-                cmd_project_id = args[i + 1]
-                i += 2
-            elif args[i] == "--build-id":
-                cmd_build_id = args[i + 1]
-                i += 2
-            elif args[i] == "--git-ref":
-                git_ref = args[i + 1]
-                i += 2
-            else:
-                patterns.append(args[i])
-                i += 1
+        upload_config = parse_upload_config_from_env()
 
-        if not patterns:
-            patterns = ["*.tar.zst"]
-        if not variant:
-            die("missing required --variant argument")
-        if not git_ref:
-            die("missing required --git-ref argument")
+        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
+        upload_parallel = int(upload_config.get("parallel") or "4")
+        upload_concurrency = int(upload_config.get("concurrency") or "32")
 
-        annotate = _get_env_bool(
-            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_ANNOTATE"),
-            default=True,
-        )
+        if not upload_config.get("git_ref"):
+            die(f"missing required git_ref in upload config: {upload_config}")
+        if not upload_config.get("variant"):
+            die(f"missing required variant in upload config: {upload_config}")
+        if not upload_config.get("files"):
+            upload_config["files"] = ["*.tar.zst"]
 
-        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
+        project_id = upload_config.get("project_id") or pipeline_name
         if not project_id:
-            die("missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set")
+            die("missing required project_id and BUILDKITE_PIPELINE_SLUG is not set")
+        upload_config["resolved_project_id"] = project_id
 
-        build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
+        build_id = upload_config.get("build_id") or os.environ.get("BUILDKITE_BUILD_ID")
         if not build_id:
-            die("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+            die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+        upload_config["resolved_build_id"] = build_id
 
         upload(
-            project_id,
-            build_id,
-            git_ref,
-            variant,
-            patterns,
-            parallel,
-            concurrency,
-            base_dir,
-            annotate,
+            upload_config["resolved_project_id"],
+            upload_config["resolved_build_id"],
+            upload_config["git_ref"],
+            upload_config["variant"],
+            upload_config["files"],
+            upload_parallel,
+            upload_concurrency,
+            upload_config["base_dir"],
+            upload_config["annotate"],
+            upload_config["exclude"],
         )
 
     elif cmd == "promote":
@@ -1190,23 +1231,13 @@ if __name__ == "__main__":
         promote(project_id, build_id, git_ref, variant)
 
     elif cmd == "download":
-        projects_config = parse_download_projects_from_env()
+        download_config = parse_download_config_from_env()
+        projects_config = download_config["projects"]
         if not projects_config:
             die("no download projects configured")
 
         pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
-
-        # Resolve defaults and gather clean targets
         dirs_to_clean = set()
-        global_clean = _get_env_bool(
-            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CLEAN")
-        )
-        global_parallel = int(
-            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PARALLEL", "4")
-        )
-        global_concurrency = int(
-            os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_CONCURRENCY", "32")
-        )
 
         for p in projects_config:
             if not p.get("git_ref"):
@@ -1236,10 +1267,15 @@ if __name__ == "__main__":
             p["resolved_build_id"] = build_id
 
             out_dir = Path(p["output_dir"]).resolve()
-            if global_clean:
+            if download_config["clean"]:
                 dirs_to_clean.add(out_dir)
 
-        download(projects_config, dirs_to_clean, global_parallel, global_concurrency)
+        download(
+            projects_config,
+            dirs_to_clean,
+            download_config["parallel"],
+            download_config["concurrency"],
+        )
 
     else:
         die(f"unknown command: {cmd}")
