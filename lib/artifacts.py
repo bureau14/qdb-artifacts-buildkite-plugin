@@ -803,7 +803,7 @@ def _download(
     to the current BUILDKITE_PIPELINE_SLUG.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
     from main/master branch if missing on the current branch. If build_id is omitted, it defaults
-    to BUILDKITE_BUILD_ID if downloading from the current pipeline, otherwise LATEST_SUCCESSFUL.
+    to BUILDKITE_BUILD_ID if downloading from the current pipeline and ref, otherwise LATEST_SUCCESSFUL.
 
     --clean wipes output_dir first — needed because Buildkite retries reuse the same
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
@@ -1151,6 +1151,47 @@ def parse_download_config_from_env():
     }
 
 
+def _current_buildkite_git_ref():
+    """Return the current Buildkite git ref in artifact namespace format, if known."""
+    tag = os.environ.get("BUILDKITE_TAG")
+    if tag:
+        return tag if tag.startswith("refs/") else f"refs/tags/{tag}"
+
+    branch = os.environ.get("BUILDKITE_BRANCH")
+    if branch:
+        return branch if branch.startswith("refs/") else f"refs/heads/{branch}"
+
+    return None
+
+
+def resolve_default_download_build_id(project_config, pipeline_name):
+    """Resolve the implicit download build_id for a project config.
+
+    Same-pipeline downloads default to the current build only when the requested
+    git_ref is the current Buildkite ref. If the same pipeline asks for another
+    ref, use LATEST_SUCCESSFUL so branch/main fallbacks point at promoted builds
+    instead of looking for the current build ID under a different ref.
+    """
+    build_id = project_config.get("build_id")
+    if build_id:
+        return build_id
+
+    project_id = project_config.get("project_id")
+    is_current_project = not project_id or project_id == pipeline_name
+    if not is_current_project:
+        return "LATEST_SUCCESSFUL"
+
+    current_git_ref = _current_buildkite_git_ref()
+    requested_git_ref = project_config.get("git_ref")
+    if current_git_ref and requested_git_ref and requested_git_ref != current_git_ref:
+        return "LATEST_SUCCESSFUL"
+
+    build_id = os.environ.get("BUILDKITE_BUILD_ID")
+    if not build_id:
+        die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+    return build_id
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     cmd = args.pop(0)
@@ -1252,19 +1293,7 @@ if __name__ == "__main__":
                 die("missing required project_id and BUILDKITE_PIPELINE_SLUG is not set")
             p["resolved_project_id"] = project_id
 
-            # In download mode
-            # If running for same project / pipeline and no --build-id override, default to current build ID.
-            # Otherwise (e.g. downloading from a different pipeline), default to LATEST_SUCCESSFUL.
-            # This makes both internal and cross-pipeline downloads work with sane defaults while still allowing explicit build ID overrides for both cases.
-            build_id = p.get("build_id")
-            if not build_id:
-                if not p.get("project_id") or p.get("project_id") == pipeline_name:
-                    build_id = os.environ.get("BUILDKITE_BUILD_ID")
-                    if not build_id:
-                        die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
-                else:
-                    build_id = "LATEST_SUCCESSFUL"
-            p["resolved_build_id"] = build_id
+            p["resolved_build_id"] = resolve_default_download_build_id(p, pipeline_name)
 
             out_dir = Path(p["output_dir"]).resolve()
             if download_config["clean"]:

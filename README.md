@@ -118,6 +118,7 @@ Download defaults used by the plugin:
 
 - If `project_id` is omitted, it defaults to the current pipeline (`BUILDKITE_PIPELINE_SLUG`).
 - If `build_id` is omitted and `project_id` is set to current or omitted, it defaults to `BUILDKITE_BUILD_ID`.
+- If `build_id` is omitted and `project_id` is set to current or omitted, but `git_ref` is different from the current Buildkite ref, it defaults to `LATEST_SUCCESSFUL`.
 - If `build_id` is omitted and `project_id` points to another pipeline, it defaults to `LATEST_SUCCESSFUL`.
 
 ### Download without extraction
@@ -244,7 +245,7 @@ plugins:
 | Key           | Type             | Required | Description                                                                                     |
 | ------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_NAME`.                  |
-| `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline, else `LATEST_SUCCESSFUL`. |
+| `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
 | `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
 | `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |

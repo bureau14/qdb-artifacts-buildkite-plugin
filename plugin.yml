@@ -80,7 +80,7 @@ configuration:
                 description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
               build_id:
                 type: string
-                description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id matches current pipeline, else LATEST_SUCCESSFUL."
+                description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id and git_ref match the current pipeline/ref, else LATEST_SUCCESSFUL."
               variant:
                 type: string
                 description: "Build variant key to download from (cross-step)"
