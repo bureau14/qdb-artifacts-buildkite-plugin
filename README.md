@@ -4,7 +4,7 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 
 ## What it does
 
-- **Upload** — after a build step's command completes successfully, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<variant>/builds/<build_id>/…`, preserving directory structure, with optional exclusions, and generating a manifest file.
+- **Upload** — after a build step's command completes, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<variant>/builds/<build_id>/…`, preserving directory structure, with optional exclusions, and generating a manifest file. This includes failed builds, so diagnostic artifacts remain available.
 - **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
 - **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
 
@@ -271,11 +271,11 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `post-checkout` | After repo checkout     | Creates/updates a Python venv in `<plugin-dir>/.venv` with dependencies from `lib/requirements.txt`. Uses `flock` to prevent races when multiple jobs run on the same agent. |
 | `pre-command`   | Before the step command | If `download` is configured, downloads (and optionally extracts) artifacts from the specified step.                                                                          |
-| `post-command`  | After the step command  | If `upload` is configured **and** the command succeeded, uploads matched files to S3/R2.                                                                                     |
+| `post-command`  | After the step command  | If `upload` is configured, uploads matched files to S3/R2, including after a failed command. Promotion runs only after a successful command.                                  |
 
-### Upload skipped on failure
+### Failed builds
 
-If the build command exits with a non-zero status, `post-command` skips the upload and prints a warning. This prevents broken builds from polluting the artifact namespace that downstream test steps consume.
+If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
 
 ## Backend configuration
 
