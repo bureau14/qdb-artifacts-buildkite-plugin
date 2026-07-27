@@ -1,6 +1,5 @@
 target-version = "py311"
 line-length = 100
-required-version = "==0.16.0"
 
 [lint.per-file-ignores]
 "artifacts.py" = ["E402"]
