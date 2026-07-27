@@ -441,7 +441,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def _create_buildkite_annotation(artifacts_domain, prefix, files):
+def _create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
     if not os.environ.get("BUILDKITE"):
         log(
             "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
@@ -450,12 +450,12 @@ def _create_buildkite_annotation(artifacts_domain, prefix, files):
     if not artifacts_domain:
         log("  Artifacts domain not configured; skipping adding Buildkite annotation")
         return
-    log(f"  creating Buildkite annotation for {len(files)} uploaded artifact(s)")
+    log(f"  creating Buildkite annotation for {len(files_with_sizes)} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = f"https://{artifacts_domain}"
     body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(
-        f"- [{file}]({key_join(uri, prefix, file)}) ({fmt_size(size)})"
-        for file, size in files
+        f"- [{path}]({key_join(uri, prefix, path)}) ({fmt_size(size)})"
+        for path, size in files_with_sizes
     )
 
     # We could use REST API calls here and avoid depending on the binary (and calling it from subprocess) but REST API has some limitations that make it less ideal:
