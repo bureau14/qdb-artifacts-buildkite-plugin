@@ -4,7 +4,7 @@ agents:
 steps:
   - label: "Lint code (Ruff)"
     command: |
-      pip install ruff
+      pip install ruff==0.16.0
       # linting check
       ruff check .
       # formatting check
