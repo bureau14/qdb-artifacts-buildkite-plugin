@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 import subprocess
 
 """Artifact upload/download for Buildkite CI pipelines (AWS S3 + Cloudflare R2).
@@ -83,6 +84,7 @@ Usage
 import datetime
 import fnmatch
 import glob
+import json
 import os
 import posixpath
 import shutil
@@ -91,7 +93,6 @@ import tarfile
 import tempfile
 import time
 import zipfile
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -478,7 +479,7 @@ def _create_buildkite_annotation(artifacts_domain, prefix, files):
     log(f"  running command: {' '.join(args)}")
     try:
         subprocess.run(args, check=True)
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         log(f"  :warning Failed to create Buildkite annotation: {e}")
 
 
@@ -578,7 +579,7 @@ def upload(
         manifest_payload = {
             "file_count": len(files),
             "files": relative_files_path,
-            "uploaded_at": datetime.datetime.now().isoformat() + "Z",
+            "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
         }
@@ -665,7 +666,7 @@ def _read_manifest(s3, bucket, prefix):
     try:
         response = s3.get_object(Bucket=bucket, Key=key_join(prefix, "manifest.json"))
         return json.loads(response["Body"].read())
-    except Exception:
+    except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
 
 
@@ -675,8 +676,8 @@ def _fmt_age(t):
     if t is None:
         return "unknown"
     if t.tzinfo is None:
-        t = t.replace(tzinfo=datetime.timezone.utc)
-    delta = datetime.datetime.now(datetime.timezone.utc) - t
+        t = t.replace(tzinfo=datetime.UTC)
+    delta = datetime.datetime.now(datetime.UTC) - t
     s = int(delta.total_seconds())
     if s < 0:
         return "in the future"
@@ -768,8 +769,10 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
         )
 
     lines = [
-        f"Artifact path could not be resolved for project={project_id}, "
-        f"variant={variant}, requested_ref={ref}, requested_build_id={build_id}.",
+        (
+            f"Artifact path could not be resolved for project={project_id}, "
+            f"variant={variant}, requested_ref={ref}, requested_build_id={build_id}."
+        ),
         f"Attempts ({len(attempts)}):",
     ]
     for a in attempts:
@@ -843,7 +846,7 @@ def _download(
     if manifest and manifest.get("uploaded_at"):
         try:
             ua = manifest["uploaded_at"].rstrip("Z")
-            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.timezone.utc)
+            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.UTC)
         except (ValueError, TypeError):
             built_at = None
     if built_at is None:
@@ -911,9 +914,8 @@ def _download(
 
         def _do():
             if extract:
-                tmp = tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False)
-                tmp_path = tmp.name
-                tmp.close()
+                with tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False) as tmp:
+                    tmp_path = tmp.name
                 try:
                     _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
                     extract_local_archive(tmp_path, rel, out, entry_filter, strip_prefix)
@@ -1090,14 +1092,16 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
         with tarfile.open(path, mode="r:gz") as tar:
             _extract_tar(tar, out, entry_filter, strip_prefix)
 
-    elif rel.endswith(".tar.zst") or rel.endswith(".tar.zstd"):
+    elif rel.endswith((".tar.zst", ".tar.zstd")):
         dctx = zstandard.ZstdDecompressor()
-        with open(path, "rb") as fh:
-            with dctx.stream_reader(fh) as reader:
-                with tarfile.open(fileobj=reader, mode="r|") as tar:
-                    _extract_tar(tar, out, entry_filter, strip_prefix)
+        with (
+            open(path, "rb") as fh,
+            dctx.stream_reader(fh) as reader,
+            tarfile.open(fileobj=reader, mode="r|") as tar,
+        ):
+            _extract_tar(tar, out, entry_filter, strip_prefix)
 
-    elif rel.endswith(".zip") or rel.endswith(".jar"):
+    elif rel.endswith((".zip", ".jar")):
         with zipfile.ZipFile(path, "r") as zf:
             for info in zf.infolist():
                 name = info.filename
