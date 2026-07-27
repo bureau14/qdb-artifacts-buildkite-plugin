@@ -570,10 +570,10 @@ def upload(
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
     futs = {pool.submit(_upload_one, f): f for f in files}
-    relative_files_path = [f.relative_to(base_path).as_posix() for f in files]
     relative_files_with_sizes = [
         (f.relative_to(base_path).as_posix(), f.stat().st_size) for f in files
     ]
+    relative_files_path = [rel for rel, _ in relative_files_with_sizes]
     try:
         for fut in as_completed(futs):
             fut.result()
