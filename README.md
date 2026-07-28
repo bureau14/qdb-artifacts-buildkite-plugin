@@ -87,6 +87,7 @@ steps:
                 output-dir: artifacts
                 extract: true
                 files:
+                  - "*-c-api.tar.zst!bin/*"
                   - "*-c-api.tar.zst!lib/*"
                   - "*-server.tar.zst!bin/*"
                   - "*-tests.tar.zst!bin/*"
@@ -262,6 +263,18 @@ File patterns in `files` support an optional `!entry_filter` suffix:
 ```
 
 This matches archives by glob (`*-server.tar.zst`), extracts only entries matching `bin/*`, and strips the `bin/` prefix from output paths — so `bin/qdb` lands at `<output-dir>/qdb`.
+
+Multiple entry filters may match the same archive. Their matching entries are
+extracted as a union in one archive download and decompression pass, while each
+filter keeps its own stripping prefix. For example:
+
+```
+*-c-api.tar.zst!bin/*
+*-c-api.tar.zst!lib/*
+```
+
+extracts both `bin/qdb` and `lib/libqdb.so` from one `*-c-api.tar.zst` download,
+placing them at `<output-dir>/qdb` and `<output-dir>/libqdb.so` respectively.
 
 Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `.zip`, `.jar`.
 

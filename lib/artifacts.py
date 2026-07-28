@@ -632,11 +632,17 @@ def parse_rules(patterns):
 
 
 def match_rules(rel, rules):
-    """Return (entry_filter, strip_prefix) for the first matching rule, or (None, None)."""
-    for archive_glob, entry_filter, strip_prefix in rules:
-        if fnmatch.fnmatch(rel, archive_glob):
-            return entry_filter, strip_prefix
-    return None, None
+    """Return every (entry_filter, strip_prefix) rule matching an artifact path.
+
+    Multiple filters may intentionally match one archive. The archive is downloaded
+    and decompressed once, while its entries are selected from the union of those
+    filters. Rule order resolves overlapping entry filters.
+    """
+    return [
+        (entry_filter, strip_prefix)
+        for archive_glob, entry_filter, strip_prefix in rules
+        if fnmatch.fnmatch(rel, archive_glob)
+    ]
 
 
 def is_excluded(rel, exclude_patterns):
@@ -878,10 +884,9 @@ def _download(
             if not rel or rel == "manifest.json":
                 continue
             present_keys.append(rel)
-            matched = any(fnmatch.fnmatch(rel, ag) for ag, _, _ in rules)
-            if matched and not is_excluded(rel, exclude_patterns):
-                ef, sp = match_rules(rel, rules)
-                objects.append((item["Key"], rel, item["Size"], ef, sp))
+            entry_rules = match_rules(rel, rules)
+            if entry_rules and not is_excluded(rel, exclude_patterns):
+                objects.append((item["Key"], rel, item["Size"], entry_rules))
 
     if not objects:
         rule_strs = [f"{ag}!{ef}" if ef else ag for ag, ef, _ in rules]
@@ -905,14 +910,14 @@ def _download(
             lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
         die("\n".join(lines))
 
-    total_bytes = sum(sz for _, _, sz, _, _ in objects)
+    total_bytes = sum(sz for _, _, sz, _ in objects)
     log(
         f"Downloading {len(objects)} artifact(s) ({fmt_size(total_bytes)}) from "
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
     )
     log(f"  parallel={parallel}, concurrency={concurrency}")
 
-    def _download_one(key, rel, sz, entry_filter, strip_prefix):
+    def _download_one(key, rel, sz, entry_rules):
         log(f"  start: {rel} ({fmt_size(sz)})")
         ft0 = time.monotonic()
 
@@ -922,7 +927,7 @@ def _download(
                     tmp_path = tmp.name
                 try:
                     _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
-                    extract_local_archive(tmp_path, rel, out, entry_filter, strip_prefix)
+                    extract_local_archive(tmp_path, rel, out, entry_rules=entry_rules)
                 finally:
                     try:
                         os.unlink(tmp_path)
@@ -939,10 +944,11 @@ def _download(
         # Loud destination line. rel is repeated so parallel-interleaved logs are still parseable.
         if extract:
             extras = []
-            if entry_filter:
-                extras.append(f"filter={entry_filter}")
-            if strip_prefix:
-                extras.append(f"strip={strip_prefix}")
+            for entry_filter, strip_prefix in entry_rules:
+                if entry_filter:
+                    extras.append(f"filter={entry_filter}")
+                if strip_prefix:
+                    extras.append(f"strip={strip_prefix}")
             extra_str = f"  ({', '.join(extras)})" if extras else ""
             log(
                 f"  done : {rel} -> extracted into {out}/{extra_str}  "
@@ -953,7 +959,7 @@ def _download(
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
-    futs = {pool.submit(_download_one, k, r, sz, ef, sp): r for k, r, sz, ef, sp in sorted(objects)}
+    futs = {pool.submit(_download_one, k, r, sz, ers): r for k, r, sz, ers in sorted(objects)}
     try:
         for fut in as_completed(futs):
             fut.result()
@@ -1009,16 +1015,26 @@ def promote(project_id, build_id, git_ref, variant):
     log(f"Set {target_key} → {build_id} for ref {git_ref}")
 
 
-def _filter_tar_member(member, entry_filter, strip_prefix):
-    """Apply filter + strip to a tar member. Returns mutated member or None to skip.
+def _select_entry_path(name, entry_rules):
+    """Return the output path for the first matching entry rule, or None.
+
+    Rule order only matters for overlapping entry filters. Selecting one path per
+    archive entry keeps streamed tar extraction to one decompression pass.
+    """
+    for entry_filter, strip_prefix in entry_rules:
+        if entry_filter and not fnmatch.fnmatch(name, entry_filter):
+            continue
+        if strip_prefix and name.startswith(strip_prefix):
+            name = name[len(strip_prefix) :]
+        return name or None
+    return None
+
+
+def _filter_tar_member(member, entry_rules):
+    """Apply matching entry rules to a tar member, or return None to skip.
     member.name is mutated in-place (tarfile's path remapping convention)."""
-    if entry_filter and not fnmatch.fnmatch(member.name, entry_filter):
-        return None
-    if strip_prefix and member.name.startswith(strip_prefix):
-        member.name = member.name[len(strip_prefix) :]
-    if not member.name:
-        return None
-    return member
+    member.name = _select_entry_path(member.name, entry_rules)
+    return member if member.name else None
 
 
 def _assert_tar_path_is_safe(out, name):
@@ -1069,12 +1085,13 @@ def _safe_tar_member(member, out):
     return member
 
 
-def _extract_tar(tar, out, entry_filter, strip_prefix):
+def _extract_tar(tar, out, entry_filter=None, strip_prefix=None, entry_rules=None):
     """Extract tar members with optional filtering. Data filtering rejects
     absolute paths, traversal (../), and device files. Streaming mode means
     sequential-only access — skipped members still consume I/O from the stream."""
+    entry_rules = entry_rules or [(entry_filter, strip_prefix)]
     for member in tar:
-        member = _filter_tar_member(member, entry_filter, strip_prefix)
+        member = _filter_tar_member(member, entry_rules)
         if member is None:
             continue
         member = _safe_tar_member(member, out)
@@ -1083,7 +1100,9 @@ def _extract_tar(tar, out, entry_filter, strip_prefix):
         tar.extract(member, path=out)
 
 
-def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix=None):
+def extract_local_archive(
+    path, rel, output_dir, entry_filter=None, strip_prefix=None, entry_rules=None
+):
     """Extract a locally downloaded archive file.
 
     .tar.gz  — tarfile 'r:gz' (seekable, more efficient than streaming mode)
@@ -1091,10 +1110,11 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
     .zip     — zipfile.ZipFile (seekable local file)
     """
     out = Path(output_dir)
+    entry_rules = entry_rules or [(entry_filter, strip_prefix)]
 
     if rel.endswith(".tar.gz"):
         with tarfile.open(path, mode="r:gz") as tar:
-            _extract_tar(tar, out, entry_filter, strip_prefix)
+            _extract_tar(tar, out, entry_rules=entry_rules)
 
     elif rel.endswith((".tar.zst", ".tar.zstd")):
         dctx = zstandard.ZstdDecompressor()
@@ -1103,7 +1123,7 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
             dctx.stream_reader(fh) as reader,
             tarfile.open(fileobj=reader, mode="r|") as tar,
         ):
-            _extract_tar(tar, out, entry_filter, strip_prefix)
+            _extract_tar(tar, out, entry_rules=entry_rules)
 
     elif rel.endswith((".zip", ".jar")):
         with zipfile.ZipFile(path, "r") as zf:
@@ -1111,10 +1131,7 @@ def extract_local_archive(path, rel, output_dir, entry_filter=None, strip_prefix
                 name = info.filename
                 if name.endswith("/"):
                     continue
-                if entry_filter and not fnmatch.fnmatch(name, entry_filter):
-                    continue
-                if strip_prefix and name.startswith(strip_prefix):
-                    name = name[len(strip_prefix) :]
+                name = _select_entry_path(name, entry_rules)
                 if not name:
                     continue
                 dest = out / name
