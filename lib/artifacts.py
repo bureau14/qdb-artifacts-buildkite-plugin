@@ -583,7 +583,7 @@ def upload(
         manifest_payload = {
             "file_count": len(files),
             "files": relative_files_path,
-            "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
         }
@@ -686,8 +686,8 @@ def _fmt_age(t):
     if t is None:
         return "unknown"
     if t.tzinfo is None:
-        t = t.replace(tzinfo=datetime.UTC)
-    delta = datetime.datetime.now(datetime.UTC) - t
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    delta = datetime.datetime.now(datetime.timezone.utc) - t
     s = int(delta.total_seconds())
     if s < 0:
         return "in the future"
@@ -856,7 +856,7 @@ def _download(
     if manifest and manifest.get("uploaded_at"):
         try:
             ua = manifest["uploaded_at"].rstrip("Z")
-            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.UTC)
+            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.timezone.utc)
         except (ValueError, TypeError):
             built_at = None
     if built_at is None:
