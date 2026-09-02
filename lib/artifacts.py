@@ -450,10 +450,15 @@ def _create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
     if not artifacts_domain:
         log("  Artifacts domain not configured; skipping adding Buildkite annotation")
         return
-    log(f"  creating Buildkite annotation for {len(files_with_sizes)} uploaded artifact(s)")
+    file_count = len(files_with_sizes)
+    total_bytes = sum(size for _, size in files_with_sizes)
+    log(f"  creating Buildkite annotation for {file_count} uploaded artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = f"https://{artifacts_domain}"
-    body = f"## {job_label} \n ### Uploaded artifacts:\n\n" + "\n".join(
+    body = (
+        f"## {job_label}\n"
+        f"### Uploaded artifacts ({file_count} files, {fmt_size(total_bytes)} total):\n\n"
+    ) + "\n".join(
         f"- [{path}]({key_join(uri, prefix, path)}) ({fmt_size(size)})"
         for path, size in files_with_sizes
     )
