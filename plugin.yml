@@ -89,7 +89,7 @@ configuration:
                 description: "Git ref to download from (e.g. 'refs/heads/main')"
               require_strict_ref_match:
                 type: boolean
-                description: "Require this resolved artifact's git_ref to match the requested git_ref instead of falling back to master or main (default: false)"
+                description: "Disable branch fallback (default: false)"
               output-dir:
                 type: string
                 description: "Download destination directory (default: '.')"
