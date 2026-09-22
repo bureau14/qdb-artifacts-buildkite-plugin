@@ -121,6 +121,7 @@ Download defaults used by the plugin:
 - If `build_id` is omitted and `project_id` is set to current or omitted, it defaults to `BUILDKITE_BUILD_ID`.
 - If `build_id` is omitted and `project_id` is set to current or omitted, but `git_ref` is different from the current Buildkite ref, it defaults to `LATEST_SUCCESSFUL`.
 - If `build_id` is omitted and `project_id` points to another pipeline, it defaults to `LATEST_SUCCESSFUL`.
+- By default, a download whose requested `git_ref` has no artifacts falls back to `refs/heads/master` and then `refs/heads/main`. Set `require_strict_ref_match: true` to require each resolved artifact's `git_ref` to match the requested `git_ref` instead.
 
 ### Download without extraction
 
@@ -238,6 +239,7 @@ plugins:
 | ------------ | ----- | -------- | ------------------------------------------------------ |
 | `projects`   | array | ✓        | List of projects to download artifacts from.           |
 | `clean`      | boolean |        | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
+| `require_strict_ref_match` | boolean | | Require each resolved artifact's `git_ref` to match the requested `git_ref`; do not fall back to `refs/heads/master` or `refs/heads/main`. Default: `false`. |
 | `parallel`    | integer          |          | Files downloaded simultaneously. Default: `4`.                                                  |
 | `concurrency` | integer          |          | Multipart threads per download. Default: `32`.                                                  |
 
