@@ -709,11 +709,22 @@ def _fmt_age(t):
     return f"{d}d {h}h ago" if h else f"{d}d ago"
 
 
-def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, variant, build_id):
+def _validate_artifact_path(
+    cfg,
+    auth,
+    bucket,
+    dest_prefix,
+    project_id,
+    ref,
+    variant,
+    build_id,
+    require_strict_ref_match=False,
+):
     """Resolve the artifact prefix, logging every attempt as it goes.
 
-    Walks [requested_ref, refs/heads/master, refs/heads/main] in order, resolving
-    LATEST_SUCCESSFUL pointers when needed and skipping refs whose prefix is empty.
+    By default walks [requested_ref, refs/heads/master, refs/heads/main] in order,
+    resolving LATEST_SUCCESSFUL pointers when needed and skipping refs whose prefix
+    is empty. require_strict_ref_match limits resolution to the requested ref.
     Returns a ResolvedBuild describing the winning attempt. On failure, dies with
     a structured trace listing every attempt that was tried and why each failed.
     """
@@ -721,7 +732,7 @@ def _validate_artifact_path(cfg, auth, bucket, dest_prefix, project_id, ref, var
     master_refs = ("refs/heads/master", "refs/heads/main")
 
     refs_to_check = [ref]
-    if ref not in master_refs:
+    if not require_strict_ref_match and ref not in master_refs:
         refs_to_check += list(master_refs)
 
     # Each entry: dict(ref, resolved_build_id_or_None, prefix_or_None, status, detail)
@@ -814,6 +825,7 @@ def _download(
     exclude_patterns=None,
     output_dir=".",
     extract=False,
+    require_strict_ref_match=False,
     parallel=4,
     concurrency=32,
 ):
@@ -821,8 +833,9 @@ def _download(
     Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
     to the current BUILDKITE_PIPELINE_SLUG.
     Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
-    from main/master branch if missing on the current branch. If build_id is omitted, it defaults
-    to BUILDKITE_BUILD_ID if downloading from the current pipeline and ref, otherwise LATEST_SUCCESSFUL.
+    from main/master branch if missing on the current branch unless require_strict_ref_match is set.
+    If build_id is omitted, it defaults to BUILDKITE_BUILD_ID if downloading from the current
+    pipeline and ref, otherwise LATEST_SUCCESSFUL.
 
     --clean wipes output_dir first — needed because Buildkite retries reuse the same
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
@@ -834,7 +847,15 @@ def _download(
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
     resolved = _validate_artifact_path(
-        cfg, auth, bucket, pfx, project_id, git_ref, variant, build_id
+        cfg,
+        auth,
+        bucket,
+        pfx,
+        project_id,
+        git_ref,
+        variant,
+        build_id,
+        require_strict_ref_match=require_strict_ref_match,
     )
     pfx = resolved.prefix
 
@@ -997,6 +1018,7 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             exclude_patterns=p.get("exclude", []),
             output_dir=p["output_dir"],
             extract=p["extract"],
+            require_strict_ref_match=p["require_strict_ref_match"],
             parallel=parallel,
             concurrency=concurrency,
         )
@@ -1205,6 +1227,9 @@ def parse_download_projects_from_env():
         p = {
             "variant": variant,
             "git_ref": os.environ.get(f"{prefix}GIT_REF"),
+            "require_strict_ref_match": _get_env_bool(
+                os.environ.get(f"{prefix}REQUIRE_STRICT_REF_MATCH")
+            ),
             "project_id": os.environ.get(f"{prefix}PROJECT_ID"),
             "build_id": os.environ.get(f"{prefix}BUILD_ID"),
             "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),

@@ -121,6 +121,7 @@ Download defaults used by the plugin:
 - If `build_id` is omitted and `project_id` is set to current or omitted, it defaults to `BUILDKITE_BUILD_ID`.
 - If `build_id` is omitted and `project_id` is set to current or omitted, but `git_ref` is different from the current Buildkite ref, it defaults to `LATEST_SUCCESSFUL`.
 - If `build_id` is omitted and `project_id` points to another pipeline, it defaults to `LATEST_SUCCESSFUL`.
+- By default, downloads fall back to `refs/heads/master` and then `refs/heads/main` when the requested `git_ref` has no artifacts. Set `require_strict_ref_match: true` on a project to disable this fallback.
 
 ### Download without extraction
 
@@ -249,6 +250,7 @@ plugins:
 | `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
 | `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
 | `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
+| `require_strict_ref_match` | boolean | | Disable branch fallback. Default: `false`. |
 | `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
 | `exclude`     | array of strings |          | Archive glob patterns to skip after `files` patterns have matched.                              |
 | `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |

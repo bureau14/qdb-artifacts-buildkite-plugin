@@ -87,6 +87,9 @@ configuration:
               git_ref:
                 type: string
                 description: "Git ref to download from (e.g. 'refs/heads/main')"
+              require_strict_ref_match:
+                type: boolean
+                description: "Disable branch fallback (default: false)"
               output-dir:
                 type: string
                 description: "Download destination directory (default: '.')"
