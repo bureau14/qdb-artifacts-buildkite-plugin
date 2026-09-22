@@ -1227,6 +1227,9 @@ def parse_download_projects_from_env():
         p = {
             "variant": variant,
             "git_ref": os.environ.get(f"{prefix}GIT_REF"),
+            "require_strict_ref_match": _get_env_bool(
+                os.environ.get(f"{prefix}REQUIRE_STRICT_REF_MATCH")
+            ),
             "project_id": os.environ.get(f"{prefix}PROJECT_ID"),
             "build_id": os.environ.get(f"{prefix}BUILD_ID"),
             "output_dir": os.environ.get(f"{prefix}OUTPUT_DIR", "."),
@@ -1246,9 +1249,6 @@ def parse_download_config_from_env():
     prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_"
     return {
         "clean": _get_env_bool(os.environ.get(f"{prefix}CLEAN")),
-        "require_strict_ref_match": _get_env_bool(
-            os.environ.get(f"{prefix}REQUIRE_STRICT_REF_MATCH")
-        ),
         "parallel": int(os.environ.get(f"{prefix}PARALLEL", "4")),
         "concurrency": int(os.environ.get(f"{prefix}CONCURRENCY", "32")),
         "projects": parse_download_projects_from_env(),

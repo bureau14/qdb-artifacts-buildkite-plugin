@@ -63,9 +63,6 @@ configuration:
         clean:
           type: boolean
           description: "Remove output directory before downloading"
-        require_strict_ref_match:
-          type: boolean
-          description: "Require each resolved artifact's git_ref to match the requested git_ref instead of falling back to master or main (default: false)"
         parallel:
           type: integer
           description: "Files downloaded simultaneously across all projects (default: 4)"
@@ -90,6 +87,9 @@ configuration:
               git_ref:
                 type: string
                 description: "Git ref to download from (e.g. 'refs/heads/main')"
+              require_strict_ref_match:
+                type: boolean
+                description: "Require this resolved artifact's git_ref to match the requested git_ref instead of falling back to master or main (default: false)"
               output-dir:
                 type: string
                 description: "Download destination directory (default: '.')"
