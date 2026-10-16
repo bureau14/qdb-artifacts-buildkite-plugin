@@ -944,12 +944,14 @@ def resolve_artifacts(
     return bucket, resolved, objects
 
 
-def _download(
+def download_artifacts(
+    cfg,
+    auth,
     project_id,
     build_id,
     git_ref,
-    patterns,
     variant,
+    patterns,
     exclude_patterns=None,
     output_dir=".",
     extract=False,
@@ -958,8 +960,9 @@ def _download(
     concurrency=32,
 ):
     """List matching artifacts under the variant prefix and download/extract in parallel.
-    Uses project_id to locate the artifacts namespace. The plugin defaults an omitted
-    project_id to the current BUILDKITE_PIPELINE_SLUG.
+    Uses explicit cfg and auth plus project_id to locate the artifacts namespace;
+    no Buildkite environment or SSM configuration is required. The plugin wrapper
+    defaults an omitted project_id to the current BUILDKITE_PIPELINE_SLUG.
     Resolves build_id (can be LATEST_SUCCESSFUL) via resolve_artifacts and applies fallback
     logic to find artifacts from main/master branch if missing on the current branch unless
     require_strict_ref_match is set. If build_id is omitted, the plugin defaults it to
@@ -969,10 +972,10 @@ def _download(
     workspace, and stale artifacts from a failed attempt would corrupt test runs.
     With --extract, archives are downloaded to a temp file via boto3's transfer manager
     (parallel ranged GETs), then extracted locally, then the temp file is removed.
+
+    Returns (bucket, ResolvedBuild, objects) after all transfers complete, so callers
+    can record the selected build and artifacts without resolving them again.
     """
-    _, ssm = aws_clients()
-    cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     bucket, resolved, objects = resolve_artifacts(
         cfg=cfg,
         auth=auth,
@@ -1056,6 +1059,7 @@ def _download(
         f"Downloaded {len(objects)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
     )
+    return bucket, resolved, objects
 
 
 def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
@@ -1065,7 +1069,14 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             shutil.rmtree(d)
 
     for p in projects_config:
-        _download(
+        # Backend discovery stays in the plugin wrapper; imported callers supply
+        # their own configuration without needing Buildkite or SSM access.
+        _, ssm = aws_clients()
+        cfg = load_store_config(ssm)
+        auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
+        download_artifacts(
+            cfg=cfg,
+            auth=auth,
             project_id=p["resolved_project_id"],
             build_id=p["resolved_build_id"],
             git_ref=p["git_ref"],

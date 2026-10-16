@@ -292,7 +292,7 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
 
-## Resolve artifacts outside the plugin
+## Resolve and download artifacts outside the plugin
 
 A release script, deployment tool, or local utility can use `resolve_artifacts`
 to find the same artifacts the plugin would download, without running Buildkite
@@ -300,7 +300,7 @@ hooks or duplicating the resolution logic. For example, resolve the latest
 successful C API artifacts for a given project, ref, and variant, then pass their
 object-store locations to your own downloader.
 
-`lib/__init__.py` exposes the resolver and its configuration types.
+`lib/__init__.py` exposes the resolver, downloader, and their configuration types.
 Install the dependencies from `lib/requirements.txt`.
 
 The following example uses S3 with the standard AWS credential chain. Replace
@@ -339,6 +339,37 @@ selected ref and build ID and whether fallback was applied. Each object is a
 configuration order for callers that also want to extract selected archive entries.
 Project, build, ref, variant, and patterns are explicit inputs rather than
 Buildkite-specific defaults.
+
+### Download and extract artifacts
+
+Use `download_artifacts` to resolve and download one project's artifacts in a
+single call, without plugin configuration or a separate call to `resolve_artifacts`:
+
+```python
+from vendor.qdb_artifacts.lib import ObjectAuth, StoreConfig, download_artifacts
+
+bucket, resolved, objects = download_artifacts(
+    cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
+    auth=ObjectAuth(),
+    project_id="quasardb",
+    build_id="LATEST_SUCCESSFUL",
+    git_ref="refs/heads/master",
+    variant="linux-amd64-release",
+    patterns=["*-c-api.tar.zst!bin/*", "*-c-api.tar.zst!lib/*"],
+    require_strict_ref_match=True,
+    output_dir="artifacts",
+    extract=True,
+)
+```
+
+This downloads each matching archive once, extracts the selected `bin/` and `lib/`
+entries into `artifacts/`, and strips those prefixes. Set `extract=False` (the
+default) to save the archives themselves, preserving their relative paths.
+`parallel` and `concurrency` control transfers just as they do in the plugin.
+
+The function returns the same `(bucket, resolved_build, objects)` tuple as the
+resolver, after all transfers complete. It creates the output directory if needed
+but does not clean it; the plugin's `clean` option remains handled by its wrapper.
 
 To reuse the plugin's environment/SSM backend configuration, including R2,
 import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.lib`, and use
