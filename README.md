@@ -300,12 +300,10 @@ hooks or duplicating the resolution logic. For example, resolve the latest
 successful C API artifacts for a given project, ref, and variant, then pass their
 object-store locations to your own downloader.
 
-With this repository checked out as a submodule at `vendor/qdb_artifacts`,
-`lib/__init__.py` exposes the resolver and its configuration types. Install the
-dependencies from `vendor/qdb_artifacts/lib/requirements.txt` and keep the consuming
-repository root on Python's import path.
+`lib/__init__.py` exposes the resolver and its configuration types.
+Install the dependencies from `lib/requirements.txt`.
 
-The following example uses S3 with the normal AWS credential chain. Replace
+The following example uses S3 with the standard AWS credential chain. Replace
 `s3://my-artifacts/buildkite` with your artifact bucket/prefix; no Buildkite
 environment variables or SSM configuration are required:
 
@@ -330,8 +328,8 @@ for artifact in objects:
 
 `require_strict_ref_match=True` ensures this script only selects artifacts from
 the requested ref. Omit it or set it to `False` to allow the plugin's usual
-master/main fallback. The same `patterns`, optional `exclude_patterns`rules
-are supported outside the plugin.
+master/main fallback. The same `patterns`, optional `exclude_patterns` rules
+are supported.
 
 The result is `(bucket, resolved_build, objects)`. `resolved_build` identifies the
 selected ref and build ID and whether fallback was applied. Each object is a
@@ -347,10 +345,6 @@ import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.
 `load_store_config(ssm)` and
 `resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
 `auth` instead of constructing them directly.
-
-Resolution reads object-store metadata and pointer/manifest files but does not
-download artifact payloads, extract archives, clean directories, or create local
-files. It logs resolution details to stderr.
 
 ## Backend configuration
 
