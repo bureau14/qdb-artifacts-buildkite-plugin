@@ -847,7 +847,7 @@ def resolve_artifacts(
     is a list of ResolvedArtifact instances. Unresolved builds or empty
     matches retain the plugin's diagnostic logging and SystemExit(1) behavior.
     """
-    # Keep selection independent of transfer/output handling so submodule callers
+    # Keep selection independent of transfer/output handling so callers outside plugin
     # can reuse the exact same resolution policy with their own download mechanism.
     rules = parse_rules(patterns)
     bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
