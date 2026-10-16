@@ -1069,8 +1069,6 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             shutil.rmtree(d)
 
     for p in projects_config:
-        # Backend discovery stays in the plugin wrapper; imported callers supply
-        # their own configuration without needing Buildkite or SSM access.
         _, ssm = aws_clients()
         cfg = load_store_config(ssm)
         auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
