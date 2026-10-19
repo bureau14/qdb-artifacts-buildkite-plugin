@@ -292,6 +292,91 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
 
+## Resolve and download artifacts outside the plugin
+
+A release script, deployment tool, or local utility can use `resolve_artifacts`
+to find the same artifacts the plugin would download, without running Buildkite
+hooks or duplicating the resolution logic. For example, resolve the latest
+successful C API artifacts for a given project, ref, and variant, then pass their
+object-store locations to your own downloader.
+
+`lib/__init__.py` exposes the resolver, downloader, and their configuration types.
+Install the dependencies from `lib/requirements.txt`.
+
+The following example uses S3 with the standard AWS credential chain. Replace
+`s3://my-artifacts/buildkite` with your artifact bucket/prefix; no Buildkite
+environment variables or SSM configuration are required:
+
+```python
+from vendor.qdb_artifacts.lib import ObjectAuth, StoreConfig, resolve_artifacts
+
+bucket, resolved, objects = resolve_artifacts(
+    cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
+    auth=ObjectAuth(),
+    project_id="quasardb",
+    build_id="LATEST_SUCCESSFUL",
+    git_ref="refs/heads/master",
+    variant="linux-amd64-release",
+    patterns=["*-c-api.tar.zst"],
+    require_strict_ref_match=True,
+)
+
+print(f"Resolved ref={resolved.ref} build={resolved.build_id}")
+for artifact in objects:
+    print(f"s3://{bucket}/{artifact.key}")
+```
+
+`require_strict_ref_match=True` ensures this script only selects artifacts from
+the requested ref. Omit it or set it to `False` to allow the plugin's usual
+master/main fallback. The same `patterns`, optional `exclude_patterns` rules
+are supported.
+
+The result is `(bucket, resolved_build, objects)`. `resolved_build` identifies the
+selected ref and build ID and whether fallback was applied. Each object is a
+`ResolvedArtifact` dataclass with
+`key`, `rel` (relative path), `size` (bytes), and `entry_rules` fields. The
+`entry_rules` list contains all matching `(entry_filter, strip_prefix)` pairs in
+configuration order for callers that also want to extract selected archive entries.
+Project, build, ref, variant, and patterns are explicit inputs rather than
+Buildkite-specific defaults.
+
+### Download and extract artifacts
+
+Use `download_artifacts` to resolve and download one project's artifacts in a
+single call, without plugin configuration or a separate call to `resolve_artifacts`:
+
+```python
+from vendor.qdb_artifacts.lib import ObjectAuth, StoreConfig, download_artifacts
+
+bucket, resolved, objects = download_artifacts(
+    cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
+    auth=ObjectAuth(),
+    project_id="quasardb",
+    build_id="LATEST_SUCCESSFUL",
+    git_ref="refs/heads/master",
+    variant="linux-amd64-release",
+    patterns=["*-c-api.tar.zst!bin/*", "*-c-api.tar.zst!lib/*"],
+    require_strict_ref_match=True,
+    output_dir="artifacts",
+    extract=True,
+)
+```
+
+This downloads each matching archive once, extracts the selected `bin/` and `lib/`
+entries into `artifacts/`, and strips those prefixes. Set `extract=False` (the
+default) to save the archives themselves, preserving their relative paths.
+`parallel` and `concurrency` control transfers just as they do in the plugin.
+
+The function returns the same `(bucket, resolved_build, objects)` tuple as the
+resolver, after all transfers complete. It creates the output directory if needed
+but does not clean it; the plugin's `clean` option remains handled by its wrapper.
+
+To reuse the plugin's environment/SSM backend configuration, including R2,
+import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.lib`, and use
+`load_store_config(ssm)` and
+`resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
+`auth` instead of constructing them directly.
+
 ## Backend configuration
 
 Config is resolved in order: **environment variable → SSM parameter → default**.

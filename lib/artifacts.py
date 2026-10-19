@@ -163,6 +163,16 @@ class ResolvedBuild:
     pointer_lastmod: datetime.datetime | None  # mtime of LATEST_SUCCESSFUL pointer, if used
 
 
+@dataclass(frozen=True)
+class ResolvedArtifact:
+    """Named selection fields for callers; entry-rule order resolves overlapping filters."""
+
+    key: str
+    rel: str
+    size: int
+    entry_rules: list[tuple[str | None, str | None]]
+
+
 def die(msg):
     print(f"[artifacts] ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -816,35 +826,30 @@ def _validate_artifact_path(
     die("\n".join(lines))
 
 
-def _download(
+def resolve_artifacts(
+    cfg,
+    auth,
     project_id,
     build_id,
     git_ref,
-    rules,
     variant,
+    patterns,
     exclude_patterns=None,
-    output_dir=".",
-    extract=False,
     require_strict_ref_match=False,
-    parallel=4,
-    concurrency=32,
 ):
-    """List matching artifacts under the variant prefix and download/extract in parallel.
-    Uses project_id to locate the artifacts namespace. If omitted, project_id defaults
-    to the current BUILDKITE_PIPELINE_SLUG.
-    Resolves build_id (can be LATEST_SUCCESSFUL) and applies fallback logic to find artifacts
-    from main/master branch if missing on the current branch unless require_strict_ref_match is set.
-    If build_id is omitted, it defaults to BUILDKITE_BUILD_ID if downloading from the current
-    pipeline and ref, otherwise LATEST_SUCCESSFUL.
+    """Resolve a build and select its artifacts without downloading or extracting.
 
-    --clean wipes output_dir first — needed because Buildkite retries reuse the same
-    workspace, and stale artifacts from a failed attempt would corrupt test runs.
-    With --extract, archives are downloaded to a temp file via boto3's transfer manager
-    (parallel ranged GETs), then extracted locally, then the temp file is removed.
+    Accepts explicit StoreConfig, ObjectAuth, and project/build/ref/variant values;
+    no Buildkite environment or local output directory is required. patterns uses
+    the plugin's archive_glob[!entry_filter] syntax. LATEST_SUCCESSFUL resolution,
+    branch fallback, exclusions, and ordered entry-filter aggregation are shared
+    with the downloader. Returns (bucket, ResolvedBuild, objects), where objects
+    is a list of ResolvedArtifact instances. Unresolved builds or empty
+    matches retain the plugin's diagnostic logging and SystemExit(1) behavior.
     """
-    _, ssm = aws_clients()
-    cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
+    # Keep selection independent of transfer/output handling so callers outside plugin
+    # can reuse the exact same resolution policy with their own download mechanism.
+    rules = parse_rules(patterns)
     bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
     resolved = _validate_artifact_path(
         cfg,
@@ -859,7 +864,7 @@ def _download(
     )
     pfx = resolved.prefix
 
-    list_client = _s3_client(cfg, auth)  # listing only; workers create their own
+    list_client = _s3_client(cfg, auth)  # listing only; no artifact transfers
 
     if resolved.fallback_applied:
         log(
@@ -896,10 +901,6 @@ def _download(
             f"{fmt_size(manifest.get('total_size_bytes', 0))}"
         )
 
-    tc = TransferConfig(max_concurrency=concurrency)
-    out = Path(output_dir).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-
     objects = []
     present_keys = []  # everything at the prefix except manifest.json, for diagnostics
     for page in list_client.get_paginator("list_objects_v2").paginate(
@@ -912,7 +913,11 @@ def _download(
             present_keys.append(rel)
             entry_rules = match_rules(rel, rules)
             if entry_rules and not is_excluded(rel, exclude_patterns):
-                objects.append((item["Key"], rel, item["Size"], entry_rules))
+                objects.append(
+                    ResolvedArtifact(
+                        key=item["Key"], rel=rel, size=item["Size"], entry_rules=entry_rules
+                    )
+                )
 
     if not objects:
         rule_strs = [f"{ag}!{ef}" if ef else ag for ag, ef, _ in rules]
@@ -936,7 +941,59 @@ def _download(
             lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
         die("\n".join(lines))
 
-    total_bytes = sum(sz for _, _, sz, _ in objects)
+    return bucket, resolved, objects
+
+
+def download_artifacts(
+    cfg,
+    auth,
+    project_id,
+    build_id,
+    git_ref,
+    variant,
+    patterns,
+    exclude_patterns=None,
+    output_dir=".",
+    extract=False,
+    require_strict_ref_match=False,
+    parallel=4,
+    concurrency=32,
+):
+    """List matching artifacts under the variant prefix and download/extract in parallel.
+    Uses explicit cfg and auth plus project_id to locate the artifacts namespace;
+    no Buildkite environment or SSM configuration is required. The plugin wrapper
+    defaults an omitted project_id to the current BUILDKITE_PIPELINE_SLUG.
+    Resolves build_id (can be LATEST_SUCCESSFUL) via resolve_artifacts and applies fallback
+    logic to find artifacts from main/master branch if missing on the current branch unless
+    require_strict_ref_match is set. If build_id is omitted, the plugin defaults it to
+    BUILDKITE_BUILD_ID if downloading from the current pipeline and ref, otherwise LATEST_SUCCESSFUL.
+
+    With --clean, download() wipes output_dir first — needed because Buildkite retries reuse the same
+    workspace, and stale artifacts from a failed attempt would corrupt test runs.
+    With --extract, archives are downloaded to a temp file via boto3's transfer manager
+    (parallel ranged GETs), then extracted locally, then the temp file is removed.
+
+    Returns (bucket, ResolvedBuild, objects) after all transfers complete, so callers
+    can record the selected build and artifacts without resolving them again.
+    """
+    bucket, resolved, objects = resolve_artifacts(
+        cfg=cfg,
+        auth=auth,
+        project_id=project_id,
+        build_id=build_id,
+        git_ref=git_ref,
+        variant=variant,
+        patterns=patterns,
+        exclude_patterns=exclude_patterns,
+        require_strict_ref_match=require_strict_ref_match,
+    )
+    pfx = resolved.prefix
+
+    tc = TransferConfig(max_concurrency=concurrency)
+    out = Path(output_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+
+    total_bytes = sum(obj.size for obj in objects)
     log(
         f"Downloading {len(objects)} artifact(s) ({fmt_size(total_bytes)}) from "
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
@@ -985,7 +1042,10 @@ def _download(
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
-    futs = {pool.submit(_download_one, k, r, sz, ers): r for k, r, sz, ers in sorted(objects)}
+    futs = {
+        pool.submit(_download_one, obj.key, obj.rel, obj.size, obj.entry_rules): obj.rel
+        for obj in sorted(objects, key=lambda obj: obj.key)
+    }
     try:
         for fut in as_completed(futs):
             fut.result()
@@ -999,6 +1059,7 @@ def _download(
         f"Downloaded {len(objects)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
     )
+    return bucket, resolved, objects
 
 
 def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
@@ -1008,12 +1069,16 @@ def download(projects_config, dirs_to_clean, parallel=4, concurrency=32):
             shutil.rmtree(d)
 
     for p in projects_config:
-        rules = parse_rules(p["files"])
-        _download(
+        _, ssm = aws_clients()
+        cfg = load_store_config(ssm)
+        auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
+        download_artifacts(
+            cfg=cfg,
+            auth=auth,
             project_id=p["resolved_project_id"],
             build_id=p["resolved_build_id"],
             git_ref=p["git_ref"],
-            rules=rules,
+            patterns=p["files"],
             variant=p["variant"],
             exclude_patterns=p.get("exclude", []),
             output_dir=p["output_dir"],
