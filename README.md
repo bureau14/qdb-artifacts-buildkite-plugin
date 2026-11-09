@@ -75,7 +75,9 @@ plugins:
 
 Set `upload.allow_empty: true` to skip uploading without an error when no files
 match `files` or all matches are excluded. Defaults to `false`, so empty uploads
-fail as before. Skipping creates no manifest or upload annotation.
+fail as before. Skipping requires no object-store configuration or credentials,
+creates no manifest or upload annotation, and skips promotion when `promote` is
+configured in the same step, preserving the previous `LATEST_SUCCESSFUL` pointer.
 
 ```yaml
 plugins:

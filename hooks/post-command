@@ -20,7 +20,14 @@ command_exit_status="${BUILDKITE_COMMAND_EXIT_STATUS:-0}"
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES_0:-}" ]] || [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_FILES:-}" ]]; then
   echo "~~~ :arrow_up: Uploading artifacts"
-  run_artifacts_py upload
+  upload_status=0
+  run_artifacts_py upload --report-empty || upload_status=$?
+  if [[ "${upload_status}" -eq 3 ]]; then
+    echo "~~~ Skipping artifact promotion (empty upload)"
+    exit 0
+  elif [[ "${upload_status}" -ne 0 ]]; then
+    exit "${upload_status}"
+  fi
 fi
 
 if [[ -n "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT:-}" ]]; then
