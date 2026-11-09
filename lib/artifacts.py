@@ -510,6 +510,7 @@ def upload(
     base_dir=None,
     annotate=True,
     exclude_patterns=None,
+    allow_empty=False,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
@@ -541,6 +542,9 @@ def upload(
         }
     )
     if not matched_files:
+        if allow_empty:
+            log(f"No files matched: {patterns}; skipping artifact upload (allow_empty=true)")
+            return
         die(f"no files matched: {patterns}")
 
     if base_dir:
@@ -556,6 +560,12 @@ def upload(
         if not is_excluded(f.relative_to(base_path).as_posix(), exclude_patterns)
     ]
     if not files:
+        if allow_empty:
+            log(
+                "No files left after applying exclude patterns: "
+                f"{exclude_patterns or []}; skipping artifact upload (allow_empty=true)"
+            )
+            return
         die(f"no files left after applying exclude patterns: {exclude_patterns or []}")
 
     total_bytes = sum(f.stat().st_size for f in files)
@@ -1274,6 +1284,7 @@ def parse_upload_config_from_env():
         "parallel": os.environ.get(f"{prefix}PARALLEL"),
         "concurrency": os.environ.get(f"{prefix}CONCURRENCY"),
         "annotate": _get_env_bool(os.environ.get(f"{prefix}ANNOTATE"), default=True),
+        "allow_empty": _get_env_bool(os.environ.get(f"{prefix}ALLOW_EMPTY")),
         "files": _get_env_array(prefix, "FILES"),
         "exclude": _get_env_array(prefix, "EXCLUDE"),
     }
@@ -1404,6 +1415,7 @@ if __name__ == "__main__":
             upload_config["base_dir"],
             upload_config["annotate"],
             upload_config["exclude"],
+            allow_empty=upload_config["allow_empty"],
         )
 
     elif cmd == "promote":
