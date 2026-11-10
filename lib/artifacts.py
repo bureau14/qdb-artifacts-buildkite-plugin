@@ -510,20 +510,15 @@ def upload(
     base_dir=None,
     annotate=True,
     exclude_patterns=None,
+    allow_empty=False,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
 
     Creds are minted once before the pool — for R2, ensure TTL covers the full upload.
+    Returns True after uploading, or False when allow_empty skips an empty upload.
     """
-    _, ssm = aws_clients()
-    cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-
-    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
-
-    tc = TransferConfig(max_concurrency=concurrency)
     cwd = Path.cwd().resolve()
 
     base_path = cwd
@@ -541,6 +536,9 @@ def upload(
         }
     )
     if not matched_files:
+        if allow_empty:
+            log(f"No files matched: {patterns}; skipping artifact upload (allow_empty=true)")
+            return False
         die(f"no files matched: {patterns}")
 
     if base_dir:
@@ -556,7 +554,19 @@ def upload(
         if not is_excluded(f.relative_to(base_path).as_posix(), exclude_patterns)
     ]
     if not files:
+        if allow_empty:
+            log(
+                "No files left after applying exclude patterns: "
+                f"{exclude_patterns or []}; skipping artifact upload (allow_empty=true)"
+            )
+            return False
         die(f"no files left after applying exclude patterns: {exclude_patterns or []}")
+
+    _, ssm = aws_clients()
+    cfg = load_store_config(ssm)
+    auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
+    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
+    tc = TransferConfig(max_concurrency=concurrency)
 
     total_bytes = sum(f.stat().st_size for f in files)
     log(
@@ -619,6 +629,7 @@ def upload(
         f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
         f"({fmt_size(avg_speed)}/s)"
     )
+    return True
 
 
 def parse_rules(patterns):
@@ -1274,6 +1285,7 @@ def parse_upload_config_from_env():
         "parallel": os.environ.get(f"{prefix}PARALLEL"),
         "concurrency": os.environ.get(f"{prefix}CONCURRENCY"),
         "annotate": _get_env_bool(os.environ.get(f"{prefix}ANNOTATE"), default=True),
+        "allow_empty": _get_env_bool(os.environ.get(f"{prefix}ALLOW_EMPTY")),
         "files": _get_env_array(prefix, "FILES"),
         "exclude": _get_env_array(prefix, "EXCLUDE"),
     }
@@ -1370,6 +1382,11 @@ if __name__ == "__main__":
     git_ref = None
 
     if cmd == "upload":
+        # The hook uses exit code 3 to distinguish a skipped upload from a completed
+        # upload and preserve LATEST_SUCCESSFUL. Direct uploads still exit successfully.
+        report_empty = args == ["--report-empty"]
+        if args and not report_empty:
+            die(f"unknown upload arguments: {args}")
         upload_config = parse_upload_config_from_env()
 
         pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
@@ -1393,7 +1410,7 @@ if __name__ == "__main__":
             die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
         upload_config["resolved_build_id"] = build_id
 
-        upload(
+        uploaded = upload(
             upload_config["resolved_project_id"],
             upload_config["resolved_build_id"],
             upload_config["git_ref"],
@@ -1404,7 +1421,10 @@ if __name__ == "__main__":
             upload_config["base_dir"],
             upload_config["annotate"],
             upload_config["exclude"],
+            allow_empty=upload_config["allow_empty"],
         )
+        if report_empty and not uploaded:
+            sys.exit(3)
 
     elif cmd == "promote":
         # this is a separate variant because sometimes we want to

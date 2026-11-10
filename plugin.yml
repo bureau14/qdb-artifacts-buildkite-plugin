@@ -38,6 +38,10 @@ configuration:
         annotate:
           type: boolean
           description: "Create a Buildkite job annotation listing uploaded artifacts (default: true)"
+        allow_empty:
+          type: boolean
+          default: false
+          description: "Skip upload without error when no files match or all are excluded (default: false)"
       required:
         - variant
         - files

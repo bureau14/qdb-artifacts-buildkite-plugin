@@ -71,6 +71,24 @@ plugins:
           - "*-tests.tar.zst"
 ```
 
+### Allow an empty upload
+
+Set `upload.allow_empty: true` to skip uploading without an error when no files
+match `files` or all matches are excluded. Defaults to `false`, so empty uploads
+fail as before. Skipping requires no object-store configuration or credentials,
+creates no manifest or upload annotation, and skips promotion when `promote` is
+configured in the same step, preserving the previous `LATEST_SUCCESSFUL` pointer.
+
+```yaml
+plugins:
+  - bureau14/qdb-artifacts#v1.0.0:
+      upload:
+        variant: "linux-amd64-release"
+        git_ref: "refs/heads/main"
+        files: "artifacts/**/*.tar.zst"
+        allow_empty: true
+```
+
 ### Download (test step, cross-step, with extraction and entry filtering)
 
 ```yaml
@@ -224,6 +242,7 @@ plugins:
 | `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
 | `annotate`    | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
+| `allow_empty` | boolean |          | Skip upload without error when no files match or all matches are excluded. Default: `false`. |
 
 ### `promote` object keys
 
