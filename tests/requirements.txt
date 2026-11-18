@@ -1,3 +1,5 @@
 -r ../lib/requirements.txt
-moto[server]>=5.1,<6
+moto[s3,ssm]>=5.1,<6
+flask
+flask-cors
 pytest>=8
