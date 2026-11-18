@@ -9,6 +9,7 @@ from . import layout
 from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
 from .log import log
+from .objects import Store
 
 
 def promote(project_id, build_id, git_ref, variant):
@@ -20,10 +21,5 @@ def promote(project_id, build_id, git_ref, variant):
     bucket, prefix = layout.parse_destination(cfg.destination)
 
     target_key = layout.latest_pointer(prefix, project_id, git_ref, variant)
-    s3_client(cfg, auth).put_object(
-        Bucket=bucket,
-        Key=target_key,
-        Body=build_id.encode("utf-8"),
-        ContentType="text/plain",
-    )
+    Store(s3_client(cfg, auth), bucket).put(target_key, build_id.encode("utf-8"), "text/plain")
     log(f"Set {target_key} \N{RIGHTWARDS ARROW} {build_id} for ref {git_ref}")

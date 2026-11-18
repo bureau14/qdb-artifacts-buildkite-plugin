@@ -22,6 +22,7 @@ from .config import load_store_config
 from .errors import ArtifactsError
 from .log import fmt_size, log
 from .manifest import upload_manifest
+from .objects import Store
 from .retry import with_retry
 from .rules import is_excluded
 
@@ -142,7 +143,7 @@ def upload(
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
         }
-        upload_manifest(bucket, pfx, manifest_payload, cfg, auth)
+        upload_manifest(Store(s3_client(cfg, auth), bucket), pfx, manifest_payload)
     except KeyboardInterrupt:
         # Hard exit: ThreadPoolExecutor.shutdown(wait=True) would block for minutes
         # waiting for in-flight transfers. 130 = POSIX SIGINT convention.

@@ -1,24 +1,61 @@
-"""Small objects of the store, one request each: the text of a key, and whether a
-prefix holds any object at all."""
+"""Small objects of the store, behind one interface over a bucket and its client.
+
+A pointer, a manifest and the listing of a prefix each take one request (a
+listing one per page). Files of a build travel through boto3's transfer
+manager instead, in `upload` and `download`.
+
+An object that is not there is not an error: `get` says so with None, because
+a missing pointer or manifest is an answer the callers act on. Every other
+error of the store is raised as boto3 raised it.
+"""
+
+from __future__ import annotations
+
+import datetime
+from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
-
-def check_artifacts_exist(s3, bucket, prefix):
-    """Check if any objects exist under the given prefix."""
-    response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
-    return response.get("KeyCount") > 0
+ABSENT = ("NoSuchKey", "404")
 
 
-def read_latest_successful(s3, bucket, key):
-    """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
-    (None, None) if absent. The pointer mtime is useful as a build-age proxy
-    when the build itself has no manifest.json."""
-    try:
-        response = s3.get_object(Bucket=bucket, Key=key)
-        bid = response["Body"].read().decode("utf-8").strip()
-        return bid, response.get("LastModified")
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
-            return None, None
-        raise
+@dataclass(frozen=True)
+class StoredObject:
+    body: bytes
+    last_modified: datetime.datetime | None
+
+
+def error_code(error: ClientError) -> str | None:
+    return error.response.get("Error", {}).get("Code")
+
+
+@dataclass(frozen=True)
+class Store:
+    """A bucket and the client that reaches it."""
+
+    client: object
+    bucket: str
+
+    def get(self, key: str) -> StoredObject | None:
+        """The object at key, or None when the bucket has none there."""
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+            return StoredObject(response["Body"].read(), response.get("LastModified"))
+        except ClientError as error:
+            if error_code(error) in ABSENT:
+                return None
+            raise
+
+    def put(self, key: str, body: bytes, content_type: str) -> None:
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType=content_type)
+
+    def list(self, prefix: str, limit: int | None = None) -> list[tuple[str, int]]:
+        """(key, size) of every object whose key starts with prefix, in key order.
+
+        With a limit, the first `limit` of them, in pages of `limit` keys, so that
+        asking whether a prefix holds anything costs one small request."""
+        config = {} if limit is None else {"MaxItems": limit, "PageSize": limit}
+        pages = self.client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix, PaginationConfig=config
+        )
+        return [(item["Key"], item["Size"]) for page in pages for item in page.get("Contents", [])]

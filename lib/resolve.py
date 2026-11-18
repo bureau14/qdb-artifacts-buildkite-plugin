@@ -18,7 +18,7 @@ from .clients import s3_client
 from .errors import ArtifactsError
 from .log import fmt_size, log
 from .manifest import read_manifest_at
-from .objects import check_artifacts_exist, read_latest_successful
+from .objects import Store
 from .rules import is_excluded, match_rules, parse_rules
 
 
@@ -71,10 +71,23 @@ def _fmt_age(t):
     return f"{d}d {h}h ago" if h else f"{d}d ago"
 
 
+def _read_latest_successful(store, key):
+    """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
+    (None, None) if absent. The pointer mtime is useful as a build-age proxy
+    when the build itself has no manifest.json."""
+    stored = store.get(key)
+    if stored is None:
+        return None, None
+    return stored.body.decode("utf-8").strip(), stored.last_modified
+
+
+def _holds_objects(store, prefix):
+    """Check if any objects exist under the given prefix."""
+    return bool(store.list(f"{prefix}/", limit=1))
+
+
 def _validate_artifact_path(
-    cfg,
-    auth,
-    bucket,
+    store,
     dest_prefix,
     project_id,
     ref,
@@ -91,7 +104,7 @@ def _validate_artifact_path(
     ArtifactsError with a structured trace listing every attempt that was tried and
     why each failed.
     """
-    s3 = s3_client(cfg, auth)
+    bucket = store.bucket
     master_refs = ("refs/heads/master", "refs/heads/main")
 
     refs_to_check = [ref]
@@ -108,7 +121,7 @@ def _validate_artifact_path(
 
         if build_id == "LATEST_SUCCESSFUL":
             pointer_key = layout.latest_pointer(dest_prefix, project_id, current_ref, variant)
-            effective_build_id, pointer_lastmod = read_latest_successful(s3, bucket, pointer_key)
+            effective_build_id, pointer_lastmod = _read_latest_successful(store, pointer_key)
             if not effective_build_id:
                 log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
                 attempts.append(
@@ -130,7 +143,7 @@ def _validate_artifact_path(
             dest_prefix, project_id, current_ref, variant, effective_build_id
         )
 
-        if check_artifacts_exist(s3, bucket, prefix):
+        if _holds_objects(store, prefix):
             log(f"  prefix s3://{bucket}/{prefix}/ has objects -> MATCH")
             return ResolvedBuild(
                 requested_ref=ref,
@@ -200,10 +213,9 @@ def resolve_artifacts(
     # can reuse the exact same resolution policy with their own download mechanism.
     rules = parse_rules(patterns)
     bucket, dest_prefix = layout.parse_destination(cfg.destination)
+    store = Store(s3_client(cfg, auth), bucket)  # pointers, manifest, listing; no transfers
     resolved = _validate_artifact_path(
-        cfg,
-        auth,
-        bucket,
+        store,
         dest_prefix,
         project_id,
         git_ref,
@@ -213,8 +225,6 @@ def resolve_artifacts(
     )
     pfx = resolved.prefix
 
-    list_client = s3_client(cfg, auth)  # listing only; no artifact transfers
-
     if resolved.fallback_applied:
         log(
             f"WARNING: falling back from ref={resolved.requested_ref} to "
@@ -222,7 +232,7 @@ def resolve_artifacts(
         )
 
     # Canonical resolved-build summary -- emitted once per project, before any transfer.
-    manifest = read_manifest_at(list_client, bucket, pfx)
+    manifest = read_manifest_at(store, pfx)
     log(f"resolved build for project={project_id} variant={variant}:")
     fallback_note = (
         f"  (fallback from {resolved.requested_ref})" if resolved.fallback_applied else ""
@@ -252,21 +262,14 @@ def resolve_artifacts(
 
     objects = []
     present_keys = []  # everything at the prefix except manifest.json, for diagnostics
-    for page in list_client.get_paginator("list_objects_v2").paginate(
-        Bucket=bucket, Prefix=f"{pfx}/"
-    ):
-        for item in page.get("Contents", []):
-            rel = item["Key"][len(pfx) + 1 :]  # path relative to variant's artifact root
-            if not rel or rel == layout.MANIFEST:
-                continue
-            present_keys.append(rel)
-            entry_rules = match_rules(rel, rules)
-            if entry_rules and not is_excluded(rel, exclude_patterns):
-                objects.append(
-                    ResolvedArtifact(
-                        key=item["Key"], rel=rel, size=item["Size"], entry_rules=entry_rules
-                    )
-                )
+    for key, size in store.list(f"{pfx}/"):
+        rel = key[len(pfx) + 1 :]  # path relative to variant's artifact root
+        if not rel or rel == layout.MANIFEST:
+            continue
+        present_keys.append(rel)
+        entry_rules = match_rules(rel, rules)
+        if entry_rules and not is_excluded(rel, exclude_patterns):
+            objects.append(ResolvedArtifact(key=key, rel=rel, size=size, entry_rules=entry_rules))
 
     if not objects:
         rule_strs = [f"{ag}!{ef}" if ef else ag for ag, ef, _ in rules]
@@ -285,7 +288,7 @@ def resolve_artifacts(
                 lines.append(f"               ... and {len(present_keys) - len(sample)} more")
             lines.append("  hint: archive extension or variant name probably mismatched.")
         else:
-            # _validate_artifact_path only returns a prefix where check_artifacts_exist
+            # _validate_artifact_path only returns a prefix where _holds_objects
             # was True, so reaching here means the only object was manifest.json.
             lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
         raise ArtifactsError("\n".join(lines))
