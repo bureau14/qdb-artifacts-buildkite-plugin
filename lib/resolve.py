@@ -13,9 +13,9 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass
 
+from . import layout
 from .clients import s3_client
 from .errors import ArtifactsError
-from .layout import scope
 from .log import fmt_size, log
 from .manifest import read_manifest_at
 from .objects import check_artifacts_exist, read_latest_successful
@@ -107,13 +107,7 @@ def _validate_artifact_path(
         effective_build_id = build_id
 
         if build_id == "LATEST_SUCCESSFUL":
-            # For the primary ref, dest_prefix already points at the LATEST_SUCCESSFUL
-            # pointer key (scope() appends LATEST_SUCCESSFUL). For fallbacks, recompute.
-            pointer_key = (
-                dest_prefix
-                if current_ref == ref
-                else scope(cfg, project_id, build_id, variant, current_ref)[1]
-            )
+            pointer_key = layout.latest_pointer(dest_prefix, project_id, current_ref, variant)
             effective_build_id, pointer_lastmod = read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
                 log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
@@ -132,7 +126,9 @@ def _validate_artifact_path(
             )
             log(f"  LATEST_SUCCESSFUL -> {effective_build_id} (pointer mtime {mtime_str})")
 
-        _, prefix = scope(cfg, project_id, effective_build_id, variant, current_ref)
+        prefix = layout.build_prefix(
+            dest_prefix, project_id, current_ref, variant, effective_build_id
+        )
 
         if check_artifacts_exist(s3, bucket, prefix):
             log(f"  prefix s3://{bucket}/{prefix}/ has objects -> MATCH")
@@ -203,12 +199,12 @@ def resolve_artifacts(
     # Keep selection independent of transfer/output handling so callers outside plugin
     # can reuse the exact same resolution policy with their own download mechanism.
     rules = parse_rules(patterns)
-    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
+    bucket, dest_prefix = layout.parse_destination(cfg.destination)
     resolved = _validate_artifact_path(
         cfg,
         auth,
         bucket,
-        pfx,
+        dest_prefix,
         project_id,
         git_ref,
         variant,
@@ -261,7 +257,7 @@ def resolve_artifacts(
     ):
         for item in page.get("Contents", []):
             rel = item["Key"][len(pfx) + 1 :]  # path relative to variant's artifact root
-            if not rel or rel == "manifest.json":
+            if not rel or rel == layout.MANIFEST:
                 continue
             present_keys.append(rel)
             entry_rules = match_rules(rel, rules)

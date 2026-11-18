@@ -10,12 +10,12 @@ import json
 
 from botocore.exceptions import ClientError
 
+from . import layout
 from .clients import s3_client
-from .layout import key_join
 
 
 def upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
-    manifest_key = key_join(prefix, "manifest.json")
+    manifest_key = layout.manifest(prefix)
     s3_client(cfg, auth).put_object(
         Bucket=bucket,
         Key=manifest_key,
@@ -28,7 +28,7 @@ def read_manifest_at(s3, bucket, prefix):
     """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
     error -- this is purely informational and must never break the download."""
     try:
-        response = s3.get_object(Bucket=bucket, Key=key_join(prefix, "manifest.json"))
+        response = s3.get_object(Bucket=bucket, Key=layout.manifest(prefix))
         return json.loads(response["Body"].read())
     except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None

@@ -9,47 +9,43 @@ The destination names the bucket and the prefix. Project, ref and build id keep
 the runs of pipelines apart; the variant keeps apart what the steps of one
 build produce, so that a test step downloads under the variant its build step
 uploaded to. A file keeps its path relative to the checkout, or to `base_dir`.
+
+Each kind of key has its own function, so the kind of a key follows from the
+function a caller names and never from the value of a build id.
 """
+
+from __future__ import annotations
 
 from urllib.parse import urlparse
 
-
-def parse_s3(uri):
-    """Parse s3://bucket/prefix URI into (bucket, prefix).
-    Also handles plain bucket names (legacy SSM format)."""
-    if not uri.startswith("s3://"):
-        return uri.strip("/"), ""
-    p = urlparse(uri)
-    return p.netloc, p.path.strip("/")
+LATEST = "LATEST_SUCCESSFUL"
+MANIFEST = "manifest.json"
 
 
-def key_join(*parts):
-    """Join S3 key segments, dropping blanks to avoid double slashes."""
+def parse_destination(destination: str) -> tuple[str, str]:
+    """(bucket, prefix) of `s3://bucket/prefix`; a bare name is a bucket."""
+    if not destination.startswith("s3://"):
+        return destination.strip("/"), ""
+    parsed = urlparse(destination)
+    return parsed.netloc, parsed.path.strip("/")
+
+
+def key_join(*parts: str) -> str:
+    """Join key segments with one slash; an empty segment is left out."""
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def scope(
-    cfg,
-    project_id,
-    build_id,
-    variant,
-    git_ref,
-    skip_build_id=False,
-):
-    """Resolve (bucket, key_prefix) for the current build/variant context.
-    project_id scopes the artifacts to a specific project.
-    variant (--variant) specifies os/arch/etc. to use. Resolved at pipeline-generation time.
-    git_ref (--git-ref) specifies the Git reference (branch or tag) to use.
-    skip_build_id skips the build ID in the path (used for LATEST_SUCCESSFUL pointers)."""
+def variant_prefix(prefix: str, project: str, git_ref: str, variant: str) -> str:
+    return key_join(prefix, project, git_ref, "variants", variant)
 
-    bucket, prefix = parse_s3(cfg.destination)
 
-    if skip_build_id:
-        return bucket, key_join(prefix, project_id, git_ref, "variants", variant)
+def latest_pointer(prefix: str, project: str, git_ref: str, variant: str) -> str:
+    return key_join(variant_prefix(prefix, project, git_ref, variant), LATEST)
 
-    if build_id == "LATEST_SUCCESSFUL":
-        return bucket, key_join(
-            prefix, project_id, git_ref, "variants", variant, "LATEST_SUCCESSFUL"
-        )
 
-    return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "builds", build_id)
+def build_prefix(prefix: str, project: str, git_ref: str, variant: str, build_id: str) -> str:
+    return key_join(variant_prefix(prefix, project, git_ref, variant), "builds", build_id)
+
+
+def manifest(build: str) -> str:
+    return key_join(build, MANIFEST)

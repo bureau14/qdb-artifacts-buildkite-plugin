@@ -5,9 +5,9 @@ plugin promotes only after the step's command passed, so the pointer names only
 builds whose command succeeded.
 """
 
+from . import layout
 from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
-from .layout import key_join, scope
 from .log import log
 
 
@@ -17,9 +17,9 @@ def promote(project_id, build_id, git_ref, variant):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref, skip_build_id=True)
+    bucket, prefix = layout.parse_destination(cfg.destination)
 
-    target_key = key_join(pfx, "LATEST_SUCCESSFUL")
+    target_key = layout.latest_pointer(prefix, project_id, git_ref, variant)
     s3_client(cfg, auth).put_object(
         Bucket=bucket,
         Key=target_key,

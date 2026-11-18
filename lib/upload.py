@@ -15,11 +15,11 @@ from pathlib import Path
 
 from boto3.s3.transfer import TransferConfig
 
+from . import layout
 from .annotation import create_buildkite_annotation
 from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
 from .errors import ArtifactsError
-from .layout import key_join, scope
 from .log import fmt_size, log
 from .manifest import upload_manifest
 from .retry import with_retry
@@ -94,7 +94,8 @@ def upload(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, pfx = scope(cfg, project_id, build_id, variant, git_ref)
+    bucket, dest_prefix = layout.parse_destination(cfg.destination)
+    pfx = layout.build_prefix(dest_prefix, project_id, git_ref, variant, build_id)
     tc = TransferConfig(max_concurrency=concurrency)
 
     total_bytes = sum(f.stat().st_size for f in files)
@@ -114,7 +115,7 @@ def upload(
             s3_client(cfg, auth).upload_file(
                 str(f),
                 bucket,
-                key_join(pfx, rel),
+                layout.key_join(pfx, rel),
                 ExtraArgs={"ContentDisposition": f'attachment; filename="{f.name}"'},
                 Config=tc,
             )
