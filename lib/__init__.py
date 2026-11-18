@@ -1,13 +1,9 @@
 """Reusable artifact resolution and downloads, independent of Buildkite hooks."""
 
-from .artifacts import (
-    ResolvedArtifact,
-    ResolvedBuild,
-    download_artifacts,
-    resolve_artifacts,
-)
+from .artifacts import download_artifacts
 from .clients import ObjectAuth, aws_clients, resolve_object_auth
 from .config import StoreConfig, load_store_config
+from .resolve import ResolvedArtifact, ResolvedBuild, resolve_artifacts
 
 __all__ = [
     "ObjectAuth",
