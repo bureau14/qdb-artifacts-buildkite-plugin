@@ -29,4 +29,6 @@ the plan step reads a value by the form the job that wrote it checked.
   Buildkite, each behind an interface.
 - ``records``: failure records as values, and the decisions the gate steps
   make over the records they have read.
+- ``document``: the generated pipeline as data: what the plan step finds in
+  it, the one resolution it writes into it, and the trigger and resume steps.
 """
