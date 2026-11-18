@@ -35,6 +35,20 @@ def test_keys_are_project_ref_variant_build_and_checkout_relative_path(job, stor
     assert store.get(f"{PREFIX}/artifacts/widget-server.tar.zst") == b"server"
 
 
+def test_slashes_around_a_ref_add_no_empty_key_level(job, store, hook):
+    job.write("a.bin", b"a")
+    job = job.with_env(BUILDKITE_BUILD_ID="build-7").with_plugin(
+        {"upload": {"variant": "v", "git_ref": "/refs/heads/feature/", "files": "a.bin"}}
+    )
+
+    assert hook("post-command", job).code == 0
+
+    assert store.stored_keys() == [
+        "widget-build/refs/heads/feature/variants/v/builds/build-7/a.bin",
+        "widget-build/refs/heads/feature/variants/v/builds/build-7/manifest.json",
+    ]
+
+
 def test_a_ref_with_slashes_nests_one_key_level_per_segment(job, store, hook):
     job.write("a.bin", b"a")
     job = job.with_env(BUILDKITE_BUILD_ID="build-7").with_plugin(
@@ -114,16 +128,35 @@ def test_artifact_is_sent_with_its_file_name_as_disposition_and_no_content_type(
     assert puts[1].content_type == "application/json"
 
 
+NINE_MIB = bytes(range(256)) * (36 * 1024)
+
+
 def test_a_large_artifact_is_uploaded_in_parts_with_its_disposition(job, store, hook):
-    job.write("big.bin", bytes(range(256)) * (36 * 1024))
+    job.write("big.bin", NINE_MIB)
 
     upload(job, hook, files="big.bin")
 
     starts = [r for r in store.plugin_requests("s3") if r.method == "POST" and "uploads" in r.query]
     assert len(starts) == 1
     assert starts[0].content_disposition == 'attachment; filename="big.bin"'
-    assert store.get(f"{PREFIX}/big.bin") == bytes(range(256)) * (36 * 1024)
+    assert store.get(f"{PREFIX}/big.bin") == NINE_MIB
     assert store.head(f"{PREFIX}/big.bin")["ContentDisposition"] == 'attachment; filename="big.bin"'
+
+
+def test_concurrency_lets_the_parts_of_one_artifact_travel_at_the_same_time(job, store, hook):
+    job.write("big.bin", NINE_MIB)
+    key = f"{PREFIX}/big.bin"
+    first_part = store.hold(
+        "PUT",
+        key,
+        query=[("partNumber", "1")],
+        until=("PUT", key, (("partNumber", "2"),)),
+        timeout=5,
+    )
+
+    upload(job, hook, files="big.bin", parallel=1, concurrency=2)
+
+    assert first_part.ended_by == "until"
 
 
 def test_manifest_is_compact_json_with_five_fields_in_fixed_order(job, store, hook):
@@ -157,6 +190,19 @@ def test_a_retried_upload_overwrites_and_adds_but_never_deletes(job, store, hook
     assert store.stored_keys() == [f"{PREFIX}/a.bin", f"{PREFIX}/b.bin", f"{PREFIX}/manifest.json"]
     assert store.get(f"{PREFIX}/a.bin") == b"retry"
     assert json.loads(store.get(f"{PREFIX}/manifest.json"))["files"] == ["a.bin"]
+
+
+def test_the_manifest_follows_the_last_artifact_and_is_stamped_after_it(job, store, hook):
+    job.write("a.bin", b"a")
+    # A slow artifact makes the order and the stamp visible without racing on timing.
+    slow = store.hold("PUT", f"{PREFIX}/a.bin", timeout=1)
+
+    upload(job, hook, files="a.bin")
+
+    (manifest_put,) = [r for r in store.plugin_requests("s3") if r.key == f"{PREFIX}/manifest.json"]
+    assert manifest_put.arrived_at > slow.released_at
+    manifest = json.loads(store.get(f"{PREFIX}/manifest.json"))
+    assert datetime.datetime.fromisoformat(manifest["uploaded_at"]) > slow.released_at
 
 
 def test_manifest_is_written_after_every_artifact(job, store, hook):
@@ -224,15 +270,20 @@ def test_exclude_matches_the_key_path_and_its_star_crosses_directories(job, stor
     assert json.loads(store.get(f"{PREFIX}/manifest.json"))["files"] == ["keep.tar.zst"]
 
 
-def test_a_missing_base_dir_fails_the_upload(job, store, hook):
+@pytest.mark.parametrize(
+    "options",
+    [{"files": "a.bin"}, {"files": "missing/*", "allow_empty": True}],
+    ids=["files-matched", "nothing-matched-but-allowed"],
+)
+def test_a_missing_base_dir_fails_the_upload(job, store, hook, options):
     job.write("a.bin", b"a")
-    job = job.with_plugin(upload_step(files="a.bin", base_dir="missing-dir"))
+    job = job.with_plugin(upload_step(base_dir="missing-dir", **options))
 
     outcome = hook("post-command", job)
 
     assert outcome.code == 1
-    assert "missing-dir" in outcome.stderr
-    assert store.stored_keys() == []
+    assert "missing-dir" in outcome.error
+    assert store.requests == []
 
 
 def test_a_file_outside_base_dir_fails_the_upload(job, store, hook):
@@ -243,8 +294,7 @@ def test_a_file_outside_base_dir_fails_the_upload(job, store, hook):
     outcome = hook("post-command", job)
 
     assert outcome.code == 1
-    assert "other/b.bin" in outcome.stderr
-    assert "dist" in outcome.stderr
+    assert "other/b.bin" in outcome.error and "dist" in outcome.error
     assert store.stored_keys() == []
 
 
