@@ -995,6 +995,18 @@ def library_environment(store, backend, tmp_path, monkeypatch):
     return variables
 
 
+@pytest.fixture
+def plugin_bucket(library, library_environment, store):
+    """The plugin's own interface to the bucket, for the objects of snapshot
+    dependencies that no hook reaches yet."""
+    objects = importlib.import_module("lib.objects")
+    clients = importlib.import_module("lib.clients")
+    cfg = library.StoreConfig(
+        backend="s3", destination=f"s3://{store.bucket}", endpoint_url=store.endpoint
+    )
+    return objects.Store(clients.s3_client(cfg, library.ObjectAuth()), store.bucket)
+
+
 @dataclasses.dataclass
 class LibraryFailure:
     text: str = ""
