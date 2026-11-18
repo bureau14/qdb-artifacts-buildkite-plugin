@@ -5,11 +5,13 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 - the plan (``plan_annotation``): the tree of a node, each node with its
   commit, ref, key and label; for a build that is reused, also the builds
   that hold its variants (``reused_annotation``);
-- a refusal or a plan error (``message_annotation``): the message's plain
-  lines;
+- a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
+  what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
   records of its causes to the builds that failed, and how to retry. This is
-  the first pass's failure annotation with variants in place of gate steps.
+  the first pass's failure annotation with variants in place of gate steps;
+  ``caused_annotation`` is the same text for a build that dependencies left
+  without variants, also one without a record of its own.
 
 Everything that is not a heading or the closing sentence is in a fenced code
 block, because template paths and branch names hold Markdown characters; the
@@ -23,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from ..pointer import Build
-from .plan import Plan
+from .plan import Plan, trigger_label
 from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Cause, Record
 from .shown import short_commit, shown_text
 
@@ -110,6 +112,29 @@ def reused_annotation(plan: Plan, project: str, builds: Mapping[str, Build]) -> 
 def message_annotation(heading: str, message: str) -> str:
     """``heading``, and the plain lines of ``message`` in a fenced code block."""
     return f"{heading}\n\n{fenced(message.splitlines())}"
+
+
+# The kinds of refusal that are not a reason of a record.
+PLAN_REFUSED = "plan"
+STEP_ERROR = "error"
+
+REFUSAL_HEADINGS = {
+    GENERATOR_FAILED: "The pipeline generator of `{project}` build {number} failed",
+    RULE: "The generated pipeline of `{project}` build {number} breaks the rule of its templates",
+    NOT_DECLARED: "`{project}` build {number} was asked for a variant it does not promote",
+    PLAN_REFUSED: "The snapshot plan of `{project}` build {number} cannot be made",
+    STEP_ERROR: "The snapshot step of `{project}` build {number} failed",
+}
+
+
+def refusal_annotation(kind: str, project: str, build: Build, message: str) -> str:
+    """A gate step that failed before anything was built: what of the build, and why.
+
+    ``kind`` is a reason of ``records.REASONS``, ``PLAN_REFUSED`` or
+    ``STEP_ERROR``; ``message`` holds the facts, one per line.
+    """
+    heading = REFUSAL_HEADINGS[kind].format(project=project, number=build.number)
+    return message_annotation(heading, message)
 
 
 # ---------------------------------------------------------------------------
@@ -241,19 +266,26 @@ def retry_sentence(builds: Iterable[tuple[str, Build]], root: str) -> str:
     )
 
 
+DEPENDENCY_FAILED = "Snapshot dependency failed"
+
+
 def failure_title(r: Record) -> str:
     if r.caused_by:
-        return "Snapshot dependency failed"
+        return DEPENDENCY_FAILED
     if r.shared_with is not None:
         return "Snapshot failed in the build this one waited behind"
     return "Snapshot failed"
 
 
+def head_line(project: str, build: Build, built: bool) -> str:
+    why = "did not give its snapshot:" if built else "was not built, because:"
+    return f"{project} build {build.number} {why}"
+
+
 def failure_head(r: Record) -> str:
     """A build whose own steps failed did not give its snapshot; any other was not built."""
     built = r.reason is None and not r.caused_by and r.shared_with is None
-    why = "did not give its snapshot:" if built else "was not built, because:"
-    return f"{r.project} build {r.build.number} {why}"
+    return head_line(r.project, r.build, built)
 
 
 def failure_annotation(plan: Plan, record: Record, records: Mapping[str, Record]) -> str:
@@ -266,3 +298,45 @@ def failure_annotation(plan: Plan, record: Record, records: Mapping[str, Record]
     lines, retry, _ = content_part(plan, record, records, 1, frozenset({record.key}), nested=False)
     closing = retry_sentence(retry, plan.root.project)
     return f"{failure_title(record)}\n\n{fenced([head, *lines])}\n\n{closing}"
+
+
+# ---------------------------------------------------------------------------
+# A build that dependencies of its chain left without what it needs
+# ---------------------------------------------------------------------------
+
+
+def left_no_record(plan: Plan, c: Cause) -> str:
+    """A dependency this build triggered whose build ended without the variants and said nothing."""
+    variants = ", ".join(shown_text(v) for v in c.variants)
+    return (
+        f"the build of {c.project} triggered by this build ended without {variants} and left "
+        f"no record; see the step {trigger_label(plan, c.project)}"
+    )
+
+
+def caused_annotation(
+    plan: Plan, project: str, build: Build, causes: Sequence[Cause], records: Mapping[str, Record]
+) -> str:
+    """The failure of a build of ``project`` that dependencies left without variants it needs.
+
+    ``causes`` name each dependency, its key and the variants it lacks;
+    ``records`` holds, by key, the record of this chain the caller read for
+    each key a cause names and for the keys those records name. A cause with
+    a record is followed down as by ``failure_annotation``; one without is a
+    build this build triggered that left nothing to follow, and the line
+    names the trigger step. A root without a snapshot writes no record, so
+    the text is made from the causes and not from a record.
+    """
+    lines: list[str] = []
+    retry: list[tuple[str, Build]] = []
+    shown: frozenset[str] = frozenset()
+    for c in causes:
+        if c.key in records:
+            more, again, shown = cause_part(plan, c, records, 1, shown, nested=False)
+        else:
+            more, again = [cause_line(plan, c, 1, False), INDENT * 2 + left_no_record(plan, c)], []
+        lines.extend(more)
+        retry.extend(again)
+    head = head_line(project, build, built=False)
+    closing = retry_sentence(retry, plan.root.project)
+    return f"{DEPENDENCY_FAILED}\n\n{fenced([head, *lines])}\n\n{closing}"

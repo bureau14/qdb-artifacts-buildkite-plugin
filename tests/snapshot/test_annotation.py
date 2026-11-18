@@ -4,19 +4,26 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from plans import DUCK, PLAN_ID, PYTHON, QDB, REST, T0, key, plan, sha
 
 from lib.pointer import Build
 from lib.snapshot.annotation import (
+    PLAN_REFUSED,
+    STEP_ERROR,
+    caused_annotation,
     failure_annotation,
     fenced,
     message_annotation,
     plan_annotation,
+    refusal_annotation,
     reused_annotation,
 )
 from lib.snapshot.records import (
     GENERATOR_FAILED,
     HARD_FAILED,
+    NOT_DECLARED,
+    RULE,
     Cause,
     Failed,
     Origin,
@@ -133,6 +140,24 @@ def test_a_message_is_shown_line_by_line_in_a_fenced_block():
         "The plan of `qdb-api-python` failed\n\n"
         "```\nqdb-duck cannot give a snapshot: .buildkite/steps/_build.yml\nsecond line\n```"
     )
+
+
+@pytest.mark.parametrize(
+    "kind, heading",
+    [
+        (GENERATOR_FAILED, "The pipeline generator of `qdb-duck` build 33 failed"),
+        (
+            RULE,
+            "The generated pipeline of `qdb-duck` build 33 breaks the rule of its templates",
+        ),
+        (NOT_DECLARED, "`qdb-duck` build 33 was asked for a variant it does not promote"),
+        (PLAN_REFUSED, "The snapshot plan of `qdb-duck` build 33 cannot be made"),
+        (STEP_ERROR, "The snapshot step of `qdb-duck` build 33 failed"),
+    ],
+)
+def test_a_refusal_names_what_of_the_build_failed_above_its_message(kind, heading):
+    text = refusal_annotation(kind, DUCK, build(DUCK, 33), "first\nsecond")
+    assert text == f"{heading}\n\n```\nfirst\nsecond\n```"
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +327,70 @@ def test_a_ladder_of_records_shows_each_record_once():
     text = failure_annotation(plan(), own, records)
     assert text.count("FAILED in ") == len(records) == 24
     assert text.count("its record is shown above") == 2 * 12 - 2
+
+
+# ---------------------------------------------------------------------------
+# A build that dependencies of its chain left without what it needs
+# ---------------------------------------------------------------------------
+
+
+def test_the_causes_of_a_build_read_as_the_record_it_writes_of_them():
+    qdb = compose_record(
+        origin(QDB, 7), T0, None, [Failed(LINUX, "build-linux", HARD_FAILED)], (), None
+    )
+    duck = caused_record(origin(DUCK, 33), [Cause(QDB, key(QDB), (LINUX,))], T0)
+    causes = [Cause(DUCK, key(DUCK), (LINUX,)), Cause(QDB, key(QDB), (LINUX,))]
+    records = {key(QDB): qdb, key(DUCK): duck}
+    own = caused_record(origin(REST, 40), causes, T0)
+
+    text = caused_annotation(plan(), REST, build(REST, 40), causes, records)
+
+    assert text == failure_annotation(plan(), own, records)
+
+
+def test_a_root_without_a_snapshot_is_shown_its_causes_without_a_record_of_its_own():
+    qdb = compose_record(
+        origin(QDB, 7), T0, None, [Failed(LINUX, "build-linux", HARD_FAILED)], (), None
+    )
+    text = caused_annotation(
+        plan(root_has_snapshot=False),
+        PYTHON,
+        build(PYTHON, 512),
+        [Cause(QDB, key(QDB), (LINUX,))],
+        {key(QDB): qdb},
+    )
+    assert text.splitlines()[:4] == [
+        "Snapshot dependency failed",
+        "",
+        "```",
+        "qdb-api-python build 512 was not built, because:",
+    ]
+    assert text.splitlines()[-1] == (
+        "To retry: retry the failed job in `quasardb-build` `7`. When it passes, start a new "
+        "build of `qdb-api-python`. Everything that passed is reused."
+    )
+
+
+def test_a_triggered_build_that_left_no_record_is_named_with_its_trigger_step():
+    causes = [Cause(DUCK, key(DUCK), (ARM, LINUX))]
+
+    lines = caused_annotation(plan(), REST, build(REST, 40), causes, {}).splitlines()
+
+    assert lines[4:6] == [
+        (
+            f"  qdb-duck @ {short(DUCK)} ({key(DUCK)}) has no linux-aarch64-release, "
+            "linux-core2-release."
+        ),
+        (
+            "    the build of qdb-duck triggered by this build ended without "
+            "linux-aarch64-release, linux-core2-release and left no record; see the step "
+            f":link: qdb-duck @ {short(DUCK)}"
+        ),
+    ]
+    assert lines[-1] == (
+        "To retry: start a new build of `qdb-api-python` when the cause is fixed. Everything "
+        "that passed is reused."
+    )
 
 
 def test_records_that_name_each_other_end():
