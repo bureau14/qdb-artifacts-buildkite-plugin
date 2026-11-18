@@ -35,9 +35,9 @@ steps:
     command: |
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server; the
-      # planning half extracts no archive, and its tests need a git that the
-      # Debian of this image no longer installs
-      python -B -m pytest -p no:cacheprovider tests --ignore=tests/snapshot
+      # planning half and its gate steps extract no archive, and their tests
+      # need a git that the Debian of this image no longer installs
+      python -B -m pytest -p no:cacheprovider tests --ignore=tests/snapshot --ignore=tests/gate
     plugins:
       - docker#v5.13.0:
           image: "python:3.9.16-slim"
