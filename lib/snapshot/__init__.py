@@ -22,4 +22,5 @@ the plan step reads a value by the form the job that wrote it checked.
   of another repository's commit, the branches of a repository and their
   merge-bases with the checkout, the checkout's commit and files), behind one
   small interface.
+- ``lines``: the release line of a root build, decided on git's facts.
 """
