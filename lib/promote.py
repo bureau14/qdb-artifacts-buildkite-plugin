@@ -9,10 +9,10 @@ one act of the step that promotes serves both kinds of dependency.
 """
 
 from . import layout, pointer
-from .clients import aws_clients, resolve_object_auth, s3_client
+from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .log import log
-from .objects import Store
+from .objects import destination_store
 
 
 def log_holder(wanted, held, where):
@@ -36,8 +36,7 @@ def promote(project_id, build_id, git_ref, variant, snapshot_pointer=None):
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, prefix = layout.parse_destination(cfg.destination)
-    store = Store(s3_client(cfg, auth), bucket)
+    store, prefix = destination_store(cfg, auth)
 
     target_key = layout.latest_pointer(prefix, project_id, git_ref, variant)
     store.put(target_key, build_id.encode("utf-8"), "text/plain")

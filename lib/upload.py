@@ -10,12 +10,12 @@ from pathlib import Path
 
 from . import layout, transfer
 from .annotation import create_buildkite_annotation
-from .clients import aws_clients, resolve_object_auth, s3_client
+from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import ArtifactsError
 from .log import fmt_size, log
 from .manifest import compose_manifest, upload_manifest
-from .objects import Store
+from .objects import destination_store
 from .rules import is_excluded
 
 
@@ -89,7 +89,8 @@ def upload(
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    bucket, dest_prefix = layout.parse_destination(cfg.destination)
+    store, dest_prefix = destination_store(cfg, auth)
+    bucket = store.bucket
     pfx = layout.build_prefix(dest_prefix, project_id, git_ref, variant, build_id)
     tc = transfer.transfer_config(concurrency)
 
@@ -130,7 +131,7 @@ def upload(
             datetime.datetime.now(datetime.timezone.utc).isoformat(),
             provenance,
         )
-        upload_manifest(Store(s3_client(cfg, auth), bucket), pfx, manifest_payload)
+        upload_manifest(store, pfx, manifest_payload)
 
     elapsed = transfer.run(upload_one, files, parallel, then=write_manifest)
 

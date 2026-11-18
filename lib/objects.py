@@ -17,6 +17,9 @@ from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
+from . import layout
+from .clients import s3_client
+
 ABSENT = ("NoSuchKey", "404")
 TAKEN = ("PreconditionFailed", "412")
 
@@ -79,3 +82,10 @@ class Store:
             Bucket=self.bucket, Prefix=prefix, PaginationConfig=config
         )
         return [(item["Key"], item["Size"]) for page in pages for item in page.get("Contents", [])]
+
+
+def destination_store(cfg, auth) -> tuple[Store, str]:
+    """The store of cfg's destination, reached with auth, and the key prefix the
+    destination names."""
+    bucket, prefix = layout.parse_destination(cfg.destination)
+    return Store(s3_client(cfg, auth), bucket), prefix

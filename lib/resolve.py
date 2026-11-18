@@ -14,11 +14,10 @@ import datetime
 from dataclasses import dataclass
 
 from . import layout
-from .clients import s3_client
 from .errors import ArtifactsError
 from .log import fmt_size, log
 from .manifest import read_manifest_at
-from .objects import Store
+from .objects import destination_store
 from .rules import is_excluded, match_rules, parse_rules
 
 
@@ -212,8 +211,8 @@ def resolve_artifacts(
     # Keep selection independent of transfer/output handling so callers outside plugin
     # can reuse the exact same resolution policy with their own download mechanism.
     rules = parse_rules(patterns)
-    bucket, dest_prefix = layout.parse_destination(cfg.destination)
-    store = Store(s3_client(cfg, auth), bucket)  # pointers, manifest, listing; no transfers
+    store, dest_prefix = destination_store(cfg, auth)  # pointers, manifest, listing; no transfers
+    bucket = store.bucket
     resolved = _validate_artifact_path(
         store,
         dest_prefix,
