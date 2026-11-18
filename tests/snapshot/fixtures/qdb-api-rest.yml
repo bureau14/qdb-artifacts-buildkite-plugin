@@ -1,0 +1,106 @@
+steps:
+- label: ':golangci-lint: lint'
+  key: lint
+  timeout_in_minutes: 15
+  command: echo step
+  plugins:
+  - docker#v5.13.0: {}
+  - bureau14/qdb-artifacts#master:
+      download:
+        clean: true
+        projects:
+        - extract: true
+          files:
+          - '*-c-api.tar.zst!*'
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: qdb
+          project_id: quasardb-build
+          variant: linux-haswell-release
+        - extract: true
+          files:
+          - artifacts/qdb-duck-*-libduckdb.tar.zst!*
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: duck
+          project_id: qdb-duck
+          variant: linux-haswell-release
+- label: ':hammer: build (linux-haswell)'
+  key: build-linux-haswell
+  timeout_in_minutes: 60
+  command: echo step
+  plugins:
+  - docker#v5.13.0: {}
+  - bureau14/qdb-artifacts#master:
+      download:
+        clean: true
+        projects:
+        - extract: true
+          files:
+          - '*-c-api.tar.zst!*'
+          - '*-server.tar.zst!*'
+          - '*-utils.tar.zst!*'
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: qdb
+          project_id: quasardb-build
+          variant: linux-haswell-release
+        - extract: true
+          files:
+          - artifacts/qdb-duck-*-libduckdb.tar.zst!*
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: duck
+          project_id: qdb-duck
+          variant: linux-haswell-release
+      promote:
+        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        variant: linux-haswell-release
+      upload:
+        base-dir: artifacts
+        files:
+        - artifacts/*-rest.*
+        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        variant: linux-haswell-release
+  - bureau14/qdb-test-report#master: {}
+- label: ':hammer: build (freebsd-haswell)'
+  key: build-freebsd-haswell
+  timeout_in_minutes: 60
+  command: echo step
+  plugins:
+  - bureau14/qdb-artifacts#master:
+      download:
+        clean: true
+        projects:
+        - extract: true
+          files:
+          - '*-c-api.tar.zst!*'
+          - '*-server.tar.zst!*'
+          - '*-utils.tar.zst!*'
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: qdb
+          project_id: quasardb-build
+          variant: freebsd-haswell-release
+        - extract: true
+          files:
+          - artifacts/qdb-duck-*-libduckdb.tar.zst!*
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          output-dir: duck
+          project_id: qdb-duck
+          variant: freebsd-haswell-release
+      promote:
+        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        variant: freebsd-haswell-release
+      upload:
+        base-dir: artifacts
+        files:
+        - artifacts/*-rest.*
+        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        variant: freebsd-haswell-release
+  - bureau14/qdb-test-report#master: {}
+- label: ':bar_chart: Aggregate test report'
+  key: full-test-report
+  depends_on:
+  - build-linux-haswell
+  - build-freebsd-haswell
+  allow_dependency_failure: true
+  timeout_in_minutes: 10
+  command: echo step
+  plugins:
+  - bureau14/qdb-test-report#master: {}

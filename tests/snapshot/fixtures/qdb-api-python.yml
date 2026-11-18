@@ -1,0 +1,86 @@
+steps:
+- group: Linux Core2 Release
+  steps:
+  - label: Linux Core2 Release Py312 (linux-core2-release-py312)
+    key: build-linux-core2-release-py312
+    timeout_in_minutes: 60
+    command: echo step
+    plugins:
+    - docker-compose#v5.12.1: {}
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: linux-core2-release
+          - files:
+            - '*-rest.*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: snapdep-rest
+            project_id: qdb-api-rest
+            variant: linux-core2-release
+        promote:
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: linux-core2-release-py312
+        upload:
+          base_dir: dist
+          files:
+          - dist/quasardb-*.whl
+          - dist/doc.tar.gz
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: linux-core2-release-py312
+    - bureau14/qdb-test-report#master: {}
+- group: Macos Aarch64 Release
+  steps:
+  - label: Macos Aarch64 Release Py312 (macos-aarch64-release-py312)
+    key: build-macos-aarch64-release-py312
+    timeout_in_minutes: 60
+    command: echo step
+    plugins:
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: macos-aarch64-release
+          - files:
+            - '*-rest.*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: snapdep-rest
+            project_id: qdb-api-rest
+            variant: macos-aarch64-release
+        promote:
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: macos-aarch64-release-py312
+        upload:
+          base_dir: dist
+          files:
+          - dist/quasardb-*.whl
+          - dist/doc.tar.gz
+          git_ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: macos-aarch64-release-py312
+    - bureau14/qdb-test-report#master: {}
+- label: ':bar_chart: Aggregate test report'
+  key: full-test-report
+  depends_on:
+  - build-linux-core2-release-py312
+  - build-macos-aarch64-release-py312
+  allow_dependency_failure: true
+  timeout_in_minutes: 15
+  command: echo step
+  plugins:
+  - bureau14/qdb-test-report#master: {}

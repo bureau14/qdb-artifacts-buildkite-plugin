@@ -1,0 +1,54 @@
+steps:
+- group: Linux Haswell Release
+  steps:
+  - label: Linux Haswell Release Go127 (linux-haswell-release-go127)
+    key: build-linux-haswell-release-go127
+    timeout_in_minutes: 30
+    command: echo step
+    plugins:
+    - docker#v5.13.0: {}
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: linux-haswell-release
+    - bureau14/qdb-test-report#master: {}
+- group: Freebsd Haswell Release
+  steps:
+  - label: Freebsd Haswell Release Go127 (freebsd-haswell-release-go127)
+    key: build-freebsd-haswell-release-go127
+    timeout_in_minutes: 30
+    command: echo step
+    plugins:
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git_ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: freebsd-haswell-release
+    - bureau14/qdb-test-report#master: {}
+- label: ':bar_chart: Aggregate test report'
+  key: full-test-report
+  depends_on:
+  - build-linux-haswell-release-go127
+  - build-freebsd-haswell-release-go127
+  allow_dependency_failure: true
+  timeout_in_minutes: 10
+  command: echo step
+  plugins:
+  - bureau14/qdb-test-report#master: {}

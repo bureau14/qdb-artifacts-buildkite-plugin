@@ -9,5 +9,8 @@ the plan step reads a value by the form the job that wrote it checked.
 - ``configuration``: the artifacts plugin's configuration as written in a
   document, read by its structure: option keys, blocks and download entries,
   wherever they sit.
+- ``declaration``: what a commit's step templates declare (snapshot and latest
+  successful dependencies, pins), and the rule that holds a generated pipeline
+  to it.
 - ``shown``: how a foreign value appears in a message.
 """

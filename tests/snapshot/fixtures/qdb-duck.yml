@@ -1,0 +1,76 @@
+steps:
+- group: Linux Haswell Release
+  steps:
+  - label: Linux Haswell Release (linux-haswell-release)
+    key: build-linux-haswell-release
+    timeout_in_minutes: 90
+    command: echo step
+    plugins:
+    - docker#v5.13.0: {}
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git-ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: linux-haswell-release
+        promote:
+          git-ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: linux-haswell-release
+        upload:
+          files:
+          - build/ci/extension/quasar/qdb*
+          - build/ci/extension/quasar/*duckdb_extension*
+          - qdb/**/*qdb_api.*
+          - artifacts/*.tar.zst
+          git-ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: linux-haswell-release
+    - bureau14/qdb-test-report#master: {}
+- group: Freebsd Haswell Release
+  steps:
+  - label: Freebsd Haswell Release (freebsd-haswell-release)
+    key: build-freebsd-haswell-release
+    timeout_in_minutes: 90
+    command: echo step
+    plugins:
+    - bureau14/qdb-artifacts#master:
+        download:
+          clean: true
+          projects:
+          - extract: true
+            files:
+            - '*-c-api.tar.zst!*'
+            - '*-server.tar.zst!*'
+            - '*-utils.tar.zst!*'
+            git-ref: refs/heads/sc-20192/snapshot-dependencies
+            output-dir: qdb
+            project_id: quasardb-build
+            variant: freebsd-haswell-release
+        promote:
+          git-ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: freebsd-haswell-release
+        upload:
+          files:
+          - build/ci/extension/quasar/qdb*
+          - build/ci/extension/quasar/*duckdb_extension*
+          - qdb/**/*qdb_api.*
+          - artifacts/*.tar.zst
+          git-ref: refs/heads/sc-20192/snapshot-dependencies
+          variant: freebsd-haswell-release
+    - bureau14/qdb-test-report#master: {}
+- label: Aggregate test report
+  key: full-test-report
+  depends_on:
+  - build-linux-haswell-release
+  - build-freebsd-haswell-release
+  allow_dependency_failure: true
+  timeout_in_minutes: 30
+  command: echo step
+  plugins:
+  - bureau14/qdb-test-report#master: {}
