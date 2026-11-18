@@ -64,3 +64,16 @@ def test_an_upload_interrupted_by_ctrl_c_ends_the_hook_with_130_and_promotes_not
 
     assert outcome.code == 130, outcome.output
     assert store.stored_keys() == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Ctrl-C is sent as SIGINT to a process group")
+def test_an_upload_interrupted_while_it_writes_the_manifest_ends_the_hook_with_130(
+    job, store, interrupted_hook
+):
+    job.write("a.bin", b"a")
+    manifest = store.hold("PUT", f"{PREFIX}/manifest.json")
+
+    outcome = interrupted_hook("post-command", build_and_promote(job, "a.bin"), manifest.arrived)
+
+    assert outcome.code == 130, outcome.output
+    assert store.stored_keys() == [f"{PREFIX}/a.bin"]
