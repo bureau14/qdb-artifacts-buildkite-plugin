@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import pointer
 from .errors import ArtifactsError
+from .manifest import Download, Provenance, Source
 
 
 def _get_env_bool(val, default=False):
@@ -217,6 +218,39 @@ def snapshot_pointer(project_id, key, variant, git_ref, build_id):
     )
 
 
+def own_downloads():
+    """The builds this job's own download options name. LATEST_SUCCESSFUL, or no
+    build_id, names no build: which one it is depends on when the job ran."""
+    pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
+    return tuple(
+        Download(
+            project_id=p["project_id"] or pipeline_name,
+            variant=p["variant"],
+            git_ref=p["git_ref"],
+            build_id=p["build_id"],
+        )
+        for p in parse_download_projects_from_env()
+        if p["build_id"] and p["build_id"] != "LATEST_SUCCESSFUL"
+    )
+
+
+def upload_provenance(key, build_id):
+    """Where the files of an upload in a build with a snapshot key were made."""
+    option = "upload.snapshot"
+    return Provenance(
+        source=Source(
+            repository=job_variable("BUILDKITE_REPO", option),
+            commit=checkout_commit(),
+            pipeline=job_variable("BUILDKITE_PIPELINE_SLUG", option),
+            build_number=job_build_number(option),
+            build_id=build_id,
+            job_id=job_variable("BUILDKITE_JOB_ID", option),
+            snapshot=key,
+        ),
+        downloads=own_downloads(),
+    )
+
+
 def upload_requested():
     """Whether the step names files to upload: an upload block without files
     uploads nothing."""
@@ -244,7 +278,7 @@ def upload_arguments():
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
 
-    snapshot_key("UPLOAD_SNAPSHOT", "upload.snapshot")
+    key = snapshot_key("UPLOAD_SNAPSHOT", "upload.snapshot")
 
     return {
         "project_id": project_id,
@@ -258,6 +292,7 @@ def upload_arguments():
         "annotate": upload_config["annotate"],
         "exclude_patterns": upload_config["exclude"],
         "allow_empty": upload_config["allow_empty"],
+        "provenance": None if key is None else upload_provenance(key, build_id),
     }
 
 

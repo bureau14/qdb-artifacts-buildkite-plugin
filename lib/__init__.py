@@ -16,7 +16,7 @@ module can be read, and tested, with nothing below it:
     layout      every object key the plugin reads or writes
     objects     small objects in the store: get, put, create once, list
     rules       file patterns: "archive!entries", excludes
-    manifest    manifest.json of a build: write, read
+    manifest    manifest.json of a build: compose, write, read
     resolve     which build a download gets: the pointer, the walk over refs
     transfer    many files at once, each with its own client and retries
     extract     unpack an archive, refusing tar members that leave the target

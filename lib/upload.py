@@ -14,7 +14,7 @@ from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
 from .errors import ArtifactsError
 from .log import fmt_size, log
-from .manifest import upload_manifest
+from .manifest import compose_manifest, upload_manifest
 from .objects import Store
 from .rules import is_excluded
 
@@ -31,10 +31,12 @@ def upload(
     annotate=True,
     exclude_patterns=None,
     allow_empty=False,
+    provenance=None,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
+    With provenance, the manifest also says where the files were made.
 
     Creds are minted once before the pool -- for R2, ensure TTL covers the full upload.
     Returns True after uploading, or False when allow_empty skips an empty upload.
@@ -121,13 +123,13 @@ def upload(
     relative_files_path = [rel for rel, _ in relative_files_with_sizes]
 
     def write_manifest():
-        manifest_payload = {
-            "file_count": len(files),
-            "files": relative_files_path,
-            "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "total_size_bytes": total_bytes,
-            "base_dir": base_dir,
-        }
+        manifest_payload = compose_manifest(
+            relative_files_path,
+            total_bytes,
+            base_dir,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            provenance,
+        )
         upload_manifest(Store(s3_client(cfg, auth), bucket), pfx, manifest_payload)
 
     elapsed = transfer.run(upload_one, files, parallel, then=write_manifest)

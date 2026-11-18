@@ -66,7 +66,9 @@ BUILD_ID = "01900000-0000-7000-8000-000000000001"
 BUILD_NUMBER = "512"
 BUILD_URL = "https://buildkite.example.test/example/widget-build/builds/512"
 BRANCH = "master"
+JOB_ID = "01900000-0000-7000-8000-0000000000a1"
 JOB_LABEL = ":hammer: Build widget"
+REPOSITORY = "https://git.example.test/example/widget.git"
 CHECKOUT_COMMIT = "89abcdef0123456789abcdef0123456789abcdef"
 
 HOOK_TIMEOUT = 300
@@ -737,7 +739,9 @@ def buildkite_variables(workspace):
         "BUILDKITE_BUILD_NUMBER": BUILD_NUMBER,
         "BUILDKITE_BUILD_URL": BUILD_URL,
         "BUILDKITE_PIPELINE_SLUG": PIPELINE_SLUG,
+        "BUILDKITE_REPO": REPOSITORY,
         "BUILDKITE_BRANCH": BRANCH,
+        "BUILDKITE_JOB_ID": JOB_ID,
         "BUILDKITE_LABEL": JOB_LABEL,
         "BUILDKITE_BUILD_CHECKOUT_PATH": str(workspace),
     }

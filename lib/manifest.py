@@ -4,15 +4,70 @@ An upload writes it last, after every file of the build has arrived, so a build
 whose manifest exists holds the whole upload. A download reads it for the
 build's log lines only; a caller outside the plugin reads it through
 read_manifest.
+
+In a build with a snapshot key the manifest also says where its files were
+made, so that whoever finds a build by its snapshot pointer can tell from what:
+
+    source     {schema, repository, commit, pipeline, build_number, build_id,
+                job_id, snapshot}
+    downloads  [{project_id, variant, git_ref, build_id}], the builds the job
+               downloaded by those of its own download options that name one
 """
 
 import json
+from dataclasses import asdict, dataclass
 
 from botocore.exceptions import ClientError
 
 from . import layout
 from .clients import s3_client
 from .objects import Store
+
+SOURCE_SCHEMA = 1
+
+
+@dataclass(frozen=True)
+class Source:
+    repository: str
+    commit: str  # git rev-parse HEAD of the job's checkout
+    pipeline: str
+    build_number: int
+    build_id: str  # the build the files are uploaded under
+    job_id: str
+    snapshot: str  # the key of the snapshot the build makes
+
+
+@dataclass(frozen=True)
+class Download:
+    project_id: str
+    variant: str
+    git_ref: str
+    build_id: str
+
+
+@dataclass(frozen=True)
+class Provenance:
+    source: Source
+    downloads: tuple
+
+
+def compose_manifest(files, total_size_bytes, base_dir, uploaded_at, provenance=None):
+    """The manifest of an upload of files (paths relative to base_dir); with
+    provenance, after today's fields, where they were made."""
+    manifest = {
+        "file_count": len(files),
+        "files": files,
+        "uploaded_at": uploaded_at,
+        "total_size_bytes": total_size_bytes,
+        "base_dir": base_dir,
+    }
+    if provenance is None:
+        return manifest
+    return {
+        **manifest,
+        "source": {"schema": SOURCE_SCHEMA, **asdict(provenance.source)},
+        "downloads": [asdict(d) for d in provenance.downloads],
+    }
 
 
 def upload_manifest(store, prefix, manifest_payload):
