@@ -72,6 +72,84 @@ def test_post_checkout_replaces_an_existing_venv_with_one_made_by_the_agent_pyth
     )
 
 
+def pip_install_of_post_checkout(job, hook, plugin_copy, fake_python, options):
+    """The arguments post-checkout gave pip, for a step with the plugin options ``options``."""
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(fake_python.path), FAKE_PYTHON_CALLS=str(fake_python.calls_dir)
+    ).with_options(**options)
+    outcome = hook("post-checkout", job, root=plugin_copy)
+    assert outcome.code == 0, outcome.output
+    _, install = [call.argv for call in fake_python.calls()]
+    return install
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"PLAN": ".buildkite/snapshot-pipeline.yml"}, {"RESUME": ".buildkite/snapshot-pipeline.yml"}],
+    ids=["plan", "resume"],
+)
+def test_post_checkout_of_a_plan_or_resume_step_also_installs_what_reading_documents_needs(
+    job, hook, plugin_copy, fake_python, options
+):
+    install = pip_install_of_post_checkout(job, hook, plugin_copy, fake_python, options)
+
+    assert install[-4:] == [
+        "-r",
+        str(plugin_copy / "lib" / "requirements.txt"),
+        "-r",
+        str(plugin_copy / "lib" / "snapshot" / "requirements.txt"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"LEAVE": "true"}, {"UPLOAD_FILES": "out/*", "UPLOAD_VARIANT": "linux"}],
+    ids=["leave", "upload"],
+)
+def test_post_checkout_of_any_other_step_installs_only_the_library(
+    job, hook, plugin_copy, fake_python, options
+):
+    install = pip_install_of_post_checkout(job, hook, plugin_copy, fake_python, options)
+
+    assert str(plugin_copy / "lib" / "snapshot" / "requirements.txt") not in install
+    assert install[-2:] == ["-r", str(plugin_copy / "lib" / "requirements.txt")]
+
+
+def test_an_ordinary_job_runs_in_a_venv_without_pyyaml(job, store, hook, plugin_venv):
+    probe = subprocess.run(
+        [str(plugin_venv), "-c", "import yaml"], capture_output=True, text=True, check=False
+    )
+    store.put_build("engine", "refs/heads/master", "linux", "b-1", {"a.bin": b"a"})
+    job.write("out.bin", b"o")
+    job = job.with_plugin(
+        {
+            "download": {
+                "projects": [
+                    {
+                        "project_id": "engine",
+                        "build_id": "b-1",
+                        "variant": "linux",
+                        "git_ref": "refs/heads/master",
+                        "files": ["*.bin"],
+                        "output-dir": "in",
+                    }
+                ]
+            },
+            "upload": {"variant": "linux", "git_ref": "refs/heads/master", "files": "out.bin"},
+            "promote": {"variant": "linux", "git_ref": "refs/heads/master"},
+        }
+    )
+
+    downloaded = hook("pre-command", job)
+    uploaded = hook("post-command", job)
+
+    assert "No module named 'yaml'" in probe.stderr
+    assert (downloaded.code, uploaded.code) == (0, 0), downloaded.output + uploaded.output
+    assert job.files("in") == ["a.bin"]
+    latest = "widget-build/refs/heads/master/variants/linux/LATEST_SUCCESSFUL"
+    assert store.get(latest) == job.env["BUILDKITE_BUILD_ID"].encode()
+
+
 def test_post_checkout_without_any_python_fails_before_touching_the_venv(
     job, hook, plugin_venv, tmp_path
 ):

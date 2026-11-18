@@ -15,7 +15,13 @@ if [[ -z "${PYTHON3_CMD}" ]]; then
   exit 1
 fi
 
-REQUIREMENTS="${PLUGIN_DIR}/lib/requirements.txt"
+REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
+
+# The gate steps of enter and resume read pipeline documents, which needs
+# PyYAML. No other step reads one, so no other job on any platform installs it.
+if plugin_has_any PLAN RESUME; then
+  REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/snapshot/requirements.txt")
+fi
 
 if [[ -d "${VENV_DIR}" ]]; then
   rm -rf "${VENV_DIR}"
@@ -25,4 +31,4 @@ echo "~~~ :python: Setting up qdb-artifacts plugin"
 "${PYTHON3_CMD}" -m venv --upgrade-deps "${VENV_DIR}"
 "${VENV_BIN}/python" -m pip install --quiet \
   --retries 3 --resume-retries 3 \
-  -r "${REQUIREMENTS}"
+  "${REQUIREMENTS[@]}"
