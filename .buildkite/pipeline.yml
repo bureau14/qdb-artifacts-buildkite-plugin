@@ -13,3 +13,23 @@ steps:
       - docker#v5.13.0:
           image: "python:3.14-slim"
           chown: true
+
+  - label: "Characterisation tests (Python 3.9)"
+    command: |
+      pip install -r tests/requirements.txt
+      # hooks, command line and library against a local S3 and SSM server
+      python -B -m pytest -p no:cacheprovider tests
+    plugins:
+      - docker#v5.13.0:
+          image: "python:3.9-slim"
+          chown: true
+
+  - label: "Characterisation tests (Python 3.14)"
+    command: |
+      pip install -r tests/requirements.txt
+      # hooks, command line and library against a local S3 and SSM server
+      python -B -m pytest -p no:cacheprovider tests
+    plugins:
+      - docker#v5.13.0:
+          image: "python:3.14-slim"
+          chown: true
