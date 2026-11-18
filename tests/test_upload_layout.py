@@ -145,6 +145,20 @@ def test_manifest_is_compact_json_with_five_fields_in_fixed_order(job, store, ho
     assert before <= stamp <= after
 
 
+def test_a_retried_upload_overwrites_and_adds_but_never_deletes(job, store, hook):
+    job.write("a.bin", b"first")
+    job.write("b.bin", b"first")
+    upload(job, hook, files="*.bin")
+    (job.workspace / "b.bin").unlink()
+    job.write("a.bin", b"retry")
+
+    upload(job, hook, files="*.bin")
+
+    assert store.stored_keys() == [f"{PREFIX}/a.bin", f"{PREFIX}/b.bin", f"{PREFIX}/manifest.json"]
+    assert store.get(f"{PREFIX}/a.bin") == b"retry"
+    assert json.loads(store.get(f"{PREFIX}/manifest.json"))["files"] == ["a.bin"]
+
+
 def test_manifest_is_written_after_every_artifact(job, store, hook):
     for name in ("a", "b", "c", "d", "e"):
         job.write(f"{name}.bin", name.encode())
