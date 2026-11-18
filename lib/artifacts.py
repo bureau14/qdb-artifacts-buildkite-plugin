@@ -38,7 +38,6 @@ Usage
 
 import datetime
 import glob
-import json
 import os
 import posixpath
 import shutil
@@ -53,13 +52,13 @@ from pathlib import Path
 
 import zstandard
 from boto3.s3.transfer import TransferConfig
-from botocore.exceptions import ClientError
 
 from .clients import _s3_client, aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import die
 from .layout import key_join, scope
 from .log import fmt_size, log
+from .manifest import _read_manifest, _upload_manifest
 from .objects import _check_artifacts_exist, _read_latest_successful
 from .retry import _with_retry
 from .rules import _select_entry_path, is_excluded, match_rules, parse_rules
@@ -88,16 +87,6 @@ class ResolvedArtifact:
     rel: str
     size: int
     entry_rules: list[tuple[str | None, str | None]]
-
-
-def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
-    manifest_key = key_join(prefix, "manifest.json")
-    _s3_client(cfg, auth).put_object(
-        Bucket=bucket,
-        Key=manifest_key,
-        Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
-        ContentType="application/json",
-    )
 
 
 def _create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
@@ -279,16 +268,6 @@ def upload(
         f"({fmt_size(avg_speed)}/s)"
     )
     return True
-
-
-def _read_manifest(s3, bucket, prefix):
-    """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
-    error -- this is purely informational and must never break the download."""
-    try:
-        response = s3.get_object(Bucket=bucket, Key=key_join(prefix, "manifest.json"))
-        return json.loads(response["Body"].read())
-    except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
 
 
 def _fmt_age(t):

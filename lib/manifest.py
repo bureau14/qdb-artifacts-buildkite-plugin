@@ -1,0 +1,33 @@
+"""manifest.json of a build: what an upload wrote, as compact JSON.
+
+An upload writes it last, after every file of the build has arrived, so a build
+whose manifest exists holds the whole upload. A download reads it for the
+build's log lines only.
+"""
+
+import json
+
+from botocore.exceptions import ClientError
+
+from .clients import _s3_client
+from .layout import key_join
+
+
+def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
+    manifest_key = key_join(prefix, "manifest.json")
+    _s3_client(cfg, auth).put_object(
+        Bucket=bucket,
+        Key=manifest_key,
+        Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _read_manifest(s3, bucket, prefix):
+    """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
+    error -- this is purely informational and must never break the download."""
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key_join(prefix, "manifest.json"))
+        return json.loads(response["Body"].read())
+    except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
