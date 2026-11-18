@@ -81,7 +81,7 @@ def test_upload_and_promote_options_are_independent(job, store, hook):
     ]
 
 
-def test_the_command_line_takes_the_four_promote_options(job, store, cli):
+def test_the_post_command_phase_promotes_with_the_four_promote_options(job, store, cli):
     job = job.with_options(
         PROMOTE_VARIANT="v",
         PROMOTE_GIT_REF="refs/tags/v1.0",
@@ -95,7 +95,7 @@ def test_the_command_line_takes_the_four_promote_options(job, store, cli):
     assert store.get("gizmo/refs/tags/v1.0/variants/v/LATEST_SUCCESSFUL") == b"build-9"
 
 
-def test_the_command_line_defaults_project_and_build_to_the_job(job, store, cli):
+def test_the_post_command_phase_defaults_project_and_build_to_the_job(job, store, cli):
     job = job.with_env(BUILDKITE_PIPELINE_SLUG="gadget", BUILDKITE_BUILD_ID="build-3")
 
     outcome = cli(
@@ -123,7 +123,9 @@ def test_the_command_line_defaults_project_and_build_to_the_job(job, store, cli)
     ],
     ids=["no-git-ref", "no-project", "no-build"],
 )
-def test_the_command_line_refuses_an_incomplete_promote_block(job, store, cli, options, env, facts):
+def test_the_post_command_phase_refuses_an_incomplete_promote_block(
+    job, store, cli, options, env, facts
+):
     outcome = cli(job.with_env(**env).with_options(**options), "post-command")
 
     assert outcome.code == 1

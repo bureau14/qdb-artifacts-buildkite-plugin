@@ -16,7 +16,7 @@ def before_quoted_configuration(error):
     return error.split("{", 1)[0]
 
 
-def test_an_unknown_command_fails(job, store, cli):
+def test_an_unknown_phase_fails(job, store, cli):
     outcome = cli(job, "frobnicate")
 
     assert outcome.code == 1
@@ -67,7 +67,7 @@ def test_a_non_empty_upload_allowed_to_be_empty_is_uploaded_annotated_and_promot
     assert [call.argv[0] for call in agent.calls()] == ["annotate"]
 
 
-def test_download_without_projects_fails(job, store, cli):
+def test_the_pre_command_phase_without_download_projects_fails(job, store, cli):
     outcome = cli(job.with_options(DOWNLOAD_CLEAN="true"), "pre-command")
 
     assert outcome.code == 1
