@@ -3,7 +3,9 @@
 Ordinary upload and download jobs never import this package. Its modules
 import each other and, of the rest of ``lib/``, the forms of values, the
 pointer and the library's error (``forms``, ``pointer``, ``errors``), so that
-the plan step reads a value by the form the job that wrote it checked.
+the plan step reads a value by the form the job that wrote it checked. Only
+``steps``, the edge of the gate steps, opens the store as a job opens it and
+reads the job's options and variables.
 
 - ``canonical``: canonical JSON and the key of a snapshot.
 - ``configuration``: the artifacts plugin's configuration as written in a
@@ -33,4 +35,7 @@ the plan step reads a value by the form the job that wrote it checked.
   it, the one resolution it writes into it, and the trigger and resume steps.
 - ``annotation``: the texts a gate step shows on the build page: the plan, a
   refusal, a failure and how to retry it.
+- ``steps``: enter, resume and leave, the decisions of the gate steps in the
+  specification's order, over the store, the agent, git, Buildkite's API,
+  the clock and the log.
 """

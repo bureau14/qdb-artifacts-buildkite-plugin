@@ -1,7 +1,9 @@
 """In-memory stand-ins for the interfaces of the planning half, for tests.
 
 No network, no subprocess. Each fake refuses what the real one refuses, through
-the same check functions of the real module.
+the same check functions of the real module. The store answers as the store of
+``lib/objects.py`` does: None for an absent object, False for a create that
+finds one.
 """
 
 from __future__ import annotations
@@ -9,6 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Union
 
+from botocore.exceptions import ClientError
+
+from lib.objects import StoredObject
 from lib.snapshot.agent import (
     AgentError,
     MetaDataAbsent,
@@ -164,6 +169,49 @@ class FakeCheckout:
     def checkout_files(self, directory: str, wanted: Callable[[str], bool]) -> dict[str, bytes]:
         check_tree_path(directory)
         return _files_under(self.tree, directory, wanted)
+
+
+class MemoryStore:
+    """``objects.Store`` in memory: get, put, create once, list in key order.
+
+    ``objects`` maps keys to bodies. A key under a prefix of ``refused`` is
+    answered with the store's error, as boto3 raises it, for every request.
+    ``calls`` records every request as ``(operation, key or prefix)``.
+    """
+
+    bucket = "example-artifacts"
+
+    def __init__(self, objects: Mapping[str, bytes] | None = None) -> None:
+        self.objects = dict(objects or {})
+        self.refused: list[str] = []
+        self.calls: list[tuple[str, str]] = []
+
+    def _request(self, operation: str, key: str) -> None:
+        self.calls.append((operation, key))
+        if any(key.startswith(p) for p in self.refused):
+            error = {"Error": {"Code": "AccessDenied", "Message": "refused by test"}}
+            raise ClientError(error, operation)
+
+    def get(self, key: str) -> StoredObject | None:
+        self._request("GetObject", key)
+        body = self.objects.get(key)
+        return None if body is None else StoredObject(body, None)
+
+    def put(self, key: str, body: bytes, content_type: str) -> None:
+        self._request("PutObject", key)
+        self.objects[key] = body
+
+    def create(self, key: str, body: bytes, content_type: str) -> bool:
+        self._request("PutObject", key)
+        if key in self.objects:
+            return False
+        self.objects[key] = body
+        return True
+
+    def list(self, prefix: str, limit: int | None = None) -> list[tuple[str, int]]:
+        self._request("ListObjectsV2", prefix)
+        found = sorted((k, len(b)) for k, b in self.objects.items() if k.startswith(prefix))
+        return found if limit is None else found[:limit]
 
 
 class FakePipelines:
