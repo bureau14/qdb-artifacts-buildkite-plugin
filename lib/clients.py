@@ -59,7 +59,7 @@ def resolve_object_auth(ssm, cfg, permission):
     return ObjectAuth()
 
 
-def _s3_client(cfg, auth):
+def s3_client(cfg, auth):
     """Create a per-thread S3 client. Called inside each worker because boto3 clients
     are not thread-safe (shared connection pool + credential state would race).
 

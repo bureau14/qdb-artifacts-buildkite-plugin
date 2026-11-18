@@ -13,12 +13,12 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass
 
-from .clients import _s3_client
+from .clients import s3_client
 from .errors import ArtifactsError
 from .layout import scope
 from .log import fmt_size, log
-from .manifest import _read_manifest
-from .objects import _check_artifacts_exist, _read_latest_successful
+from .manifest import read_manifest_at
+from .objects import check_artifacts_exist, read_latest_successful
 from .rules import is_excluded, match_rules, parse_rules
 
 
@@ -91,7 +91,7 @@ def _validate_artifact_path(
     ArtifactsError with a structured trace listing every attempt that was tried and
     why each failed.
     """
-    s3 = _s3_client(cfg, auth)
+    s3 = s3_client(cfg, auth)
     master_refs = ("refs/heads/master", "refs/heads/main")
 
     refs_to_check = [ref]
@@ -114,7 +114,7 @@ def _validate_artifact_path(
                 if current_ref == ref
                 else scope(cfg, project_id, build_id, variant, current_ref)[1]
             )
-            effective_build_id, pointer_lastmod = _read_latest_successful(s3, bucket, pointer_key)
+            effective_build_id, pointer_lastmod = read_latest_successful(s3, bucket, pointer_key)
             if not effective_build_id:
                 log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
                 attempts.append(
@@ -134,7 +134,7 @@ def _validate_artifact_path(
 
         _, prefix = scope(cfg, project_id, effective_build_id, variant, current_ref)
 
-        if _check_artifacts_exist(s3, bucket, prefix):
+        if check_artifacts_exist(s3, bucket, prefix):
             log(f"  prefix s3://{bucket}/{prefix}/ has objects -> MATCH")
             return ResolvedBuild(
                 requested_ref=ref,
@@ -217,7 +217,7 @@ def resolve_artifacts(
     )
     pfx = resolved.prefix
 
-    list_client = _s3_client(cfg, auth)  # listing only; no artifact transfers
+    list_client = s3_client(cfg, auth)  # listing only; no artifact transfers
 
     if resolved.fallback_applied:
         log(
@@ -226,7 +226,7 @@ def resolve_artifacts(
         )
 
     # Canonical resolved-build summary -- emitted once per project, before any transfer.
-    manifest = _read_manifest(list_client, bucket, pfx)
+    manifest = read_manifest_at(list_client, bucket, pfx)
     log(f"resolved build for project={project_id} variant={variant}:")
     fallback_note = (
         f"  (fallback from {resolved.requested_ref})" if resolved.fallback_applied else ""
@@ -289,7 +289,7 @@ def resolve_artifacts(
                 lines.append(f"               ... and {len(present_keys) - len(sample)} more")
             lines.append("  hint: archive extension or variant name probably mismatched.")
         else:
-            # _validate_artifact_path only returns a prefix where _check_artifacts_exist
+            # _validate_artifact_path only returns a prefix where check_artifacts_exist
             # was True, so reaching here means the only object was manifest.json.
             lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
         raise ArtifactsError("\n".join(lines))

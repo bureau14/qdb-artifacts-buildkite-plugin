@@ -11,7 +11,7 @@ from .layout import key_join
 from .log import fmt_size, log
 
 
-def _create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
+def create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
     if not os.environ.get("BUILDKITE"):
         log(
             "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"

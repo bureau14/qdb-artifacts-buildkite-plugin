@@ -57,7 +57,7 @@ def is_excluded(rel, exclude_patterns):
     return any(fnmatch.fnmatch(rel, pat) for pat in exclude_patterns or [])
 
 
-def _select_entry_path(name, entry_rules):
+def select_entry_path(name, entry_rules):
     """Return the output path for the first matching entry rule, or None.
 
     Rule order only matters for overlapping entry filters. Selecting one path per

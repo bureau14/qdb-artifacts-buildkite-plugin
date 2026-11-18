@@ -13,12 +13,12 @@ from pathlib import Path
 
 from boto3.s3.transfer import TransferConfig
 
-from .clients import _s3_client, aws_clients, resolve_object_auth
+from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
 from .extract import extract_local_archive
 from .log import fmt_size, log
 from .resolve import resolve_artifacts
-from .retry import _with_retry
+from .retry import with_retry
 
 
 def download_artifacts(
@@ -86,7 +86,7 @@ def download_artifacts(
                 with tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False) as tmp:
                     tmp_path = tmp.name
                 try:
-                    _s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
+                    s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
                     extract_local_archive(tmp_path, rel, out, entry_rules=entry_rules)
                 finally:
                     try:
@@ -96,9 +96,9 @@ def download_artifacts(
             else:
                 dest = out / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                _s3_client(cfg, auth).download_file(bucket, key, str(dest), Config=tc)
+                s3_client(cfg, auth).download_file(bucket, key, str(dest), Config=tc)
 
-        _with_retry(_do, rel)
+        with_retry(_do, rel)
         elapsed = time.monotonic() - ft0
         speed = sz / elapsed if elapsed > 0 else 0
         # Loud destination line. rel is repeated so parallel-interleaved logs are still parseable.

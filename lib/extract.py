@@ -19,13 +19,13 @@ from pathlib import Path
 import zstandard
 
 from .errors import ArtifactsError
-from .rules import _select_entry_path
+from .rules import select_entry_path
 
 
 def _filter_tar_member(member, entry_rules):
     """Apply matching entry rules to a tar member, or return None to skip.
     member.name is mutated in-place (tarfile's path remapping convention)."""
-    member.name = _select_entry_path(member.name, entry_rules)
+    member.name = select_entry_path(member.name, entry_rules)
     return member if member.name else None
 
 
@@ -123,7 +123,7 @@ def extract_local_archive(
                 name = info.filename
                 if name.endswith("/"):
                     continue
-                name = _select_entry_path(name, entry_rules)
+                name = select_entry_path(name, entry_rules)
                 if not name:
                     continue
                 dest = out / name

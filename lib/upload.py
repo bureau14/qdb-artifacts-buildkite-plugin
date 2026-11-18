@@ -15,14 +15,14 @@ from pathlib import Path
 
 from boto3.s3.transfer import TransferConfig
 
-from .annotation import _create_buildkite_annotation
-from .clients import _s3_client, aws_clients, resolve_object_auth
+from .annotation import create_buildkite_annotation
+from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
 from .errors import ArtifactsError
 from .layout import key_join, scope
 from .log import fmt_size, log
-from .manifest import _upload_manifest
-from .retry import _with_retry
+from .manifest import upload_manifest
+from .retry import with_retry
 from .rules import is_excluded
 
 
@@ -111,7 +111,7 @@ def upload(
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def _do():
-            _s3_client(cfg, auth).upload_file(
+            s3_client(cfg, auth).upload_file(
                 str(f),
                 bucket,
                 key_join(pfx, rel),
@@ -119,7 +119,7 @@ def upload(
                 Config=tc,
             )
 
-        _with_retry(_do, rel)
+        with_retry(_do, rel)
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
@@ -141,7 +141,7 @@ def upload(
             "total_size_bytes": total_bytes,
             "base_dir": base_dir,
         }
-        _upload_manifest(bucket, pfx, manifest_payload, cfg, auth)
+        upload_manifest(bucket, pfx, manifest_payload, cfg, auth)
     except KeyboardInterrupt:
         # Hard exit: ThreadPoolExecutor.shutdown(wait=True) would block for minutes
         # waiting for in-flight transfers. 130 = POSIX SIGINT convention.
@@ -151,7 +151,7 @@ def upload(
     elapsed = time.monotonic() - t0
     avg_speed = total_bytes / elapsed if elapsed > 0 else 0
     if annotate:
-        _create_buildkite_annotation(cfg.artifacts_domain, pfx, relative_files_with_sizes)
+        create_buildkite_annotation(cfg.artifacts_domain, pfx, relative_files_with_sizes)
     else:
         log("  annotate=false; skipping Buildkite annotation")
     log(

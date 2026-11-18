@@ -4,13 +4,13 @@ prefix holds any object at all."""
 from botocore.exceptions import ClientError
 
 
-def _check_artifacts_exist(s3, bucket, prefix):
+def check_artifacts_exist(s3, bucket, prefix):
     """Check if any objects exist under the given prefix."""
     response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
     return response.get("KeyCount") > 0
 
 
-def _read_latest_successful(s3, bucket, key):
+def read_latest_successful(s3, bucket, key):
     """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
     (None, None) if absent. The pointer mtime is useful as a build-age proxy
     when the build itself has no manifest.json."""

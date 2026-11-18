@@ -11,7 +11,7 @@ BACKOFF_BASE = 5  # seconds; doubles each retry
 BACKOFF_CAP = 60  # 1 minute max sleep between retries
 
 
-def _with_retry(fn, description):
+def with_retry(fn, description):
     """Execute fn() with exponential backoff on transient errors.
 
     Retries up to MAX_RETRIES times. Sleep between attempts starts at BACKOFF_BASE

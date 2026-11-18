@@ -10,13 +10,13 @@ import json
 
 from botocore.exceptions import ClientError
 
-from .clients import _s3_client
+from .clients import s3_client
 from .layout import key_join
 
 
-def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
+def upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     manifest_key = key_join(prefix, "manifest.json")
-    _s3_client(cfg, auth).put_object(
+    s3_client(cfg, auth).put_object(
         Bucket=bucket,
         Key=manifest_key,
         Body=json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
@@ -24,7 +24,7 @@ def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
     )
 
 
-def _read_manifest(s3, bucket, prefix):
+def read_manifest_at(s3, bucket, prefix):
     """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
     error -- this is purely informational and must never break the download."""
     try:
@@ -42,5 +42,5 @@ def read_manifest(cfg, auth, bucket, resolved):
     It reads the manifest the way a download does. A caller must expect None: an
     upload that failed before its end leaves its files without a manifest.
     """
-    manifest = _read_manifest(_s3_client(cfg, auth), bucket, resolved.prefix)
+    manifest = read_manifest_at(s3_client(cfg, auth), bucket, resolved.prefix)
     return manifest if isinstance(manifest, dict) else None
