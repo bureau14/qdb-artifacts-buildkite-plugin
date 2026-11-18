@@ -12,6 +12,11 @@ DOMAIN = f"{CONFIG}/r2/artifacts-domain"
 SECRET_ACCESS_KEY = "/services/buildkite/credentials/artifacts/r2/secret-access-key"
 
 POINTER = "widget-build/refs/heads/master/variants/v/LATEST_SUCCESSFUL"
+R2_VALUES = [
+    ("ARTIFACTS_R2_ACCOUNT_ID", ACCOUNT_ID),
+    ("ARTIFACTS_R2_ACCESS_KEY_ID", ACCESS_KEY_ID),
+    ("ARTIFACTS_R2_SECRET_ACCESS_KEY", SECRET_ACCESS_KEY),
+]
 NO_STORE_ENV = {
     "ARTIFACTS_BACKEND": None,
     "ARTIFACTS_DESTINATION": None,
@@ -116,6 +121,39 @@ def test_an_empty_environment_value_falls_through_to_ssm(job, store, cli):
     assert parameters_read(store) == [DESTINATION]
 
 
+@pytest.mark.parametrize("variable, parameter", R2_VALUES)
+@pytest.mark.parametrize("backend", ["r2"])
+def test_an_empty_r2_variable_falls_through_to_ssm(job, store, cli, backend, variable, parameter):
+    store.put_parameter(parameter, "value-from-ssm", secure=parameter == SECRET_ACCESS_KEY)
+
+    outcome = promote(job.with_env(**{variable: ""}), cli)
+
+    assert outcome.code == 0, outcome.output
+    assert parameters_read(store) == [parameter]
+    assert store.get(POINTER) == job.env["BUILDKITE_BUILD_ID"].encode()
+
+
+def test_an_upload_allowed_to_be_empty_reads_no_store_configuration(
+    job, store, hook, denying_ssm_endpoint
+):
+    # Every SSM call fails here, so reading the configuration would fail the hook.
+    job = job.with_env(**NO_STORE_ENV, AWS_ENDPOINT_URL_SSM=denying_ssm_endpoint).with_plugin(
+        {
+            "upload": {
+                "variant": "v",
+                "git_ref": "refs/heads/master",
+                "files": "missing/*",
+                "allow_empty": True,
+            }
+        }
+    )
+
+    outcome = hook("post-command", job)
+
+    assert outcome.code == 0, outcome.output
+    assert store.requests == []
+
+
 @pytest.mark.parametrize("backend", ["r2"])
 def test_the_r2_endpoint_comes_from_the_environment_before_ssm(job, store, cli, backend):
     store.put_parameter(ENDPOINT_URL, "http://127.0.0.1:9/never-used")
@@ -165,14 +203,7 @@ def test_a_missing_destination_fails(job, store, cli):
     assert parameters_read(store) == [BACKEND, DESTINATION]
 
 
-@pytest.mark.parametrize(
-    "variable, parameter",
-    [
-        ("ARTIFACTS_R2_ACCOUNT_ID", ACCOUNT_ID),
-        ("ARTIFACTS_R2_ACCESS_KEY_ID", ACCESS_KEY_ID),
-        ("ARTIFACTS_R2_SECRET_ACCESS_KEY", SECRET_ACCESS_KEY),
-    ],
-)
+@pytest.mark.parametrize("variable, parameter", R2_VALUES)
 @pytest.mark.parametrize("backend", ["r2"])
 def test_r2_without_one_of_its_three_values_fails(job, store, cli, backend, variable, parameter):
     outcome = promote(job.with_env(**{variable: None}), cli)
@@ -184,14 +215,7 @@ def test_r2_without_one_of_its_three_values_fails(job, store, cli, backend, vari
 
 
 @pytest.mark.parametrize("prefix", ["SET_ME", "REPLACE_", "TODO", "CHANGEME", "FIXME"])
-@pytest.mark.parametrize(
-    "variable, parameter",
-    [
-        ("ARTIFACTS_R2_ACCOUNT_ID", ACCOUNT_ID),
-        ("ARTIFACTS_R2_ACCESS_KEY_ID", ACCESS_KEY_ID),
-        ("ARTIFACTS_R2_SECRET_ACCESS_KEY", SECRET_ACCESS_KEY),
-    ],
-)
+@pytest.mark.parametrize("variable, parameter", R2_VALUES)
 @pytest.mark.parametrize("backend", ["r2"])
 def test_an_r2_value_that_is_still_a_placeholder_fails(
     job, store, cli, backend, variable, parameter, prefix
