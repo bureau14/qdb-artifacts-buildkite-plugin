@@ -9,7 +9,7 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
 fi
 
 # Leave without starting Python when the step downloads nothing.
-if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PROJECTS_0_VARIANT:-}" ]]; then
+if ! plugin_has_any DOWNLOAD_PROJECTS_0_VARIANT; then
   exit 0
 fi
 
