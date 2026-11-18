@@ -1,4 +1,5 @@
 -r ../lib/requirements.txt
+-r ../lib/snapshot/requirements.txt
 moto[s3,ssm]>=5.1,<6
 flask
 flask-cors
