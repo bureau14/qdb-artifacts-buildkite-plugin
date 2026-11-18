@@ -327,7 +327,7 @@ the projects and never inside a build.
 The options `promote.snapshot` and `upload.snapshot` hold a key. The plan step
 of a build with snapshot dependencies writes them into the pipeline it uploads;
 a person never writes them. In a step whose `promote` block has a key and whose
-command passed, promote moves `LATEST_SUCCESSFUL` as always and then creates the
+command passed, promote moves `LATEST_SUCCESSFUL` and then creates the
 pointer of the variant, once: the first build of the key to promote the variant
 holds it, and a later build logs which build that is and leaves the pointer as
 it is. Nothing changes or removes a pointer.
@@ -341,8 +341,8 @@ five that every upload writes:
 - `downloads`: the builds the job downloaded by those of its own download
   options that name a build, `[{project_id, variant, git_ref, build_id}]`.
 
-Without a key, upload and promote write what they wrote before, request for
-request.
+Without a key, upload writes the files and the manifest of five fields, and
+promote writes only `LATEST_SUCCESSFUL`.
 
 ## Resolve and download artifacts outside the plugin
 

@@ -1,5 +1,5 @@
-"""A step that promotes in a build with a snapshot key: it moves LATEST_SUCCESSFUL
-as always, then creates the pointer of its variant, once. The first build of a
+"""A step that promotes in a build with a snapshot key: it moves LATEST_SUCCESSFUL,
+then creates the pointer of its variant, once. The first build of a
 key to promote a variant holds the pointer. Without a key nothing changes."""
 
 import datetime

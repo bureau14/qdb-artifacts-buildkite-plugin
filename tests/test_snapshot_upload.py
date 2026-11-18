@@ -1,6 +1,7 @@
 """An upload in a build with a snapshot key: its manifest also says where the files
 were made (source) and which builds the job downloaded by its own download
-options (downloads). Without a key the manifest is today's, byte for byte."""
+options (downloads). Without a key the manifest has the five fields every upload
+writes and nothing else."""
 
 import json
 
@@ -11,7 +12,7 @@ PREFIX = "widget-build/refs/heads/master/variants/linux/builds/01900000-0000-700
 MANIFEST = f"{PREFIX}/manifest.json"
 ENGINE_BUILD = "01900000-0000-7000-8000-0000000000e1"
 TESTS_BUILD = "01900000-0000-7000-8000-0000000000e2"
-TODAYS_FIELDS = ["file_count", "files", "uploaded_at", "total_size_bytes", "base_dir"]
+FIVE_FIELDS = ["file_count", "files", "uploaded_at", "total_size_bytes", "base_dir"]
 
 
 def upload_block(**upload):
@@ -45,12 +46,12 @@ def manifest_of(store):
     return body, json.loads(body)
 
 
-def test_the_manifest_gains_source_and_downloads_after_todays_fields(job, store, hook):
+def test_the_manifest_gains_source_and_downloads_after_the_five_fields(job, store, hook):
     outcome = upload(job, hook, upload_block(snapshot=KEY), DOWNLOADS)
 
     assert outcome.code == 0, outcome.output
     body, manifest = manifest_of(store)
-    assert list(manifest) == [*TODAYS_FIELDS, "source", "downloads"]
+    assert list(manifest) == [*FIVE_FIELDS, "source", "downloads"]
     assert manifest["source"] == {
         "schema": 1,
         "repository": job.env["BUILDKITE_REPO"],
@@ -78,16 +79,18 @@ def test_the_manifest_gains_source_and_downloads_after_todays_fields(job, store,
     assert body == json.dumps(manifest, separators=(",", ":")).encode()
 
 
-def test_without_a_key_the_manifest_is_todays_and_git_is_not_asked(job, store, hook, git):
+def test_without_a_key_the_manifest_has_the_five_fields_alone_and_git_is_not_asked(
+    job, store, hook, git
+):
     outcome = upload(job, hook, upload_block(), DOWNLOADS)
 
     assert outcome.code == 0, outcome.output
     body, manifest = manifest_of(store)
-    todays = (
+    five_fields = (
         '{"file_count":1,"files":["a.bin"],'
         f'"uploaded_at":"{manifest["uploaded_at"]}","total_size_bytes":1,"base_dir":null}}'
     )
-    assert body == todays.encode()
+    assert body == five_fields.encode()
     assert git.calls() == []
 
 

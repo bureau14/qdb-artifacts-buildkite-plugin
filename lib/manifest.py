@@ -53,7 +53,7 @@ class Provenance:
 
 def compose_manifest(files, total_size_bytes, base_dir, uploaded_at, provenance=None):
     """The manifest of an upload of files (paths relative to base_dir); with
-    provenance, after today's fields, where they were made."""
+    provenance, after the five fields every upload writes, where they were made."""
     manifest = {
         "file_count": len(files),
         "files": files,
