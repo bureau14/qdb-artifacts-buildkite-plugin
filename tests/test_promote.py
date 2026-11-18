@@ -81,19 +81,15 @@ def test_upload_and_promote_options_are_independent(job, store, hook):
     ]
 
 
-def test_the_command_line_takes_the_four_flags(job, store, cli):
-    outcome = cli(
-        job,
-        "promote",
-        "--variant",
-        "v",
-        "--git-ref",
-        "refs/tags/v1.0",
-        "--project-id",
-        "gizmo",
-        "--build-id",
-        "build-9",
+def test_the_command_line_takes_the_four_promote_options(job, store, cli):
+    job = job.with_options(
+        PROMOTE_VARIANT="v",
+        PROMOTE_GIT_REF="refs/tags/v1.0",
+        PROMOTE_PROJECT_ID="gizmo",
+        PROMOTE_BUILD_ID="build-9",
     )
+
+    outcome = cli(job, "post-command")
 
     assert outcome.code == 0, outcome.output
     assert store.get("gizmo/refs/tags/v1.0/variants/v/LATEST_SUCCESSFUL") == b"build-9"
@@ -102,36 +98,33 @@ def test_the_command_line_takes_the_four_flags(job, store, cli):
 def test_the_command_line_defaults_project_and_build_to_the_job(job, store, cli):
     job = job.with_env(BUILDKITE_PIPELINE_SLUG="gadget", BUILDKITE_BUILD_ID="build-3")
 
-    outcome = cli(job, "promote", "--variant", "v", "--git-ref", "refs/heads/master")
+    outcome = cli(
+        job.with_options(PROMOTE_VARIANT="v", PROMOTE_GIT_REF="refs/heads/master"), "post-command"
+    )
 
     assert outcome.code == 0, outcome.output
     assert store.get("gadget/refs/heads/master/variants/v/LATEST_SUCCESSFUL") == b"build-3"
 
 
 @pytest.mark.parametrize(
-    "args, env, facts",
+    "options, env, facts",
     [
-        (["--git-ref", "refs/heads/master"], {}, ["--variant"]),
-        (["--variant", "v"], {}, ["--git-ref"]),
+        ({"PROMOTE_VARIANT": "v"}, {}, ["--git-ref"]),
         (
-            ["--variant", "v", "--git-ref", "refs/heads/master"],
+            {"PROMOTE_VARIANT": "v", "PROMOTE_GIT_REF": "refs/heads/master"},
             {"BUILDKITE_PIPELINE_SLUG": None},
             ["--project-id", "BUILDKITE_PIPELINE_SLUG"],
         ),
         (
-            ["--variant", "v", "--git-ref", "refs/heads/master"],
+            {"PROMOTE_VARIANT": "v", "PROMOTE_GIT_REF": "refs/heads/master"},
             {"BUILDKITE_BUILD_ID": None},
             ["BUILDKITE_BUILD_ID", "--build-id"],
         ),
-        (["--variant", "v", "--force"], {}, ["--force"]),
-        (["--variant=v", "--git-ref", "refs/heads/master"], {}, ["--variant=v"]),
     ],
-    ids=["no-variant", "no-git-ref", "no-project", "no-build", "unknown-flag", "equals-form"],
+    ids=["no-git-ref", "no-project", "no-build"],
 )
-def test_the_command_line_refuses_incomplete_or_unknown_arguments(
-    job, store, cli, args, env, facts
-):
-    outcome = cli(job.with_env(**env), "promote", *args)
+def test_the_command_line_refuses_an_incomplete_promote_block(job, store, cli, options, env, facts):
+    outcome = cli(job.with_env(**env).with_options(**options), "post-command")
 
     assert outcome.code == 1
     for fact in facts:

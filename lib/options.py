@@ -2,11 +2,13 @@
 
 The agent flattens the step's plugin configuration into variables: a list as
 KEY_0, KEY_1, ..., a map as KEY_<NAME>, a boolean as "true" or "false". This
-module reads them back, and fills in what the job implies when an option is
-left out: its pipeline, its build and its ref.
+module reads them back, checks them, and fills in what the job implies when an
+option is left out: its pipeline, its build and its ref. What it returns are the
+arguments of upload(), promote() and download().
 """
 
 import os
+from pathlib import Path
 
 from .errors import ArtifactsError
 
@@ -136,3 +138,119 @@ def resolve_default_download_build_id(project_config, pipeline_name):
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
     return build_id
+
+
+def upload_requested():
+    """Whether the step names files to upload: an upload block without files
+    uploads nothing."""
+    return bool(_get_env_array("BUILDKITE_PLUGIN_QDB_ARTIFACTS_UPLOAD_", "FILES"))
+
+
+def upload_arguments():
+    """The upload block, checked and completed with the job's pipeline and build."""
+    upload_config = parse_upload_config_from_env()
+
+    pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
+    upload_parallel = int(upload_config.get("parallel") or "4")
+    upload_concurrency = int(upload_config.get("concurrency") or "32")
+
+    if not upload_config.get("git_ref"):
+        raise ArtifactsError(f"missing required git_ref in upload config: {upload_config}")
+    if not upload_config.get("variant"):
+        raise ArtifactsError(f"missing required variant in upload config: {upload_config}")
+
+    project_id = upload_config.get("project_id") or pipeline_name
+    if not project_id:
+        raise ArtifactsError("missing required project_id and BUILDKITE_PIPELINE_SLUG is not set")
+
+    build_id = upload_config.get("build_id") or os.environ.get("BUILDKITE_BUILD_ID")
+    if not build_id:
+        raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+
+    return {
+        "project_id": project_id,
+        "build_id": build_id,
+        "git_ref": upload_config["git_ref"],
+        "variant": upload_config["variant"],
+        "patterns": upload_config["files"],
+        "parallel": upload_parallel,
+        "concurrency": upload_concurrency,
+        "base_dir": upload_config["base_dir"],
+        "annotate": upload_config["annotate"],
+        "exclude_patterns": upload_config["exclude"],
+        "allow_empty": upload_config["allow_empty"],
+    }
+
+
+def promote_requested():
+    """Whether the step names a variant to promote."""
+    return bool(os.environ.get("BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_VARIANT"))
+
+
+def promote_arguments():
+    """The promote block, checked and completed with the job's pipeline and build."""
+    prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_PROMOTE_"
+    git_ref = os.environ.get(f"{prefix}GIT_REF")
+    if not git_ref:
+        raise ArtifactsError("missing required --git-ref argument")
+
+    project_id = os.environ.get(f"{prefix}PROJECT_ID") or os.environ.get("BUILDKITE_PIPELINE_SLUG")
+    if not project_id:
+        raise ArtifactsError(
+            "missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set"
+        )
+
+    build_id = os.environ.get(f"{prefix}BUILD_ID") or os.environ.get("BUILDKITE_BUILD_ID")
+    if not build_id:
+        raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+
+    return {
+        "project_id": project_id,
+        "build_id": build_id,
+        "git_ref": git_ref,
+        "variant": os.environ.get(f"{prefix}VARIANT"),
+    }
+
+
+def command_exit_status():
+    """The exit status of the step's command as the agent reports it; 0 when unset."""
+    return int(os.environ.get("BUILDKITE_COMMAND_EXIT_STATUS") or "0")
+
+
+def download_arguments():
+    """The download block, checked and completed with the job's defaults."""
+    download_config = parse_download_config_from_env()
+    projects_config = download_config["projects"]
+    if not projects_config:
+        raise ArtifactsError("no download projects configured")
+
+    pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
+    dirs_to_clean = set()
+
+    for p in projects_config:
+        if not p.get("git_ref"):
+            raise ArtifactsError(f"missing required git_ref in download project config: {p}")
+        if not p.get("variant"):
+            raise ArtifactsError(f"missing required variant in download project config: {p}")
+        if not p.get("files"):
+            p["files"] = ["*.tar.zst"]
+
+        project_id = p.get("project_id") or pipeline_name
+        if not project_id:
+            raise ArtifactsError(
+                "missing required project_id and BUILDKITE_PIPELINE_SLUG is not set"
+            )
+        p["resolved_project_id"] = project_id
+
+        p["resolved_build_id"] = resolve_default_download_build_id(p, pipeline_name)
+
+        out_dir = Path(p["output_dir"]).resolve()
+        if download_config["clean"]:
+            dirs_to_clean.add(out_dir)
+
+    return {
+        "projects_config": projects_config,
+        "dirs_to_clean": dirs_to_clean,
+        "parallel": download_config["parallel"],
+        "concurrency": download_config["concurrency"],
+    }

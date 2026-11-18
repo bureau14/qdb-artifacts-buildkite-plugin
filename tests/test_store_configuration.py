@@ -28,7 +28,9 @@ NO_STORE_ENV = {
 
 
 def promote(job, cli):
-    return cli(job, "promote", "--variant", "v", "--git-ref", "refs/heads/master")
+    return cli(
+        job.with_options(PROMOTE_VARIANT="v", PROMOTE_GIT_REF="refs/heads/master"), "post-command"
+    )
 
 
 def parameters_read(store):

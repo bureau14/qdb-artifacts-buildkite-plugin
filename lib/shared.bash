@@ -70,6 +70,19 @@ plugin_read_list() {
   fi
 }
 
+# True when at least one of the named options is set for this step.
+plugin_has_any() {
+  local name
+  for name in "$@"; do
+    if [[ -n "$(plugin_read_config "${name}" "")" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# One call per hook phase: "pre-command" or "post-command". What a phase does is
+# decided in lib/cli.py from the step's options, not here.
 run_artifacts_py() {
   "${VENV_BIN}/python" "${ARTIFACTS_PY}" "$@"
 }

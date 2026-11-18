@@ -1,168 +1,76 @@
-"""The command line the hooks call. Its commands:
+"""What each hook phase does, decided from the step's options:
 
-    upload [--report-empty]   exits 3 instead of 0 when allow_empty skipped
-                              an empty upload, so the hook leaves the pointer
-    download
-    promote --variant V --git-ref R [--project-id P] [--build-id B]
+    pre-command   download the step's download projects
+    post-command  upload, when the step names files; then promote, when the
+                  step names a variant to promote, its command passed and the
+                  upload was not empty
 
-The step's options come from the environment, as the agent sets them. An
-ArtifactsError of the library ends the command with "[artifacts] ERROR:
-<message>" and exit status 1.
+The hooks find Python and start this module with the name of their phase. The
+decisions are made here, in one process, so that whether to promote can depend
+on what the upload did. An ArtifactsError of the library ends the phase with
+"[artifacts] ERROR: <message>" and exit status 1.
 """
 
-import os
 import sys
-from pathlib import Path
 
 from .download import download
 from .errors import ArtifactsError
 from .options import (
-    parse_download_config_from_env,
-    parse_upload_config_from_env,
-    resolve_default_download_build_id,
+    command_exit_status,
+    download_arguments,
+    promote_arguments,
+    promote_requested,
+    upload_arguments,
+    upload_requested,
 )
 from .promote import promote
 from .upload import upload
 
 
-def run_command():
-    args = sys.argv[1:]
-    cmd = args.pop(0)
-    cmd_project_id = None
-    cmd_build_id = None
-    variant = None
-    git_ref = None
+def section(title):
+    """Open a collapsible section of the job log. Flushed at once, because the
+    agent shows it among the progress lines that go to stderr."""
+    print(f"~~~ {title}", flush=True)
 
-    if cmd == "upload":
-        # The hook uses exit code 3 to distinguish a skipped upload from a completed
-        # upload and preserve LATEST_SUCCESSFUL. Direct uploads still exit successfully.
-        report_empty = args == ["--report-empty"]
-        if args and not report_empty:
-            raise ArtifactsError(f"unknown upload arguments: {args}")
-        upload_config = parse_upload_config_from_env()
 
-        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
-        upload_parallel = int(upload_config.get("parallel") or "4")
-        upload_concurrency = int(upload_config.get("concurrency") or "32")
+def pre_command():
+    section(":arrow_down: Downloading artifacts")
+    download(**download_arguments())
+    return 0
 
-        if not upload_config.get("git_ref"):
-            raise ArtifactsError(f"missing required git_ref in upload config: {upload_config}")
-        if not upload_config.get("variant"):
-            raise ArtifactsError(f"missing required variant in upload config: {upload_config}")
-        if not upload_config.get("files"):
-            upload_config["files"] = ["*.tar.zst"]
 
-        project_id = upload_config.get("project_id") or pipeline_name
-        if not project_id:
-            raise ArtifactsError(
-                "missing required project_id and BUILDKITE_PIPELINE_SLUG is not set"
-            )
-        upload_config["resolved_project_id"] = project_id
+def post_command():
+    """Upload, then promote, in that order and each only when due.
 
-        build_id = upload_config.get("build_id") or os.environ.get("BUILDKITE_BUILD_ID")
-        if not build_id:
-            raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
-        upload_config["resolved_build_id"] = build_id
+    An upload runs also after a failed command: the files of a failed build are
+    evidence. Promoting says "this build is good to use", so it needs a passed
+    command and an upload that was not empty.
+    """
+    if upload_requested():
+        section(":arrow_up: Uploading artifacts")
+        if not upload(**upload_arguments()):
+            section("Skipping artifact promotion (empty upload)")
+            return 0
+    if not promote_requested():
+        return 0
+    status = command_exit_status()
+    if status != 0:
+        section(f":warning: Skipping artifact promotion (command exited {status})")
+        return 0
+    section(":pushpin: Promoting artifacts")
+    promote(**promote_arguments())
+    return 0
 
-        uploaded = upload(
-            upload_config["resolved_project_id"],
-            upload_config["resolved_build_id"],
-            upload_config["git_ref"],
-            upload_config["variant"],
-            upload_config["files"],
-            upload_parallel,
-            upload_concurrency,
-            upload_config["base_dir"],
-            upload_config["annotate"],
-            upload_config["exclude"],
-            allow_empty=upload_config["allow_empty"],
-        )
-        if report_empty and not uploaded:
-            sys.exit(3)
 
-    elif cmd == "promote":
-        # this is a separate variant because sometimes we want to
-        i = 0
-        while i < len(args):
-            if args[i] == "--variant":
-                variant = args[i + 1]
-                i += 2
-            elif args[i] == "--project-id":
-                cmd_project_id = args[i + 1]
-                i += 2
-            elif args[i] == "--build-id":
-                cmd_build_id = args[i + 1]
-                i += 2
-            elif args[i] == "--git-ref":
-                git_ref = args[i + 1]
-                i += 2
-            else:
-                raise ArtifactsError(f"unknown argument: {args[i]}")
-
-        if not variant:
-            raise ArtifactsError("missing required --variant argument")
-        if not git_ref:
-            raise ArtifactsError("missing required --git-ref argument")
-
-        project_id = cmd_project_id or os.environ.get("BUILDKITE_PIPELINE_SLUG")
-        if not project_id:
-            raise ArtifactsError(
-                "missing required --project-id argument and BUILDKITE_PIPELINE_SLUG is not set"
-            )
-
-        build_id = cmd_build_id or os.environ.get("BUILDKITE_BUILD_ID")
-        if not build_id:
-            raise ArtifactsError(
-                "BUILDKITE_BUILD_ID is not set and no --build-id override was given"
-            )
-
-        promote(project_id, build_id, git_ref, variant)
-
-    elif cmd == "download":
-        download_config = parse_download_config_from_env()
-        projects_config = download_config["projects"]
-        if not projects_config:
-            raise ArtifactsError("no download projects configured")
-
-        pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
-        dirs_to_clean = set()
-
-        for p in projects_config:
-            if not p.get("git_ref"):
-                raise ArtifactsError(f"missing required git_ref in download project config: {p}")
-            if not p.get("variant"):
-                raise ArtifactsError(f"missing required variant in download project config: {p}")
-            if not p.get("files"):
-                p["files"] = ["*.tar.zst"]
-
-            project_id = p.get("project_id") or pipeline_name
-            if not project_id:
-                raise ArtifactsError(
-                    "missing required project_id and BUILDKITE_PIPELINE_SLUG is not set"
-                )
-            p["resolved_project_id"] = project_id
-
-            p["resolved_build_id"] = resolve_default_download_build_id(p, pipeline_name)
-
-            out_dir = Path(p["output_dir"]).resolve()
-            if download_config["clean"]:
-                dirs_to_clean.add(out_dir)
-
-        download(
-            projects_config,
-            dirs_to_clean,
-            download_config["parallel"],
-            download_config["concurrency"],
-        )
-
-    else:
-        raise ArtifactsError(f"unknown command: {cmd}")
+PHASES = {"pre-command": pre_command, "post-command": post_command}
 
 
 def main():
+    argv = sys.argv[1:]
     try:
-        run_command()
+        if len(argv) != 1 or argv[0] not in PHASES:
+            raise ArtifactsError(f"expected one of {sorted(PHASES)}, got {argv}")
+        return PHASES[argv[0]]()
     except ArtifactsError as error:
         print(f"[artifacts] ERROR: {error}", file=sys.stderr)
         return 1
-    return 0

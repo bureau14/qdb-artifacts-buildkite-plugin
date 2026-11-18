@@ -304,8 +304,10 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 | Hook            | Trigger                 | Action                                                                                                                                                                       |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `post-checkout` | After repo checkout     | Creates/updates a Python venv in `<plugin-dir>/.venv` with dependencies from `lib/requirements.txt`. Uses `flock` to prevent races when multiple jobs run on the same agent. |
-| `pre-command`   | Before the step command | If `download` is configured, downloads (and optionally extracts) artifacts from the specified step.                                                                          |
-| `post-command`  | After the step command  | If `upload` is configured, uploads matched files to S3/R2, including after a failed command. Promotion runs only after a successful command.                                  |
+| `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                    |
+| `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty. |
+
+`pre-command` and `post-command` only find Python and start `artifacts.py` with the name of their phase; `lib/cli.py` decides what the phase runs.
 
 ### Failed builds
 

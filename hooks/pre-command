@@ -8,12 +8,10 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
   set -x
 fi
 
-# Exit early if no download projects configured
+# Leave without starting Python when the step downloads nothing.
 if [[ -z "${BUILDKITE_PLUGIN_QDB_ARTIFACTS_DOWNLOAD_PROJECTS_0_VARIANT:-}" ]]; then
   exit 0
 fi
 
-echo "~~~ :arrow_down: Downloading artifacts"
-
-run_artifacts_py download
+run_artifacts_py pre-command
 
