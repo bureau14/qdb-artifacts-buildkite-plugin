@@ -44,14 +44,27 @@ def test_upload_refuses_an_incomplete_configuration(job, store, cli, removed, fa
     assert store.requests == []
 
 
-def test_a_non_empty_upload_exits_0_even_when_asked_to_report_empty(job, store, cli):
+def test_a_non_empty_upload_allowed_to_be_empty_is_uploaded_annotated_and_promoted(
+    job, store, cli, agent
+):
     job.write("a.bin", b"a")
-    job = upload_options(job, UPLOAD_FILES="a.bin", UPLOAD_ALLOW_EMPTY="true")
+    job = upload_options(
+        job,
+        UPLOAD_FILES="a.bin",
+        UPLOAD_ALLOW_EMPTY="true",
+        PROMOTE_VARIANT="linux",
+        PROMOTE_GIT_REF="refs/heads/master",
+    )
 
     outcome = cli(job, "post-command")
 
     assert outcome.code == 0, outcome.output
-    assert f"{PREFIX}/a.bin" in store.stored_keys()
+    assert store.stored_keys() == [
+        "widget-build/refs/heads/master/variants/linux/LATEST_SUCCESSFUL",
+        f"{PREFIX}/a.bin",
+        f"{PREFIX}/manifest.json",
+    ]
+    assert [call.argv[0] for call in agent.calls()] == ["annotate"]
 
 
 def test_download_without_projects_fails(job, store, cli):
