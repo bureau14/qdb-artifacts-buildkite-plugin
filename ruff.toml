@@ -1,5 +1,2 @@
 target-version = "py39"
 line-length = 100
-
-[lint.per-file-ignores]
-"artifacts.py" = ["E402"]

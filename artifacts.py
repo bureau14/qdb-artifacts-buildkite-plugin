@@ -8,7 +8,7 @@ modules inside `lib` can import each other relatively. The hooks need no
 PYTHONPATH, so nothing depends on how Git Bash translates path lists on Windows.
 """
 
-from lib.artifacts import main
+from lib.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

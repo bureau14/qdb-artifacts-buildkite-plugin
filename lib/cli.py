@@ -1,20 +1,11 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+"""The command line the hooks call. Its commands:
 
-"""Artifact upload/download for Buildkite CI pipelines (AWS S3 + Cloudflare R2).
+    upload [--report-empty]   exits 3 instead of 0 when allow_empty skipped
+                              an empty upload, so the hook leaves the pointer
+    download
+    promote --variant V --git-ref R [--project-id P] [--build-id B]
 
-Replaces Buildkite's native artifact handling with backend choice (S3/R2), streaming
-in-memory extraction, entry-level filtering, and two-level parallel transfers.
-
-Usage
------
-    # upload (build step)
-    python3 .buildkite/tools/artifacts.py upload 'artifacts/**/*.tar.zst'
-
-    # download + extract (test step, cross-step, entry-filtered)
-    python3 .buildkite/tools/artifacts.py download \\
-        --variant build-linux-amd64-release --extract --clean --output-dir artifacts \\
-        '*-c-api.tar.zst!lib/*' '*-server.tar.zst!bin/*' '*-tests.tar.zst!bin/*'
+The step's options come from the environment, as the agent sets them.
 """
 
 import os
