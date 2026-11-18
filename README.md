@@ -228,6 +228,9 @@ plugins:
 | `download`   | object  | Download configuration block.                                      |
 | `promote`    | object  | Updates the LATEST_SUCCESSFUL pointer.                             |
 | `debug`      | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`. |
+| `plan`       | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
+| `resume`     | string  | Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies). |
+| `leave`      | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that runs after every other step and records which variants did not pass. See [Snapshot dependencies](#snapshot-dependencies). |
 
 ### `upload` object keys
 
@@ -311,6 +314,8 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 `pre-command` and `post-command` only find Python and start `artifacts.py` with the name of their phase; `lib/cli.py` decides what the phase runs.
 
+On a gate step of a build with snapshot dependencies (option `plan`, `resume` or `leave`), `post-command` runs the gate command of the step, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform.
+
 ### Failed builds
 
 If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
@@ -343,6 +348,179 @@ five that every upload writes:
 
 Without a key, upload writes the files and the manifest of five fields, and
 promote writes only `LATEST_SUCCESSFUL`.
+
+## Snapshot dependencies
+
+A build that downloads the artifacts of another pipeline gets them from the
+build of exactly the commits its root planned, and every job of a chain of
+builds downloads the same build of them. A repository configures nothing for
+this beyond what its step templates already say: which project each step
+downloads.
+
+### Words
+
+- A **project** is a Buildkite pipeline, named by its slug. A **variant** is
+  the files of a project for one platform, such as `linux-amd64-release`.
+- A **snapshot** of a project is one commit of it together with one snapshot
+  of every project it depends on. Its **key** is a hash of exactly that, so it
+  is a function of git commits alone.
+- The **pointer** says which build holds one variant of a snapshot. The step
+  that promotes the variant writes it, once, and nothing changes it.
+- A **root** is a build without `SNAPSHOT_PLAN` in its environment: one
+  started by a person, a push or a schedule. Its plan step makes the **plan**:
+  the commit, the key and the label of every project of its snapshot tree.
+  A **chain node** is a build that a trigger step started for the plan, with
+  `SNAPSHOT_PLAN` in its environment; a **chain** is a root and its chain
+  nodes.
+- The **label** of a node is the branch name its build runs under, uploads
+  under and moves `LATEST_SUCCESSFUL` of: its own branch when the build is the
+  one its own pipeline would make for that branch, else `snapshot/<root
+  branch>`, a name no branch has.
+
+### Two types of dependency
+
+A download entry of another project in a committed template under
+`.buildkite/` declares a dependency. Whether it names a build gives its type.
+
+A **snapshot** dependency names none:
+
+```yaml
+download:
+  projects:
+    - project_id: "quasardb"
+      variant: "linux-amd64-release"
+      git_ref: "{git_ref}"
+      files: ["*-c-api.tar.zst"]
+```
+
+Before any job runs, the plan step writes the build of the planned snapshot
+into the entry: `build_id`, its `git_ref` and `require_strict_ref_match: true`.
+A `git_ref` that is literal text, such as `refs/heads/3.14.x`, is a pin: the
+project is planned at that ref for the whole chain.
+
+A **latest successful** dependency names its build:
+
+```yaml
+download:
+  projects:
+    - project_id: "quasardb"
+      build_id: "LATEST_SUCCESSFUL"
+      variant: "linux-amd64-release"
+      git_ref: "{git_ref}"
+      files: ["*-c-api.tar.zst"]
+```
+
+It is not planned, not triggered and part of no key: the plan step leaves the
+entry as generated, and the job downloads the newest good build of the ref,
+as before. A snapshot tree never contains one. A project whose templates hold
+a latest successful dependency has no snapshot: as a root it is built every
+time and its snapshot dependencies are planned all the same, and no project
+can take it as a snapshot dependency.
+
+### What a repository changes to adopt
+
+- Its `.buildkite/pipeline.py` hands its pipeline to the runner of
+  `qdb_pipeline` (qdb-cicd-tools): it imports `run` at module level without
+  an alias, and ends with exactly one main block that holds exactly this call:
+
+  ```python
+  from qdb_pipeline import run
+
+  ...
+
+  if __name__ == "__main__":
+      run(generate_pipeline)
+  ```
+
+- The first step of its Buildkite configuration runs
+  `.buildkite/pipeline.py | buildkite-agent pipeline upload`.
+- Every download of another project that its generated pipeline makes is in a
+  committed template, with the same type. The plan step fails a build whose
+  pipeline breaks this rule, and names the step and the project.
+- A project that others take as a snapshot dependency holds no latest
+  successful dependency itself.
+
+A dependency that cannot give a snapshot fails the plan of the root before
+anything is triggered. The message names who needs it, which condition failed
+and the way out, which always includes this one: the consumer takes it as a
+latest successful dependency.
+
+### How a build runs
+
+1. The pipeline's first step prints the gate in place of the pipeline: an
+   enter step, which carries `plan`, and a leave step, which carries `leave`.
+   Both are in one concurrency group per pipeline and commit, so one build of a
+   commit passes the gate at a time.
+2. Enter: its command generates the pipeline, then the plugin plans. A root
+   makes the plan and keeps it as meta-data of its own build; a chain node
+   reads its root's. A build whose every variant asked for has a pointer at its
+   key is reused and builds nothing. Else the dependencies that lack a variant
+   are triggered, with a resume step that carries `resume`. Else the pipeline
+   is uploaded with one build of every snapshot dependency written into it.
+3. Resume: once the triggered builds have ended, it uploads the pipeline, or
+   fails and names the dependency that failed.
+4. The jobs run as ever. A step that promotes writes the pointer of its
+   variant after its command passed.
+5. Leave runs after every other step and records the variants whose step did
+   not pass.
+
+A key some of whose variants exist builds only what is missing: a step all of
+whose variants exist is replaced by one that names the build that holds them.
+
+### Variables a person can set
+
+| Variable               | Effect                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `SNAPSHOT_REBUILD=1`   | The root builds again, under a key no earlier build has; its dependencies are reused.     |
+| `SNAPSHOT_REBUILD=all` | Every node of the tree builds again. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
+| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                 |
+
+The plan step of a root asks Buildkite's API (`read_pipelines`) for the
+repository and the first step of every pipeline of its tree, with the token in
+`ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter
+`/services/buildkite/credentials/artifacts/buildkite-api-token`. A chain node
+asks nothing.
+
+### What is stored, and where
+
+| What           | Where                                                                                | Written                                       |
+| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------- |
+| pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket                 | once, by the step that promotes the variant   |
+| failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket              | once, by a gate step of a build that has a key |
+| plan           | meta-data `snapshot-plan` of the root build                                          | once, by the root's enter step                |
+| marks          | meta-data `snapshot-mode`, `snapshot-promotes` and `snapshot-uploaded-<step key>`    | by the gate steps of each build               |
+| arrival        | meta-data `snapshot-arrived`                                                         | by the runner, when it prints the gate        |
+
+A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
+uuid, and `SNAPSHOT_NEEDS`, the variants its consumer downloads. The plan goes
+away with the root build; a pointer and a failure record stay.
+
+### What a failed build shows
+
+A build that failed for its snapshot says why on its build page. A failure of
+its own names the steps that did not pass; a dependency that failed is
+followed down its failure records to the builds that failed. The annotation
+ends: "To retry: retry the failed job in `<pipeline>` `<number>`. When it
+passes, start a new build of `<root pipeline>`. Everything that passed is
+reused." A build that waited at the gate behind a build of the same key that
+failed shares that failure instead of compiling it again, and within one chain
+a key is built at most once.
+
+### Limits
+
+- The gate steps run on the Linux agents of the default queue; the steps that
+  upload, download and promote run on every platform, as before.
+- A plan is at most 102400 bytes, the size of one meta-data value; a larger
+  plan fails the root and says how large it is.
+- A template larger than 1 MiB, or one that holds a YAML anchor or alias, does
+  not parse; a project id is a pipeline slug.
+- A root whose pipeline is a selection (`QDB_PIPELINE_FILTER`, or a build
+  message that selects), one with `SNAPSHOT_DISABLE=1`, and one on a branch its
+  repository does not have (a release build on a tag) run their plain pipeline.
+  A chain node never does.
+- What a latest successful dependency downloads is decided when its job runs,
+  as before.
+- No repository may have a branch under `snapshot/`; nothing checks that.
 
 ## Resolve and download artifacts outside the plugin
 

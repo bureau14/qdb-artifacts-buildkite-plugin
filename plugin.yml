@@ -92,7 +92,7 @@ configuration:
                 description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
               build_id:
                 type: string
-                description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id and git_ref match the current pipeline/ref, else LATEST_SUCCESSFUL."
+                description: "Build identifier to download from. For the pipeline's own project it defaults to BUILDKITE_BUILD_ID when git_ref is the current ref. For another project it sets the type of the dependency: left out, a snapshot dependency, whose build the plan step writes here in a build with snapshot dependencies (in any other build it is LATEST_SUCCESSFUL, as before); written, as LATEST_SUCCESSFUL, a latest successful dependency, which is never planned."
               variant:
                 type: string
                 description: "Build variant key to download from (cross-step)"
