@@ -113,6 +113,19 @@ def test_project_id_and_the_undeclared_build_id_option_override_the_job(job, sto
     ]
 
 
+def test_a_build_id_option_of_latest_successful_names_a_build_like_any_other(job, store, hook):
+    # The kind of a key follows from what is written, never from the build id's value.
+    job.write("a.bin", b"a")
+
+    upload(job, hook, files="a.bin", build_id="LATEST_SUCCESSFUL")
+
+    builds = "widget-build/refs/heads/master/variants/linux-amd64-release/builds"
+    assert store.stored_keys() == [
+        f"{builds}/LATEST_SUCCESSFUL/a.bin",
+        f"{builds}/LATEST_SUCCESSFUL/manifest.json",
+    ]
+
+
 def test_artifact_is_sent_with_its_file_name_as_disposition_and_no_content_type(job, store, hook):
     job.write("artifacts/widget-server.tar.zst", b"server")
 
