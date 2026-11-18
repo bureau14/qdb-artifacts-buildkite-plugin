@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -870,12 +871,25 @@ def run_hook(name, job, timeout=HOOK_TIMEOUT, root=PLUGIN_ROOT):
     return run_process(hook_argv(name, root), job, timeout)
 
 
+def wait_while_running(process, event, timeout):
+    """Wait for the event; give up as soon as the process has ended or time is up."""
+    deadline = time.monotonic() + timeout
+    while not event.wait(0.1):
+        if process.poll() is not None or time.monotonic() > deadline:
+            return False
+    return True
+
+
+def output_of_ended_or_stopped(process):
+    return process.communicate() if process.poll() is not None else stop_process_group(process)
+
+
 def run_hook_midway(name, job, when, act, timeout=HOOK_TIMEOUT):
     """Run a hook and, once the event `when` is set, call act(process) while it runs."""
     argv = hook_argv(name, PLUGIN_ROOT)
     process = start_process(argv, job)
-    if not when.wait(timeout):
-        _, stderr = stop_process_group(process)
+    if not wait_while_running(process, when, timeout):
+        _, stderr = output_of_ended_or_stopped(process)
         pytest.fail(f"{argv[:3]} never got to the awaited point\n{decode_output(stderr)}")
     act(process)
     return finish_process(process, argv, timeout)
