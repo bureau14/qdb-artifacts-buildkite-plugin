@@ -97,13 +97,7 @@ from botocore.exceptions import ClientError
 from .clients import _s3_client, aws_clients, resolve_object_auth
 from .errors import die
 from .log import fmt_size, log
-
-# ---------------------------------------------------------------------------
-# Timeout / retry constants
-# ---------------------------------------------------------------------------
-MAX_RETRIES = 10
-BACKOFF_BASE = 5  # seconds; doubles each retry
-BACKOFF_CAP = 60  # 1 minute max sleep between retries
+from .retry import _with_retry
 
 # ---------------------------------------------------------------------------
 # SSM parameter paths
@@ -153,29 +147,6 @@ class ResolvedArtifact:
     rel: str
     size: int
     entry_rules: list[tuple[str | None, str | None]]
-
-
-def _with_retry(fn, description):
-    """Execute fn() with exponential backoff on transient errors.
-
-    Retries up to MAX_RETRIES times. Sleep between attempts starts at BACKOFF_BASE
-    seconds and doubles each time, capped at BACKOFF_CAP.
-
-    Backoff schedule (defaults): 5 → 10 → 20 → 40 → 60 → 60 → … seconds.
-    """
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            return fn()
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:
-            if attempt == MAX_RETRIES:
-                log(f"  FAILED after {MAX_RETRIES} attempts: {description}")
-                raise
-            sleep = min(BACKOFF_BASE * (2 ** (attempt - 1)), BACKOFF_CAP)
-            log(f"  attempt {attempt}/{MAX_RETRIES} failed for {description}: {exc}")
-            log(f"  retrying in {sleep}s...")
-            time.sleep(sleep)
 
 
 def _ssm_get_optional(ssm, name, with_decryption=True):
