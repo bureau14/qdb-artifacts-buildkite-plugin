@@ -243,6 +243,7 @@ plugins:
 | `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
 | `annotate`    | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
 | `allow_empty` | boolean |          | Skip upload without error when no files match or all matches are excluded. Default: `false`. |
+| `snapshot`    | string  |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
 
 ### `promote` object keys
 
@@ -251,6 +252,7 @@ plugins:
 | `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_NAME`.        |
 | `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                          |
 | `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                  |
+| `snapshot`   | string |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
 
 ### `download` object keys
 
@@ -312,6 +314,35 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 ### Failed builds
 
 If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
+
+### Snapshots
+
+A **snapshot** of a project is one commit of it together with one snapshot of
+every project it depends on. Its **key** is a hash of exactly that, so it is a
+function of git commits alone. The **pointer** says which build holds one
+variant of a snapshot: the object
+`_snapshot/v1/pointers/<project>/<key>/<variant>.json` of the bucket, beside
+the projects and never inside a build.
+
+The options `promote.snapshot` and `upload.snapshot` hold a key. The plan step
+of a build with snapshot dependencies writes them into the pipeline it uploads;
+a person never writes them. In a step whose `promote` block has a key and whose
+command passed, promote moves `LATEST_SUCCESSFUL` as always and then creates the
+pointer of the variant, once: the first build of the key to promote the variant
+holds it, and a later build logs which build that is and leaves the pointer as
+it is. Nothing changes or removes a pointer.
+
+An upload whose block has a key adds two fields to `manifest.json`, after the
+five that every upload writes:
+
+- `source`: where the files were made,
+  `{schema, repository, commit, pipeline, build_number, build_id, job_id, snapshot}`;
+  `commit` is `git rev-parse HEAD` of the job's checkout.
+- `downloads`: the builds the job downloaded by those of its own download
+  options that name a build, `[{project_id, variant, git_ref, build_id}]`.
+
+Without a key, upload and promote write what they wrote before, request for
+request.
 
 ## Resolve and download artifacts outside the plugin
 
@@ -412,6 +443,9 @@ manifest = read_manifest(cfg, auth, bucket, resolved)
 
 It returns `None` when the build has no manifest that reads as a JSON object,
 for example when its upload failed before the end.
+
+The manifest of a build uploaded with a snapshot key also has the fields
+`source` and `downloads` (see [Snapshots](#snapshots)).
 
 ### Errors
 
