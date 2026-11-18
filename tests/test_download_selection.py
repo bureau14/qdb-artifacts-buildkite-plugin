@@ -183,6 +183,42 @@ def test_clean_empties_every_project_output_dir_before_the_first_download(job, s
     assert job.files() == ["first/a.bin", "untouched/stale.txt"]
 
 
+def test_clean_of_an_output_dir_that_does_not_exist_yet_just_downloads_into_it(job, store, hook):
+    put_objects(store, ["a.bin"])
+
+    outcome = download(job, hook, project(files=["*.bin"], **{"output-dir": "fresh"}), clean=True)
+
+    assert outcome.code == 0, outcome.output
+    assert job.files() == ["fresh/a.bin"]
+
+
+def test_clean_empties_a_shared_output_dir_once_so_every_project_lands_in_it(job, store, hook):
+    put_objects(store, ["a.bin"])
+    store.put(f"gizmo/{MASTER}/variants/linux/builds/b-2/g.bin", b"g")
+    job.write("shared/stale.txt", b"s")
+
+    outcome = download(
+        job,
+        hook,
+        project(files=["*.bin"], **{"output-dir": "shared"}),
+        project(project_id="gizmo", build_id="b-2", files=["*.bin"], **{"output-dir": "shared"}),
+        clean=True,
+    )
+
+    assert outcome.code == 0, outcome.output
+    assert job.files("shared") == ["a.bin", "g.bin"]
+
+
+def test_clean_false_keeps_what_the_output_dir_holds(job, store, hook):
+    put_objects(store, ["a.bin"])
+    job.write("out/keep.txt", b"keep")
+
+    outcome = download(job, hook, project(files=["*.bin"], **{"output-dir": "out"}), clean=False)
+
+    assert outcome.code == 0, outcome.output
+    assert job.files("out") == ["a.bin", "keep.txt"]
+
+
 def test_clean_without_output_dir_deletes_the_checkout_and_then_fails(job, store, hook):
     put_objects(store, ["a.bin"])
     job.write("source.c", b"int main;")
