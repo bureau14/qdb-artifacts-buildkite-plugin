@@ -12,6 +12,7 @@ when the build was started for a branch rather than a commit.
 """
 
 import datetime
+import functools
 import os
 import re
 import subprocess
@@ -259,7 +260,11 @@ def upload_requested():
 
 
 def upload_arguments():
-    """The upload block, checked and completed with the job's pipeline and build."""
+    """The upload block, checked and completed with the job's pipeline and build.
+
+    The provenance of a step with a key is a function, which upload calls once it
+    has files: an upload that is allowed to be empty asks git nothing.
+    """
     upload_config = parse_upload_config_from_env()
 
     pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
@@ -293,7 +298,9 @@ def upload_arguments():
         "annotate": upload_config["annotate"],
         "exclude_patterns": upload_config["exclude"],
         "allow_empty": upload_config["allow_empty"],
-        "provenance": None if key is None else upload_provenance(key, build_id),
+        "read_provenance": (
+            None if key is None else functools.partial(upload_provenance, key, build_id)
+        ),
     }
 
 

@@ -31,12 +31,13 @@ def upload(
     annotate=True,
     exclude_patterns=None,
     allow_empty=False,
-    provenance=None,
+    read_provenance=None,
 ):
     """Glob files and upload to the current build/variant prefix. CWD-relative paths
     become the S3 key suffix, preserving directory structure.
     Uploads a manifest.json file containing metadata about the uploaded files once all uploads are complete.
-    With provenance, the manifest also says where the files were made.
+    With read_provenance, the manifest also says where the files were made: it is
+    called once there are files to upload, before any request.
 
     Creds are minted once before the pool -- for R2, ensure TTL covers the full upload.
     Returns True after uploading, or False when allow_empty skips an empty upload.
@@ -85,6 +86,8 @@ def upload(
         raise ArtifactsError(
             f"no files left after applying exclude patterns: {exclude_patterns or []}"
         )
+
+    provenance = None if read_provenance is None else read_provenance()
 
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)

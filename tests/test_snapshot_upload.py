@@ -133,6 +133,23 @@ def test_the_upload_of_a_failed_command_records_its_source_too(job, store, hook)
 
 
 @pytest.mark.parametrize(
+    "files, exclude",
+    [("missing/*", []), ("a.bin", ["*.bin"])],
+    ids=["nothing-matched", "all-excluded"],
+)
+def test_an_allowed_empty_upload_with_a_key_asks_git_nothing_and_needs_no_checkout(
+    job, store, hook, git, files, exclude
+):
+    block = upload_block(snapshot=KEY, files=files, exclude=exclude, allow_empty=True)
+
+    outcome = upload(job.with_env(FAKE_GIT_HEAD=None), hook, block)
+
+    assert outcome.code == 0, outcome.output
+    assert store.requests == []
+    assert git.calls() == []
+
+
+@pytest.mark.parametrize(
     "env, named",
     [
         ({"FAKE_GIT_HEAD": None}, "git rev-parse HEAD"),
