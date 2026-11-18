@@ -6,4 +6,5 @@ pointer and the library's error (``forms``, ``pointer``, ``errors``), so that
 the plan step reads a value by the form the job that wrote it checked.
 
 - ``canonical``: canonical JSON and the key of a snapshot.
+- ``shown``: how a foreign value appears in a message.
 """
