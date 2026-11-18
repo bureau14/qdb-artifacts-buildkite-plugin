@@ -20,6 +20,8 @@ steps:
   - label: "Characterisation tests (Python 3.9)"
     timeout_in_minutes: 20
     command: |
+      # the planning half's tests read local repositories with git, which the image lacks
+      apt-get update -qq && apt-get install -y -qq --no-install-recommends git
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server
       python -B -m pytest -p no:cacheprovider tests
@@ -32,8 +34,10 @@ steps:
     timeout_in_minutes: 20
     command: |
       pip install -r tests/requirements.txt
-      # hooks, command line and library against a local S3 and SSM server
-      python -B -m pytest -p no:cacheprovider tests
+      # hooks, command line and library against a local S3 and SSM server; the
+      # planning half extracts no archive, and its tests need a git that the
+      # Debian of this image no longer installs
+      python -B -m pytest -p no:cacheprovider tests --ignore=tests/snapshot
     plugins:
       - docker#v5.13.0:
           image: "python:3.9.16-slim"
@@ -42,6 +46,8 @@ steps:
   - label: "Characterisation tests (Python 3.14)"
     timeout_in_minutes: 20
     command: |
+      # the planning half's tests read local repositories with git, which the image lacks
+      apt-get update -qq && apt-get install -y -qq --no-install-recommends git
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server
       python -B -m pytest -p no:cacheprovider tests
