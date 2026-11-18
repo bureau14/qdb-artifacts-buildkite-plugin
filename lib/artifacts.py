@@ -95,6 +95,7 @@ from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
 from .clients import _s3_client, aws_clients, resolve_object_auth
+from .errors import die
 
 # ---------------------------------------------------------------------------
 # Timeout / retry constants
@@ -151,11 +152,6 @@ class ResolvedArtifact:
     rel: str
     size: int
     entry_rules: list[tuple[str | None, str | None]]
-
-
-def die(msg):
-    print(f"[artifacts] ERROR: {msg}", file=sys.stderr)
-    sys.exit(1)
 
 
 def log(msg):
