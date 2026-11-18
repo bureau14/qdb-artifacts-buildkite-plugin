@@ -101,6 +101,7 @@ class StoreRequest:
     service: str
     content_type: str
     content_disposition: str
+    if_none_match: str
     target: str
     body: dict
     arrived_at: datetime.datetime
@@ -143,6 +144,7 @@ def describe_request(environ):
         service=service,
         content_type=environ.get("CONTENT_TYPE", ""),
         content_disposition=environ.get("HTTP_CONTENT_DISPOSITION", ""),
+        if_none_match=environ.get("HTTP_IF_NONE_MATCH", ""),
         target=target,
         body=read_json_body(environ) if target else {},
         arrived_at=utc_now(),

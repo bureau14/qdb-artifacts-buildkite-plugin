@@ -5,8 +5,9 @@ listing one per page). Files of a build travel through boto3's transfer
 manager instead, in `upload` and `download`.
 
 An object that is not there is not an error: `get` says so with None, because
-a missing pointer or manifest is an answer the callers act on. Every other
-error of the store is raised as boto3 raised it.
+a missing pointer or manifest is an answer the callers act on. Nor is an object
+that is there already when `create` wants to write it: create says so with
+False. Every other error of the store is raised as boto3 raised it.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from botocore.exceptions import ClientError
 
 ABSENT = ("NoSuchKey", "404")
+TAKEN = ("PreconditionFailed", "412")
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,24 @@ class Store:
 
     def put(self, key: str, body: bytes, content_type: str) -> None:
         self.client.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType=content_type)
+
+    def create(self, key: str, body: bytes, content_type: str) -> bool:
+        """Put body at key only when the bucket holds no object there; whether this
+        call created it. The store decides (If-None-Match: *), so of two writers
+        the first wins and the second learns it, and nothing is overwritten."""
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
+                IfNoneMatch="*",
+            )
+            return True
+        except ClientError as error:
+            if error_code(error) in TAKEN:
+                return False
+            raise
 
     def list(self, prefix: str, limit: int | None = None) -> list[tuple[str, int]]:
         """(key, size) of every object whose key starts with prefix, in key order.
