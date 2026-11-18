@@ -11,6 +11,11 @@ def upload_options(job, **extra):
     )
 
 
+def before_quoted_configuration(error):
+    """The error up to the plugin configuration it may quote, which names every option."""
+    return error.split("{", 1)[0]
+
+
 def test_an_unknown_command_fails(job, store, cli):
     outcome = cli(job, "frobnicate")
 
@@ -36,13 +41,18 @@ def test_upload_without_files_option_takes_tar_zst_files_of_the_checkout(job, st
     assert store.stored_keys() == [f"{PREFIX}/manifest.json", f"{PREFIX}/widget.tar.zst"]
 
 
-def test_upload_accepts_only_the_report_empty_argument(job, store, cli):
+@pytest.mark.parametrize(
+    "args",
+    [["--force"], ["--report-empty", "--force"], ["--force", "--report-empty"]],
+    ids=["other", "report-empty-first", "report-empty-last"],
+)
+def test_upload_accepts_only_the_report_empty_argument(job, store, cli, args):
     job.write("a.bin", b"a")
 
-    outcome = cli(upload_options(job, UPLOAD_FILES="a.bin"), "upload", "--force")
+    outcome = cli(upload_options(job, UPLOAD_FILES="a.bin"), "upload", *args)
 
     assert outcome.code == 1
-    assert "--force" in outcome.stderr
+    assert "--force" in outcome.error
     assert store.requests == []
 
 
@@ -63,7 +73,7 @@ def test_upload_refuses_an_incomplete_configuration(job, store, cli, removed, fa
 
     assert outcome.code == 1
     for fact in facts:
-        assert fact in outcome.stderr
+        assert fact in before_quoted_configuration(outcome.error)
     assert store.requests == []
 
 
@@ -98,7 +108,7 @@ def test_download_refuses_a_project_without_git_ref(job, store, cli):
     outcome = cli(job.with_options(DOWNLOAD_PROJECTS_0_VARIANT="linux"), "download")
 
     assert outcome.code == 1
-    assert "git_ref" in outcome.stderr
+    assert "git_ref" in before_quoted_configuration(outcome.error)
     assert store.requests == []
 
 
