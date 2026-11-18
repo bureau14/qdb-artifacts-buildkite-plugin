@@ -8,18 +8,6 @@ import subprocess
 Replaces Buildkite's native artifact handling with backend choice (S3/R2), streaming
 in-memory extraction, entry-level filtering, and two-level parallel transfers.
 
-Key layout
-----------
-    s3://<bucket>/<dest_prefix>/<project_id>/<ref>/variants/<variant_key>/builds/<build_id>/<cwd_relative_path>
-
-Project ID, ref, and build ID isolate pipeline runs; variant key separates different build variants. CWD-relative paths preserve
-the original directory structure.
-
-Cross-step sharing
-------------------
-Build steps upload under variant key. Test steps download with
-``--variant linux-amd64-release`` to look in the variant namespace. The --variant value is substituted at pipeline-generation time.
-
 Parallelism
 -----------
   --parallel (default 4)     files transferred simultaneously (ThreadPoolExecutor)
@@ -81,7 +69,6 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 
 import zstandard
 from boto3.s3.transfer import TransferConfig
@@ -90,6 +77,7 @@ from botocore.exceptions import ClientError
 from .clients import _s3_client, aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import die
+from .layout import key_join, scope
 from .log import fmt_size, log
 from .retry import _with_retry
 
@@ -117,47 +105,6 @@ class ResolvedArtifact:
     rel: str
     size: int
     entry_rules: list[tuple[str | None, str | None]]
-
-
-def parse_s3(uri):
-    """Parse s3://bucket/prefix URI into (bucket, prefix).
-    Also handles plain bucket names (legacy SSM format)."""
-    if not uri.startswith("s3://"):
-        return uri.strip("/"), ""
-    p = urlparse(uri)
-    return p.netloc, p.path.strip("/")
-
-
-def key_join(*parts):
-    """Join S3 key segments, dropping blanks to avoid double slashes."""
-    return "/".join(p.strip("/") for p in parts if p.strip("/"))
-
-
-def scope(
-    cfg,
-    project_id,
-    build_id,
-    variant,
-    git_ref,
-    skip_build_id=False,
-):
-    """Resolve (bucket, key_prefix) for the current build/variant context.
-    project_id scopes the artifacts to a specific project.
-    variant (--variant) specifies os/arch/etc. to use. Resolved at pipeline-generation time.
-    git_ref (--git-ref) specifies the Git reference (branch or tag) to use.
-    skip_build_id skips the build ID in the path (used for LATEST_SUCCESSFUL pointers)."""
-
-    bucket, prefix = parse_s3(cfg.destination)
-
-    if skip_build_id:
-        return bucket, key_join(prefix, project_id, git_ref, "variants", variant)
-
-    if build_id == "LATEST_SUCCESSFUL":
-        return bucket, key_join(
-            prefix, project_id, git_ref, "variants", variant, "LATEST_SUCCESSFUL"
-        )
-
-    return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "builds", build_id)
 
 
 def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
