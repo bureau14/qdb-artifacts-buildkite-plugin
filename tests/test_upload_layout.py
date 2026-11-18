@@ -160,6 +160,39 @@ def test_concurrency_lets_the_parts_of_one_artifact_travel_at_the_same_time(job,
     assert first_part.ended_by == "until"
 
 
+def test_a_concurrency_of_one_sends_the_parts_of_one_artifact_one_after_the_other(job, store, hook):
+    job.write("big.bin", NINE_MIB)
+    key = f"{PREFIX}/big.bin"
+    first_part = store.hold(
+        "PUT",
+        key,
+        query=[("partNumber", "1")],
+        until=("PUT", key, (("partNumber", "2"),)),
+        # Parts sent at the same time end the hold at once; this is ample for them.
+        timeout=3,
+    )
+
+    upload(job, hook, files="big.bin", parallel=1, concurrency=1)
+
+    assert first_part.ended_by == "timeout"
+
+
+def test_parallel_lets_files_travel_at_the_same_time(job, store, hook):
+    job.write("a.bin", b"a")
+    job.write("b.bin", b"b")
+    first_file = store.hold(
+        "PUT",
+        f"{PREFIX}/a.bin",
+        until=("PUT", f"{PREFIX}/b.bin", ()),
+        # Only files sent one after the other wait this out; a loaded agent may be slow.
+        timeout=30,
+    )
+
+    upload(job, hook, files="*.bin", parallel=2)
+
+    assert first_file.ended_by == "until"
+
+
 def test_manifest_is_compact_json_with_five_fields_in_fixed_order(job, store, hook):
     job.write("artifacts/b.tar.zst", b"bbbb")
     job.write("artifacts/a.tar.zst", b"aa")
