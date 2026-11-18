@@ -2,7 +2,7 @@
 projects, never inside a build.
 
 In-process: no hook writes a failure record. The pointer's key as promote
-writes it is held by test_snapshot_pointer through the hook.
+writes it is held by test_snapshot_promote through the hook.
 """
 
 import importlib

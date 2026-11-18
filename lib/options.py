@@ -5,13 +5,20 @@ KEY_0, KEY_1, ..., a map as KEY_<NAME>, a boolean as "true" or "false". This
 module reads them back, checks them, and fills in what the job implies when an
 option is left out: its pipeline, its build and its ref. What it returns are the
 arguments of upload(), promote() and download().
+
+A step with a snapshot key also records facts of its job: the build, read from
+the agent's variables, and the commit of its checkout, which only git can tell
+when the build was started for a branch rather than a commit.
 """
 
+import datetime
 import os
+import re
+import subprocess
 from pathlib import Path
 
+from . import pointer
 from .errors import ArtifactsError
-from .pointer import is_key
 
 
 def _get_env_bool(val, default=False):
@@ -147,12 +154,67 @@ def snapshot_key(variable, option):
     value = os.environ.get(f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_{variable}")
     if not value:
         return None
-    if not is_key(value):
+    if not pointer.is_key(value):
         raise ArtifactsError(
             f"{option} {value!r} is not a snapshot key ('v1-' and 32 hex digits); "
             "the plan step writes this option, never a person"
         )
     return value
+
+
+def checkout_commit():
+    """`git rev-parse HEAD` of the job's checkout, the directory the hook runs in."""
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError as error:
+        raise ArtifactsError(f"git rev-parse HEAD cannot run in {Path.cwd()}: {error}") from None
+    commit = done.stdout.strip()
+    if done.returncode != 0 or not pointer.is_commit(commit):
+        told = done.stderr.strip() or commit
+        raise ArtifactsError(f"git rev-parse HEAD in {Path.cwd()} names no commit: {told!r}")
+    return commit
+
+
+def job_variable(name, option):
+    """A variable the agent sets for every job, which a step with option needs."""
+    value = os.environ.get(name)
+    if not value:
+        raise ArtifactsError(f"{name} is not set, and a step with {option} needs it")
+    return value
+
+
+def job_build_number(option):
+    value = job_variable("BUILDKITE_BUILD_NUMBER", option)
+    if not re.fullmatch(r"[0-9]+", value):
+        raise ArtifactsError(f"BUILDKITE_BUILD_NUMBER {value!r} is not a build number")
+    return int(value)
+
+
+def snapshot_pointer(project_id, key, variant, git_ref, build_id):
+    """The pointer promote creates in a build with a snapshot key, checked before
+    anything is written."""
+    option = "promote.snapshot"
+    return pointer.checked(
+        pointer.Pointer(
+            project=project_id,
+            key=key,
+            variant=variant,
+            git_ref=git_ref,
+            commit=checkout_commit(),
+            build=pointer.Build(
+                id=build_id,
+                number=job_build_number(option),
+                url=job_variable("BUILDKITE_BUILD_URL", option),
+            ),
+            written_at=pointer.iso_utc(datetime.datetime.now(datetime.timezone.utc)),
+        )
+    )
 
 
 def upload_requested():
@@ -221,13 +283,17 @@ def promote_arguments():
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
-    snapshot_key("PROMOTE_SNAPSHOT", "promote.snapshot")
+    variant = os.environ.get(f"{prefix}VARIANT")
+    key = snapshot_key("PROMOTE_SNAPSHOT", "promote.snapshot")
 
     return {
         "project_id": project_id,
         "build_id": build_id,
         "git_ref": git_ref,
-        "variant": os.environ.get(f"{prefix}VARIANT"),
+        "variant": variant,
+        "snapshot_pointer": (
+            None if key is None else snapshot_pointer(project_id, key, variant, git_ref, build_id)
+        ),
     }
 
 

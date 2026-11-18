@@ -24,7 +24,7 @@ module can be read, and tested, with nothing below it:
     upload      select files, transfer, manifest, annotation
     download    resolve, transfer, extract
     pointer     the snapshot pointer: which build holds a variant of a snapshot
-    promote     move LATEST_SUCCESSFUL to a build
+    promote     move LATEST_SUCCESSFUL to a build; with a key, create its pointer
     options     the plugin's options as a job sees them in its environment
     cli         the command line the hooks call
 

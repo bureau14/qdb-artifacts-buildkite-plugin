@@ -1,9 +1,10 @@
 """Creating an object only where the bucket holds none, with If-None-Match: *,
 the way snapshot pointers are written.
 
-In-process: create has no caller of its own; promote's use of it is held by
-test_snapshot_pointer through the hook. The local store honours the condition
-as S3 does and answers a create over an existing key with 412.
+In-process: a hook creates only snapshot pointers, held by
+test_snapshot_promote, and never meets the store's other answers. The local
+store honours the condition as S3 does and answers a create over an existing
+key with 412.
 """
 
 import pytest

@@ -4,9 +4,9 @@ The suite drives the plugin only through the surfaces its users have: the hooks,
 run the way a Buildkite agent runs them; the command line the hooks call; and the
 names exported by lib/__init__.py. Everything else here is the world around those
 surfaces: an S3 and SSM server (moto, over real HTTP) that can also refuse or hold
-chosen requests, a fake buildkite-agent on PATH, a clock that lets the job's
-Python skip its sleeps, the plugin's own .venv, and the job environment an agent
-sets.
+chosen requests, a fake buildkite-agent on PATH, a fake git that tells the commit
+of the job's checkout, a clock that lets the job's Python skip its sleeps, the
+plugin's own .venv, and the job environment an agent sets.
 
 When the entry point of the command line moves, only run_cli changes. When the
 command line reports errors differently, only Outcome.error changes. When the
@@ -63,8 +63,11 @@ R2_SECRET_ACCESS_KEY = "test-r2-secret-access-key"
 
 PIPELINE_SLUG = "widget-build"
 BUILD_ID = "01900000-0000-7000-8000-000000000001"
+BUILD_NUMBER = "512"
+BUILD_URL = "https://buildkite.example.test/example/widget-build/builds/512"
 BRANCH = "master"
 JOB_LABEL = ":hammer: Build widget"
+CHECKOUT_COMMIT = "89abcdef0123456789abcdef0123456789abcdef"
 
 HOOK_TIMEOUT = 300
 POST_CHECKOUT_TIMEOUT = 900
@@ -514,8 +517,9 @@ def archive():
 
 
 # ---------------------------------------------------------------------------
-# Fake tools: a buildkite-agent first on PATH, and a Python for post-checkout.
-# Each records every call in its own numbered directory: argv NUL-separated.
+# Fake tools: a buildkite-agent and a git first on PATH, and a Python for
+# post-checkout. Each records every call in its own numbered directory: argv
+# NUL-separated.
 # ---------------------------------------------------------------------------
 
 FAKE_AGENT_SCRIPT = """#!/bin/sh
@@ -547,11 +551,33 @@ if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
 fi
 """
 
+# The images of the pipeline's test steps have no git, and the commit of a
+# checkout is a fact of the job like its build id, so git is faked as the agent is.
+FAKE_GIT_SCRIPT = """#!/bin/sh
+# A checkout at $FAKE_GIT_HEAD as "git rev-parse HEAD" tells it; without that
+# variable, a directory that is no checkout. Records each call in its own
+# numbered directory: argv NUL-separated, then the directory it ran in.
+set -eu
+calls="$FAKE_GIT_CALLS"
+n=0
+while [ -e "$calls/$n" ]; do n=$((n + 1)); done
+mkdir "$calls/$n"
+printf '%s\\0' "$@" > "$calls/$n/argv"
+pwd -P > "$calls/$n/cwd"
+if [ "$*" = "rev-parse HEAD" ] && [ -n "${FAKE_GIT_HEAD:-}" ]; then
+  echo "$FAKE_GIT_HEAD"
+  exit 0
+fi
+echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+exit 128
+"""
+
 
 @dataclasses.dataclass(frozen=True)
 class ToolCall:
     argv: list
     stdin: str
+    cwd: str
 
 
 def read_calls(calls_dir):
@@ -560,7 +586,12 @@ def read_calls(calls_dir):
 
     numbered = sorted(calls_dir.iterdir(), key=lambda d: int(d.name))
     return [
-        ToolCall(argv=read(d / "argv").split("\0")[:-1], stdin=read(d / "stdin")) for d in numbered
+        ToolCall(
+            argv=read(d / "argv").split("\0")[:-1],
+            stdin=read(d / "stdin"),
+            cwd=read(d / "cwd").strip(),
+        )
+        for d in numbered
     ]
 
 
@@ -590,6 +621,11 @@ def install_fake_tool(root, name, script):
 @pytest.fixture
 def agent(tmp_path):
     return install_fake_tool(tmp_path / "agent", "buildkite-agent", FAKE_AGENT_SCRIPT)
+
+
+@pytest.fixture
+def git(tmp_path):
+    return install_fake_tool(tmp_path / "git", "git", FAKE_GIT_SCRIPT)
 
 
 @pytest.fixture
@@ -698,6 +734,8 @@ def buildkite_variables(workspace):
     return {
         "BUILDKITE": "true",
         "BUILDKITE_BUILD_ID": BUILD_ID,
+        "BUILDKITE_BUILD_NUMBER": BUILD_NUMBER,
+        "BUILDKITE_BUILD_URL": BUILD_URL,
         "BUILDKITE_PIPELINE_SLUG": PIPELINE_SLUG,
         "BUILDKITE_BRANCH": BRANCH,
         "BUILDKITE_LABEL": JOB_LABEL,
@@ -770,17 +808,19 @@ def backend():
 
 
 @pytest.fixture
-def job(tmp_path, store, agent, backend, plugin_venv):
+def job(tmp_path, store, agent, git, backend, plugin_venv):
     workspace = tmp_path / "checkout"
     workspace.mkdir()
     home = tmp_path / "home"
     home.mkdir()
     env = {
-        **host_variables([agent.bin_dir], home),
+        **host_variables([agent.bin_dir, git.bin_dir], home),
         **aws_variables(store.endpoint, home),
         **store_variables(store.endpoint, backend),
         **buildkite_variables(workspace),
         "FAKE_BUILDKITE_AGENT_CALLS": str(agent.calls_dir),
+        "FAKE_GIT_CALLS": str(git.calls_dir),
+        "FAKE_GIT_HEAD": CHECKOUT_COMMIT,
     }
     return Job(workspace=workspace, env=env)
 
