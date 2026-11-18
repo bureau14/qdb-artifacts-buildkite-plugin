@@ -152,6 +152,23 @@ def test_the_pointer_is_of_the_project_the_promote_block_names(job, store, hook)
     assert json.loads(store.get(pointer))["project"] == "gizmo"
 
 
+def test_a_build_id_option_of_another_build_fails_a_step_with_a_key_before_any_request(
+    job, store, hook
+):
+    outcome = promote(job, hook, snapshot=KEY, build_id=OTHER_BUILD)
+
+    assert outcome.code == 1
+    assert "promote.build_id" in outcome.error and OTHER_BUILD in outcome.error
+    assert store.requests == []
+
+
+def test_a_build_id_option_that_names_the_jobs_own_build_is_accepted_with_a_key(job, store, hook):
+    outcome = promote(job, hook, snapshot=KEY, build_id=job.env["BUILDKITE_BUILD_ID"])
+
+    assert outcome.code == 0, outcome.output
+    assert json.loads(store.get(WHERE))["build"]["id"] == job.env["BUILDKITE_BUILD_ID"]
+
+
 @pytest.mark.parametrize("backend", ["s3", "r2"])
 def test_the_pointer_is_created_with_the_credentials_of_the_promote(job, store, hook, backend):
     assert promote(job, hook, snapshot=KEY).code == 0

@@ -149,13 +149,25 @@ def test_the_commit_of_the_source_is_the_head_of_the_jobs_checkout(job, store, h
     assert (call.argv, call.cwd) == (["rev-parse", "HEAD"], str(job.workspace.resolve()))
 
 
-def test_the_source_names_the_build_the_files_are_uploaded_under(job, store, hook):
+def test_a_build_id_option_of_another_build_fails_an_upload_with_a_key_before_any_request(
+    job, store, hook, agent
+):
     build = "01900000-0000-7000-8000-0000000000b0"
+
+    outcome = upload(job, hook, upload_block(snapshot=KEY, build_id=build))
+
+    assert outcome.code == 1
+    assert "upload.build_id" in outcome.error and build in outcome.error
+    assert store.requests == []
+    assert agent.calls() == []
+
+
+def test_a_build_id_option_that_names_the_jobs_own_build_is_accepted_with_a_key(job, store, hook):
+    build = job.env["BUILDKITE_BUILD_ID"]
 
     assert upload(job, hook, upload_block(snapshot=KEY, build_id=build)).code == 0
 
-    overridden = f"widget-build/refs/heads/master/variants/linux/builds/{build}/manifest.json"
-    assert json.loads(store.get(overridden))["source"]["build_id"] == build
+    assert manifest_of(store)[1]["source"]["build_id"] == build
 
 
 def test_the_upload_of_a_failed_command_records_its_source_too(job, store, hook):

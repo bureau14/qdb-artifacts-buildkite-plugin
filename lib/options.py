@@ -199,6 +199,17 @@ def job_build_number(option):
     return int(value)
 
 
+def refuse_another_build(build_id, option, key_option):
+    """A step with a snapshot key records the build it runs in, by the id, number
+    and URL the agent gives, so a build_id option may name only that build."""
+    own = job_variable("BUILDKITE_BUILD_ID", key_option)
+    if build_id != own:
+        raise ArtifactsError(
+            f"{option} {build_id!r} is not this job's build {own!r}, "
+            f"and a step with {key_option} records the build it runs in"
+        )
+
+
 def snapshot_pointer(project_id, key, variant, git_ref, build_id):
     """The pointer promote creates in a build with a snapshot key, checked before
     anything is written."""
@@ -296,6 +307,8 @@ def upload_arguments():
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
 
     key = snapshot_key("UPLOAD_SNAPSHOT", "upload.snapshot")
+    if key is not None:
+        refuse_another_build(build_id, "upload.build_id", "upload.snapshot")
 
     return {
         "project_id": project_id,
@@ -339,6 +352,8 @@ def promote_arguments():
 
     variant = os.environ.get(f"{prefix}VARIANT")
     key = snapshot_key("PROMOTE_SNAPSHOT", "promote.snapshot")
+    if key is not None:
+        refuse_another_build(build_id, "promote.build_id", "promote.snapshot")
 
     return {
         "project_id": project_id,
