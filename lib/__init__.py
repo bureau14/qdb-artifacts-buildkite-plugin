@@ -3,12 +3,11 @@
 from .artifacts import (
     ResolvedArtifact,
     ResolvedBuild,
-    StoreConfig,
     download_artifacts,
-    load_store_config,
     resolve_artifacts,
 )
 from .clients import ObjectAuth, aws_clients, resolve_object_auth
+from .config import StoreConfig, load_store_config
 
 __all__ = [
     "ObjectAuth",
