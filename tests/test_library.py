@@ -18,6 +18,7 @@ EXPORTED = [
     "aws_clients",
     "download_artifacts",
     "load_store_config",
+    "read_manifest",
     "resolve_artifacts",
     "resolve_object_auth",
 ]
@@ -306,6 +307,84 @@ def test_download_writes_archives_unextracted_into_the_working_directory_by_defa
 
     assert [p.name for p in working_directory.iterdir()] == ["widget-server.tar.zst"]
     assert (working_directory / "widget-server.tar.zst").read_bytes() == body
+
+
+def resolved_build(library, prefix=PREFIX):
+    """A build as resolution returns it, for reading a manifest resolution would trip on."""
+    return library.ResolvedBuild(FEATURE, "b-9", FEATURE, "b-9", prefix, False, None)
+
+
+def test_read_manifest_returns_the_manifest_of_the_resolved_build_as_a_dict(
+    library, library_environment, store
+):
+    put_promoted_build(store)
+    bucket, resolved, _ = resolve(library, store)
+
+    manifest = library.read_manifest(
+        s3_config(library, store), library.ObjectAuth(), bucket, resolved
+    )
+
+    assert manifest == {"file_count": 4}
+
+
+def test_read_manifest_reads_the_build_the_walk_fell_back_to(library, library_environment, store):
+    put_promoted_build(store, ref=MASTER)
+    store.put(
+        f"engine/{MASTER}/variants/linux/builds/b-9/manifest.json",
+        b'{"file_count":4,"base_dir":"dist"}',
+    )
+    bucket, resolved, _ = resolve(library, store, require_strict_ref_match=False)
+
+    manifest = library.read_manifest(
+        s3_config(library, store), library.ObjectAuth(), bucket, resolved
+    )
+
+    assert manifest == {"file_count": 4, "base_dir": "dist"}
+
+
+def test_read_manifest_of_a_build_without_one_is_none(library, library_environment, store):
+    store.put_build("engine", FEATURE, "linux", "b-9", {"notes.txt": b"notes"}, manifest=False)
+    bucket, resolved, _ = resolve(library, store, build_id="b-9", patterns=["*.txt"])
+
+    manifest = library.read_manifest(
+        s3_config(library, store), library.ObjectAuth(), bucket, resolved
+    )
+
+    assert manifest is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not json", b"\xff\xfe\xfd", b"null", b"[]", b"[1]", b'"text"', b"4"],
+    ids=["invalid-json", "not-utf-8", "null", "empty-list", "list", "string", "number"],
+)
+def test_read_manifest_of_a_manifest_that_is_not_a_json_object_is_none(
+    library, library_environment, store, body
+):
+    store.put(f"{PREFIX}/manifest.json", body)
+
+    manifest = library.read_manifest(
+        s3_config(library, store), library.ObjectAuth(), store.bucket, resolved_build(library)
+    )
+
+    assert manifest is None
+
+
+@pytest.mark.parametrize("backend", ["s3", "r2"])
+def test_read_manifest_gets_only_the_manifest_with_the_given_credentials(
+    library, library_environment, store, backend
+):
+    put_promoted_build(store)
+    ssm = boto3.client("ssm")
+    cfg = library.load_store_config(ssm)
+    auth = library.resolve_object_auth(ssm, cfg, permission="object-read-only")
+
+    library.read_manifest(cfg, auth, store.bucket, resolved_build(library))
+
+    (get,) = store.plugin_requests("s3")
+    assert (get.method, get.key) == ("GET", f"{PREFIX}/manifest.json")
+    signer = "ARTIFACTS_R2_ACCESS_KEY_ID" if backend == "r2" else "AWS_ACCESS_KEY_ID"
+    assert get.access_key_id == library_environment[signer]
 
 
 @pytest.mark.parametrize("backend", ["s3", "r2"])

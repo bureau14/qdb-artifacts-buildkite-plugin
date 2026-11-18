@@ -398,6 +398,21 @@ import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.
 `resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
 `auth` instead of constructing them directly.
 
+### Read the manifest of a build
+
+`read_manifest` returns the `manifest.json` of a build that `resolve_artifacts`
+or `download_artifacts` resolved, as a dict with the fields the upload wrote:
+`file_count`, `files`, `uploaded_at`, `total_size_bytes` and `base_dir`.
+
+```python
+from vendor.qdb_artifacts.lib import read_manifest
+
+manifest = read_manifest(cfg, auth, bucket, resolved)
+```
+
+It returns `None` when the build has no manifest that reads as a JSON object,
+for example when its upload failed before the end.
+
 ### Errors
 
 A failure the library can explain raises `ArtifactsError`, also exported by

@@ -2,7 +2,8 @@
 
 An upload writes it last, after every file of the build has arrived, so a build
 whose manifest exists holds the whole upload. A download reads it for the
-build's log lines only.
+build's log lines only; a caller outside the plugin reads it through
+read_manifest.
 """
 
 import json
@@ -31,3 +32,15 @@ def _read_manifest(s3, bucket, prefix):
         return json.loads(response["Body"].read())
     except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def read_manifest(cfg, auth, bucket, resolved):
+    """The manifest.json of a resolved build as a dict, or None when there is none
+    that reads as a JSON object: missing, refused by the store, not JSON, or not
+    an object.
+
+    It reads the manifest the way a download does. A caller must expect None: an
+    upload that failed before its end leaves its files without a manifest.
+    """
+    manifest = _read_manifest(_s3_client(cfg, auth), bucket, resolved.prefix)
+    return manifest if isinstance(manifest, dict) else None

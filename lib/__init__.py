@@ -33,6 +33,7 @@ from .clients import ObjectAuth, aws_clients, resolve_object_auth
 from .config import StoreConfig, load_store_config
 from .download import download_artifacts
 from .errors import ArtifactsError
+from .manifest import read_manifest
 from .resolve import ResolvedArtifact, ResolvedBuild, resolve_artifacts
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "aws_clients",
     "download_artifacts",
     "load_store_config",
+    "read_manifest",
     "resolve_artifacts",
     "resolve_object_auth",
 ]
