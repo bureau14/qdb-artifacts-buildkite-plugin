@@ -20,14 +20,6 @@ Cross-step sharing
 Build steps upload under variant key. Test steps download with
 ``--variant linux-amd64-release`` to look in the variant namespace. The --variant value is substituted at pipeline-generation time.
 
-Backends
---------
-Both use boto3's S3-compatible data path:
-  S3 — IAM role on the CI agent; no explicit credentials needed.
-  R2 — S3-compatible credentials stored in SSM (access key ID + secret derived from
-       SHA256 of the Cloudflare API token). No Cloudflare SDK or temp credential
-       minting needed — boto3 talks directly to the R2 S3 endpoint.
-
 Config resolution
 -----------------
     env var (ARTIFACTS_*) → SSM parameter → default
@@ -98,17 +90,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-import boto3
 import zstandard
 from boto3.s3.transfer import TransferConfig
-from botocore.config import Config
 from botocore.exceptions import ClientError
+
+from .clients import _s3_client, aws_clients, resolve_object_auth
 
 # ---------------------------------------------------------------------------
 # Timeout / retry constants
 # ---------------------------------------------------------------------------
-READ_TIMEOUT = 300  # 5 minutes — fail fast instead of hanging 40+ minutes
-CONNECT_TIMEOUT = 60  # 1 minute
 MAX_RETRIES = 10
 BACKOFF_BASE = 5  # seconds; doubles each retry
 BACKOFF_CAP = 60  # 1 minute max sleep between retries
@@ -136,16 +126,6 @@ class StoreConfig:
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
     artifacts_domain: str | None = None
-
-
-@dataclass(frozen=True)
-class ObjectAuth:
-    """Per-operation S3 credentials. All None for S3 (IAM role handles auth).
-    For R2, populated from SSM-stored credentials derived from the Cloudflare API token.
-    """
-
-    access_key_id: str | None = None
-    secret_access_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -203,26 +183,6 @@ def _with_retry(fn, description):
             log(f"  attempt {attempt}/{MAX_RETRIES} failed for {description}: {exc}")
             log(f"  retrying in {sleep}s...")
             time.sleep(sleep)
-
-
-def aws_clients():
-    """Return (s3, ssm) clients for config resolution and listing only.
-    Per-transfer clients are created separately in each worker thread."""
-    s = boto3.session.Session()
-    region_name = os.environ.get("AWS_DEFAULT_REGION", "eu-west-1")
-    return (
-        s.client("s3", config=Config(retries={"mode": "standard", "max_attempts": 10})),
-        s.client(
-            "ssm",
-            config=Config(
-                region_name=region_name,
-                retries={
-                    "mode": "standard",
-                    "max_attempts": 5,
-                },
-            ),
-        ),
-    )
 
 
 def _ssm_get_optional(ssm, name, with_decryption=True):
@@ -396,49 +356,6 @@ def fmt_size(n):
             return f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TiB"
-
-
-def resolve_object_auth(ssm, cfg, permission):
-    """S3 → empty auth (IAM role chain). R2 → use stored S3-compatible credentials."""
-    if cfg.backend == "r2":
-        return ObjectAuth(
-            access_key_id=cfg.r2_access_key_id,
-            secret_access_key=cfg.r2_secret_access_key,
-        )
-    return ObjectAuth()
-
-
-def _s3_client(cfg, auth):
-    """Create a per-thread S3 client. Called inside each worker because boto3 clients
-    are not thread-safe (shared connection pool + credential state would race).
-
-    R2 needs signature_version=s3v4 and addressing_style=path (R2 endpoints are
-    account-level, not bucket-level — virtual-host style would produce invalid hostnames).
-    """
-    client_cfg = Config(
-        read_timeout=READ_TIMEOUT,
-        connect_timeout=CONNECT_TIMEOUT,
-        retries={"mode": "standard", "max_attempts": 10},
-    )
-    if cfg.backend == "r2":
-        client_cfg = Config(
-            read_timeout=READ_TIMEOUT,
-            connect_timeout=CONNECT_TIMEOUT,
-            retries={"mode": "standard", "max_attempts": 10},
-            signature_version="s3v4",
-            s3={"addressing_style": "path"},
-        )
-
-    kwargs = {"config": client_cfg}
-    if cfg.backend == "r2":
-        kwargs["region_name"] = "auto"
-    if cfg.endpoint_url:
-        kwargs["endpoint_url"] = cfg.endpoint_url
-    if auth.access_key_id:
-        kwargs["aws_access_key_id"] = auth.access_key_id
-        kwargs["aws_secret_access_key"] = auth.secret_access_key
-
-    return boto3.client("s3", **kwargs)
 
 
 def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
@@ -1497,7 +1414,3 @@ def main():
 
     else:
         die(f"unknown command: {cmd}")
-
-
-if __name__ == "__main__":
-    main()

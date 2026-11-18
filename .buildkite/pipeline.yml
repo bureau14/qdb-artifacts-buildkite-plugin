@@ -16,14 +16,13 @@ steps:
 
   # The suite pins tarfile behaviour that changes between patch releases, so the
   # images name exact versions. 3.9.16 predates tarfile.data_filter, which takes
-  # the plugin's own filter for unsafe tar members. test_empty_upload.py patches
-  # the plugin's internals and stays out of this gate.
+  # the plugin's own filter for unsafe tar members.
   - label: "Characterisation tests (Python 3.9)"
     timeout_in_minutes: 20
     command: |
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server
-      python -B -m pytest -p no:cacheprovider --ignore=tests/test_empty_upload.py tests
+      python -B -m pytest -p no:cacheprovider tests
     plugins:
       - docker#v5.13.0:
           image: "python:3.9.25-slim"
@@ -34,7 +33,7 @@ steps:
     command: |
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server
-      python -B -m pytest -p no:cacheprovider --ignore=tests/test_empty_upload.py tests
+      python -B -m pytest -p no:cacheprovider tests
     plugins:
       - docker#v5.13.0:
           image: "python:3.9.16-slim"
@@ -45,7 +44,7 @@ steps:
     command: |
       pip install -r tests/requirements.txt
       # hooks, command line and library against a local S3 and SSM server
-      python -B -m pytest -p no:cacheprovider --ignore=tests/test_empty_upload.py tests
+      python -B -m pytest -p no:cacheprovider tests
     plugins:
       - docker#v5.13.0:
           image: "python:3.14.10-slim"
