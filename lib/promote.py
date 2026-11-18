@@ -26,4 +26,4 @@ def promote(project_id, build_id, git_ref, variant):
         Body=build_id.encode("utf-8"),
         ContentType="text/plain",
     )
-    log(f"Set {target_key} → {build_id} for ref {git_ref}")
+    log(f"Set {target_key} \N{RIGHTWARDS ARROW} {build_id} for ref {git_ref}")
