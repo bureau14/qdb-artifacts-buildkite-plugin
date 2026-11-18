@@ -827,7 +827,9 @@ class Buildkite:
         }
 
     def job(self, build: Build, step: dict) -> Run:
-        """A command step as the agent runs it: pre-command, the command, post-command."""
+        """A command step as the agent runs it: a clean checkout, pre-command, the command,
+        post-command."""
+        git(build.checkout, "clean", "-ffxdq", env=self.hosting.env)
         job = dataclasses.replace(
             self.template, workspace=build.checkout, env=self.job_environment(build, step)
         )
