@@ -18,6 +18,7 @@ module can be read, and tested, with nothing below it:
     rules       file patterns: "archive!entries", excludes
     manifest    manifest.json of a build: write, read
     resolve     which build a download gets: the pointer, the walk over refs
+    transfer    many files at once, each with its own client and retries
     extract     unpack an archive, refusing tar members that leave the target
     annotation  the list of uploaded files on the build page
     upload      select files, transfer, manifest, annotation

@@ -1,21 +1,14 @@
 """Upload: select files, transfer them, write the manifest, annotate the job.
 
-Files travel `parallel` at a time (default 4), each with `concurrency` multipart
-threads (default 32), so the defaults allow up to 128 streams at once. Every
-file gets its own boto3 client, because a client is not safe to share between
-threads.
+The files travel through `transfer`; the manifest is written after the last of
+them has arrived, and the annotation after the manifest.
 """
 
 import datetime
 import glob
-import os
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from boto3.s3.transfer import TransferConfig
-
-from . import layout
+from . import layout, transfer
 from .annotation import create_buildkite_annotation
 from .clients import aws_clients, resolve_object_auth, s3_client
 from .config import load_store_config
@@ -23,7 +16,6 @@ from .errors import ArtifactsError
 from .log import fmt_size, log
 from .manifest import upload_manifest
 from .objects import Store
-from .retry import with_retry
 from .rules import is_excluded
 
 
@@ -97,23 +89,23 @@ def upload(
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
     bucket, dest_prefix = layout.parse_destination(cfg.destination)
     pfx = layout.build_prefix(dest_prefix, project_id, git_ref, variant, build_id)
-    tc = TransferConfig(max_concurrency=concurrency)
+    tc = transfer.transfer_config(concurrency)
 
     total_bytes = sum(f.stat().st_size for f in files)
     log(
         f"Uploading {len(files)} artifact(s) ({fmt_size(total_bytes)}) to "
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
     )
-    log(f"  parallel={parallel}, concurrency={concurrency}")
+    transfer.log_settings(parallel, concurrency)
     if exclude_patterns:
         log(f"  exclude={exclude_patterns}")
 
-    def _upload_one(f):
+    def upload_one(f):
         rel = f.relative_to(base_path).as_posix()
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
-        def _do():
-            s3_client(cfg, auth).upload_file(
+        def attempt(client):
+            client.upload_file(
                 str(f),
                 bucket,
                 layout.key_join(pfx, rel),
@@ -121,21 +113,14 @@ def upload(
                 Config=tc,
             )
 
-        with_retry(_do, rel)
+        transfer.one_file(cfg, auth, rel, attempt)
 
-    t0 = time.monotonic()
-    pool = ThreadPoolExecutor(max_workers=parallel)
-    futs = {pool.submit(_upload_one, f): f for f in files}
     relative_files_with_sizes = [
         (f.relative_to(base_path).as_posix(), f.stat().st_size) for f in files
     ]
     relative_files_path = [rel for rel, _ in relative_files_with_sizes]
-    try:
-        for fut in as_completed(futs):
-            fut.result()
 
-        # After uploads are done, write a manifest file with metadata about the uploaded artifacts.
-        # might come handy for debugging / validation / future features
+    def write_manifest():
         manifest_payload = {
             "file_count": len(files),
             "files": relative_files_path,
@@ -144,20 +129,12 @@ def upload(
             "base_dir": base_dir,
         }
         upload_manifest(Store(s3_client(cfg, auth), bucket), pfx, manifest_payload)
-    except KeyboardInterrupt:
-        # Hard exit: ThreadPoolExecutor.shutdown(wait=True) would block for minutes
-        # waiting for in-flight transfers. 130 = POSIX SIGINT convention.
-        os._exit(130)
-    pool.shutdown()
 
-    elapsed = time.monotonic() - t0
-    avg_speed = total_bytes / elapsed if elapsed > 0 else 0
+    elapsed = transfer.run(upload_one, files, parallel, then=write_manifest)
+
     if annotate:
         create_buildkite_annotation(cfg.artifacts_domain, pfx, relative_files_with_sizes)
     else:
         log("  annotate=false; skipping Buildkite annotation")
-    log(
-        f"Uploaded {len(files)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
-        f"({fmt_size(avg_speed)}/s)"
-    )
+    transfer.log_done("Uploaded", len(files), total_bytes, elapsed)
     return True

@@ -1,24 +1,19 @@
 """Download: resolve the build, transfer the selected artifacts, extract them.
 
-Transfers run as uploads do: `parallel` files at a time, each with
-`concurrency` multipart threads and a boto3 client of its own.
+The artifacts travel through `transfer`, as uploads do.
 """
 
 import os
 import shutil
 import tempfile
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from boto3.s3.transfer import TransferConfig
-
-from .clients import aws_clients, resolve_object_auth, s3_client
+from . import transfer
+from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .extract import extract_local_archive
 from .log import fmt_size, log
 from .resolve import resolve_artifacts
-from .retry import with_retry
 
 
 def download_artifacts(
@@ -66,7 +61,7 @@ def download_artifacts(
     )
     pfx = resolved.prefix
 
-    tc = TransferConfig(max_concurrency=concurrency)
+    tc = transfer.transfer_config(concurrency)
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -75,18 +70,18 @@ def download_artifacts(
         f"Downloading {len(objects)} artifact(s) ({fmt_size(total_bytes)}) from "
         f"s3://{bucket}/{pfx}/ via backend={cfg.backend}"
     )
-    log(f"  parallel={parallel}, concurrency={concurrency}")
+    transfer.log_settings(parallel, concurrency)
 
-    def _download_one(key, rel, sz, entry_rules):
+    def download_one(obj):
+        key, rel, sz, entry_rules = obj.key, obj.rel, obj.size, obj.entry_rules
         log(f"  start: {rel} ({fmt_size(sz)})")
-        ft0 = time.monotonic()
 
-        def _do():
+        def attempt(client):
             if extract:
                 with tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False) as tmp:
                     tmp_path = tmp.name
                 try:
-                    s3_client(cfg, auth).download_file(bucket, key, tmp_path, Config=tc)
+                    client.download_file(bucket, key, tmp_path, Config=tc)
                     extract_local_archive(tmp_path, rel, out, entry_rules=entry_rules)
                 finally:
                     try:
@@ -96,10 +91,9 @@ def download_artifacts(
             else:
                 dest = out / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                s3_client(cfg, auth).download_file(bucket, key, str(dest), Config=tc)
+                client.download_file(bucket, key, str(dest), Config=tc)
 
-        with_retry(_do, rel)
-        elapsed = time.monotonic() - ft0
+        elapsed = transfer.one_file(cfg, auth, rel, attempt)
         speed = sz / elapsed if elapsed > 0 else 0
         # Loud destination line. rel is repeated so parallel-interleaved logs are still parseable.
         if extract:
@@ -117,25 +111,8 @@ def download_artifacts(
         else:
             log(f"  done : {rel} -> {out / rel}  [{elapsed:.1f}s, {fmt_size(speed)}/s]")
 
-    t0 = time.monotonic()
-    pool = ThreadPoolExecutor(max_workers=parallel)
-    futs = {
-        pool.submit(_download_one, obj.key, obj.rel, obj.size, obj.entry_rules): obj.rel
-        for obj in sorted(objects, key=lambda obj: obj.key)
-    }
-    try:
-        for fut in as_completed(futs):
-            fut.result()
-    except KeyboardInterrupt:
-        os._exit(130)
-    pool.shutdown()
-
-    elapsed = time.monotonic() - t0
-    avg_speed = total_bytes / elapsed if elapsed > 0 else 0
-    log(
-        f"Downloaded {len(objects)} file(s), {fmt_size(total_bytes)} in {elapsed:.1f}s "
-        f"({fmt_size(avg_speed)}/s)"
-    )
+    elapsed = transfer.run(download_one, sorted(objects, key=lambda obj: obj.key), parallel)
+    transfer.log_done("Downloaded", len(objects), total_bytes, elapsed)
     return bucket, resolved, objects
 
 
