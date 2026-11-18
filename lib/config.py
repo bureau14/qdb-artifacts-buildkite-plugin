@@ -68,8 +68,11 @@ def _check_placeholder(value, label):
         )
 
 
-def _env_or_ssm(ssm, env_name, ssm_name, with_decryption=True):
-    """Env var with SSM fallback. Env takes precedence for per-job overrides."""
+def env_or_ssm(ssm, env_name, ssm_name, with_decryption=True):
+    """Env var with SSM fallback. Env takes precedence for per-job overrides.
+
+    Public, because the plan step reads its Buildkite API token in the same
+    order, and that token is no part of the store configuration."""
     return os.environ.get(env_name) or _ssm_get_optional(
         ssm, ssm_name, with_decryption=with_decryption
     )
@@ -109,7 +112,7 @@ def load_store_config(ssm):
     if backend == "r2":
         endpoint_url = endpoint_url or _ssm_get_optional(ssm, ENDPOINT_URL_SSM_PARAM)
 
-        r2_account_id = _env_or_ssm(ssm, "ARTIFACTS_R2_ACCOUNT_ID", R2_ACCOUNT_ID_SSM_PARAM)
+        r2_account_id = env_or_ssm(ssm, "ARTIFACTS_R2_ACCOUNT_ID", R2_ACCOUNT_ID_SSM_PARAM)
         if not r2_account_id:
             raise ArtifactsError(
                 f"R2 backend requires Cloudflare account ID. "
@@ -117,7 +120,7 @@ def load_store_config(ssm):
             )
         _check_placeholder(r2_account_id, f"R2 account ID (SSM {R2_ACCOUNT_ID_SSM_PARAM})")
 
-        r2_access_key_id = _env_or_ssm(
+        r2_access_key_id = env_or_ssm(
             ssm,
             "ARTIFACTS_R2_ACCESS_KEY_ID",
             R2_ACCESS_KEY_ID_SSM_PARAM,
@@ -129,7 +132,7 @@ def load_store_config(ssm):
             )
         _check_placeholder(r2_access_key_id, f"R2 access key ID (SSM {R2_ACCESS_KEY_ID_SSM_PARAM})")
 
-        r2_secret_access_key = _env_or_ssm(
+        r2_secret_access_key = env_or_ssm(
             ssm,
             "ARTIFACTS_R2_SECRET_ACCESS_KEY",
             R2_SECRET_ACCESS_KEY_SSM_PARAM,
