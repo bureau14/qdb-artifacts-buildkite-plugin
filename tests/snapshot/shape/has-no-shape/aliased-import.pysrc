@@ -1,0 +1,10 @@
+# run must be imported without an alias.
+from qdb_pipeline import run as run_pipeline
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    run_pipeline(generate_pipeline)

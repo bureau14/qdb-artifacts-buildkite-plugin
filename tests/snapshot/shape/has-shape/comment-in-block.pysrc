@@ -1,0 +1,12 @@
+# Comments and blank lines inside the block are not statements.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    # Prints the pipeline, or the gate inside a Buildkite job.
+
+    run(generate_pipeline)  # the only statement

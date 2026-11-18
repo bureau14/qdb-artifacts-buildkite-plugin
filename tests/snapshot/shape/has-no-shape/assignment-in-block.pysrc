@@ -1,0 +1,10 @@
+# An assignment is not an expression statement.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    result = run(generate_pipeline)

@@ -12,5 +12,7 @@ the plan step reads a value by the form the job that wrote it checked.
 - ``declaration``: what a commit's step templates declare (snapshot and latest
   successful dependencies, pins), and the rule that holds a generated pipeline
   to it.
+- ``shape``: whether a ``.buildkite/pipeline.py`` hands its pipeline to the
+  runner of ``qdb_pipeline``.
 - ``shown``: how a foreign value appears in a message.
 """

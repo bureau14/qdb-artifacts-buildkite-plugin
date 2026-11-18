@@ -1,0 +1,18 @@
+# Other top-level if statements are not main blocks, even when they test __name__.
+import sys
+
+from qdb_pipeline import run
+
+if sys.platform == "win32":
+    NEWLINE = "\r\n"
+
+if __name__ != "__main__":
+    IMPORTED = True
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    run(generate_pipeline)

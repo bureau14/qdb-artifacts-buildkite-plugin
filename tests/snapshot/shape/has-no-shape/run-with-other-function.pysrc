@@ -1,0 +1,10 @@
+# The argument is the name generate_pipeline, whatever another function does.
+from qdb_pipeline import run
+
+
+def build_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    run(build_pipeline)

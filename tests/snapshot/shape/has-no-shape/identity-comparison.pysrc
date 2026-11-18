@@ -1,0 +1,11 @@
+# The operator is ==; "is" makes the block something else, so this file has
+# no main block at all.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ is "__main__":
+    run(generate_pipeline)

@@ -1,0 +1,12 @@
+# Only run must be imported without an alias; other names may have one.
+from qdb_pipeline import run, select_platforms as pick
+
+PLATFORMS = pick("linux-amd64-core2")
+
+
+def generate_pipeline():
+    return PLATFORMS
+
+
+if __name__ == "__main__":
+    run(generate_pipeline)

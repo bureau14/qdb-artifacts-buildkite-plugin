@@ -1,0 +1,13 @@
+# The module has exactly one main block; here the first one prints before run.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    print("steps: []")
+
+if __name__ == "__main__":
+    run(generate_pipeline)

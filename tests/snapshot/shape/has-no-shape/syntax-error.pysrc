@@ -1,0 +1,10 @@
+# A source that does not parse does not have the shape.
+from qdb_pipeline import run
+
+
+def generate_pipeline(
+    return None
+
+
+if __name__ == "__main__":
+    run(generate_pipeline)

@@ -1,0 +1,10 @@
+# The comparison is written __name__ == "__main__", in that order.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+if "__main__" == __name__:
+    run(generate_pipeline)

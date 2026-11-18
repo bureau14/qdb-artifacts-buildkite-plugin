@@ -1,0 +1,9 @@
+# A call at the top level, outside a block, is not the shape.
+from qdb_pipeline import run
+
+
+def generate_pipeline():
+    return None
+
+
+run(generate_pipeline)

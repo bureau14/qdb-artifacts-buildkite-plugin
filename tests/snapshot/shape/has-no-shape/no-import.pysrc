@@ -1,0 +1,13 @@
+# A run of its own is not the runner.
+
+
+def run(generate):
+    print(generate())
+
+
+def generate_pipeline():
+    return None
+
+
+if __name__ == "__main__":
+    run(generate_pipeline)
