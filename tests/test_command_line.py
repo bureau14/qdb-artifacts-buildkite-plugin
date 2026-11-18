@@ -67,13 +67,6 @@ def test_a_non_empty_upload_allowed_to_be_empty_is_uploaded_annotated_and_promot
     assert [call.argv[0] for call in agent.calls()] == ["annotate"]
 
 
-def test_the_pre_command_phase_without_download_projects_fails(job, store, cli):
-    outcome = cli(job.with_options(DOWNLOAD_CLEAN="true"), "pre-command")
-
-    assert outcome.code == 1
-    assert "projects" in outcome.error
-
-
 def test_download_refuses_a_project_without_git_ref(job, store, cli):
     outcome = cli(job.with_options(DOWNLOAD_PROJECTS_0_VARIANT="linux"), "pre-command")
 

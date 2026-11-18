@@ -221,8 +221,6 @@ def download_arguments():
     """The download block, checked and completed with the job's defaults."""
     download_config = parse_download_config_from_env()
     projects_config = download_config["projects"]
-    if not projects_config:
-        raise ArtifactsError("no download projects configured")
 
     pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
     dirs_to_clean = set()
