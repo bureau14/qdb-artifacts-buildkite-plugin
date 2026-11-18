@@ -135,5 +135,5 @@ def test_the_command_line_refuses_incomplete_or_unknown_arguments(
 
     assert outcome.code == 1
     for fact in facts:
-        assert fact in outcome.stderr
+        assert fact in outcome.error
     assert store.requests == []

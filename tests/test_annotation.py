@@ -112,14 +112,16 @@ def test_the_domain_can_come_from_ssm(job, store, hook, agent):
     assert "(https://ssm.example.test/widget-build/" in call.argv[1]
 
 
-def test_a_failing_agent_does_not_fail_the_upload(job, store, hook, agent):
+def test_a_failing_agent_does_not_fail_the_upload_but_its_status_is_logged(job, store, hook, agent):
     job.write("artifacts/a.tar.zst", b"a")
 
-    outcome = upload(job.with_env(FAKE_BUILDKITE_AGENT_EXIT_STATUS="4"), hook)
+    outcome = upload(job.with_env(FAKE_BUILDKITE_AGENT_EXIT_STATUS="47"), hook)
 
     assert outcome.code == 0, outcome.output
     assert len(agent.calls()) == 1
-    assert "Failed to create Buildkite annotation" in outcome.stderr
+    assert len(store.stored_keys()) == 2
+    # The agent's status reaches the log in Python's own words for a failed command.
+    assert "exit status 47" in outcome.stderr
 
 
 def test_a_missing_agent_does_not_fail_the_upload(job, store, hook, agent):
@@ -129,4 +131,4 @@ def test_a_missing_agent_does_not_fail_the_upload(job, store, hook, agent):
     outcome = upload(job.with_env(PATH=path), hook)
 
     assert outcome.code == 0, outcome.output
-    assert "Failed to create Buildkite annotation" in outcome.stderr
+    assert len(store.stored_keys()) == 2

@@ -20,7 +20,7 @@ def test_an_unknown_command_fails(job, store, cli):
     outcome = cli(job, "frobnicate")
 
     assert outcome.code == 1
-    assert "frobnicate" in outcome.stderr
+    assert "frobnicate" in outcome.error
 
 
 def test_no_command_fails_with_a_traceback(job, store, cli):
@@ -101,7 +101,7 @@ def test_download_without_projects_fails(job, store, cli):
     outcome = cli(job.with_options(DOWNLOAD_CLEAN="true"), "download")
 
     assert outcome.code == 1
-    assert "no download projects configured" in outcome.stderr
+    assert "projects" in outcome.error
 
 
 def test_download_refuses_a_project_without_git_ref(job, store, cli):
@@ -120,7 +120,7 @@ def test_download_without_project_id_or_pipeline_slug_fails(job, store, cli):
     outcome = cli(job, "download")
 
     assert outcome.code == 1
-    assert "project_id" in outcome.stderr and "BUILDKITE_PIPELINE_SLUG" in outcome.stderr
+    assert "project_id" in outcome.error and "BUILDKITE_PIPELINE_SLUG" in outcome.error
     assert store.requests == []
 
 

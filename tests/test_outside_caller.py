@@ -77,5 +77,5 @@ def test_a_build_missing_on_the_requested_branch_fails_the_caller(outside_caller
     outcome = outside_caller({**REQUEST, "git_ref": "refs/heads/topic", "build_id": "b-5"})
 
     assert outcome.code == 1
-    assert "refs/heads/topic" in outcome.stderr and "widget-build" in outcome.stderr
+    assert "refs/heads/topic" in outcome.error and "widget-build" in outcome.error
     assert outcome.stdout == ""

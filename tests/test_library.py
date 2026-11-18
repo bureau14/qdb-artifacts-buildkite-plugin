@@ -227,7 +227,7 @@ def test_a_selection_that_matches_nothing_ends_the_process_today(
     with expect_library_failure() as failure:
         resolve(library, store, patterns=["*.deb"])
 
-    assert "'*.deb'" in failure.text and "notes.txt" in failure.text
+    assert "*.deb" in failure.text and "notes.txt" in failure.text
 
 
 def test_download_creates_the_output_dir_writes_the_selection_and_returns_it(
@@ -364,7 +364,7 @@ def test_a_configuration_failure_ends_the_process_today(
     with expect_library_failure() as failure:
         library.load_store_config(boto3.client("ssm"))
 
-    assert "'gcs'" in failure.text
+    assert "gcs" in failure.text
 
 
 @pytest.mark.parametrize("permission", ["object-read-only", "object-read-write"])

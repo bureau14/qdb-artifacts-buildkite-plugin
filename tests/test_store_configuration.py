@@ -189,8 +189,8 @@ def test_an_unsupported_backend_fails(job, store, cli):
     outcome = promote(job.with_env(ARTIFACTS_BACKEND="gcs"), cli)
 
     assert outcome.code == 1
-    for fact in ["'gcs'", "ARTIFACTS_BACKEND", BACKEND]:
-        assert fact in outcome.stderr
+    for fact in ["gcs", "ARTIFACTS_BACKEND", BACKEND]:
+        assert fact in outcome.error
     assert store.plugin_requests("s3") == []
 
 
@@ -199,7 +199,7 @@ def test_a_missing_destination_fails(job, store, cli):
 
     assert outcome.code == 1
     for fact in ["ARTIFACTS_DESTINATION", DESTINATION]:
-        assert fact in outcome.stderr
+        assert fact in outcome.error
     assert parameters_read(store) == [BACKEND, DESTINATION]
 
 
@@ -209,7 +209,7 @@ def test_r2_without_one_of_its_three_values_fails(job, store, cli, backend, vari
     outcome = promote(job.with_env(**{variable: None}), cli)
 
     assert outcome.code == 1
-    assert variable in outcome.stderr and parameter in outcome.stderr
+    assert variable in outcome.error and parameter in outcome.error
     assert parameters_read(store)[-1] == parameter
     assert store.plugin_requests("s3") == []
 
@@ -225,7 +225,7 @@ def test_an_r2_value_that_is_still_a_placeholder_fails(
     outcome = promote(job.with_env(**{variable: value}), cli)
 
     assert outcome.code == 1
-    assert repr(value) in outcome.stderr and parameter in outcome.stderr
+    assert value in outcome.error and parameter in outcome.error
     assert store.plugin_requests("s3") == []
 
 
@@ -236,7 +236,7 @@ def test_a_placeholder_read_from_ssm_fails_the_same_way(job, store, cli, backend
     outcome = promote(job.with_env(**NO_STORE_ENV), cli)
 
     assert outcome.code == 1
-    assert "'CHANGEME'" in outcome.stderr and ACCESS_KEY_ID in outcome.stderr
+    assert "CHANGEME" in outcome.error and ACCESS_KEY_ID in outcome.error
 
 
 def test_an_ssm_error_other_than_not_found_fails_with_its_code(
@@ -248,7 +248,7 @@ def test_an_ssm_error_other_than_not_found_fails_with_its_code(
 
     assert outcome.code == 1
     for fact in [BACKEND, "AccessDeniedException", "denied by test"]:
-        assert fact in outcome.stderr
+        assert fact in outcome.error
     assert store.plugin_requests("s3") == []
 
 

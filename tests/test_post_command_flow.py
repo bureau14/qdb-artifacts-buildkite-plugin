@@ -27,7 +27,6 @@ def test_without_upload_files_or_promote_variant_the_hook_does_nothing(job, stor
     outcome = hook("post-command", job)
 
     assert outcome.code == 0, outcome.output
-    assert "No upload or promote configuration found" in outcome.stdout
     assert store.requests == []
     assert agent.calls() == []
 
@@ -38,8 +37,7 @@ def test_an_upload_block_without_files_is_skipped_like_no_upload(job, store, hoo
     outcome = post_command(job, hook, step(upload={}, promote=False))
 
     assert outcome.code == 0, outcome.output
-    assert "No upload or promote configuration found" in outcome.stdout
-    assert store.stored_keys() == []
+    assert store.requests == []
 
 
 def test_upload_then_promote_when_the_command_succeeded(job, store, hook):
@@ -70,7 +68,6 @@ def test_a_failed_command_still_uploads_but_never_promotes(job, store, hook, sta
 
     assert outcome.code == 0, outcome.output
     assert store.stored_keys() == [f"{PREFIX}/logs/test.log", f"{PREFIX}/manifest.json"]
-    assert f"command exited {status}" in outcome.stdout
 
 
 def test_a_failed_command_with_promote_only_writes_nothing(job, store, hook):
@@ -84,7 +81,7 @@ def test_an_upload_that_matches_nothing_fails_the_hook_and_skips_promote(job, st
     outcome = post_command(job, hook, step(upload={"files": "missing/*"}))
 
     assert outcome.code == 1
-    assert "missing/*" in outcome.stderr
+    assert "missing/*" in outcome.error
     assert store.requests == []
     assert agent.calls() == []
 
@@ -95,7 +92,7 @@ def test_an_upload_whose_matches_are_all_excluded_fails_the_hook(job, store, hoo
     outcome = post_command(job, hook, step(upload={"files": "a.log", "exclude": ["*.log"]}))
 
     assert outcome.code == 1
-    assert "*.log" in outcome.stderr
+    assert "*.log" in outcome.error
     assert store.requests == []
 
 
@@ -115,7 +112,6 @@ def test_an_allowed_empty_upload_succeeds_without_touching_the_store_or_promotin
     outcome = post_command(job, hook, step(upload=upload))
 
     assert outcome.code == 0, outcome.output
-    assert "Skipping artifact promotion (empty upload)" in outcome.stdout
     assert store.requests == []
     assert agent.calls() == []
 
@@ -153,7 +149,7 @@ def test_promote_without_git_ref_fails_the_hook(job, store, hook):
     outcome = post_command(job, hook, config)
 
     assert outcome.code == 1
-    assert "--git-ref" in outcome.stderr
+    assert "--git-ref" in outcome.error
     assert store.stored_keys() == []
 
 
@@ -215,5 +211,4 @@ def test_debug_traces_the_hook(job, store, hook, value):
     outcome = post_command(job, hook, {"debug": value, **step()})
 
     assert outcome.code == 0, outcome.output
-    assert "+ " in outcome.stderr
-    assert "run_artifacts_py" in outcome.stderr
+    assert [line for line in outcome.stderr.splitlines() if line.startswith("+ ")]

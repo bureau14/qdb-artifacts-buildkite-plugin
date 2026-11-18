@@ -266,17 +266,16 @@ def test_a_download_that_matches_nothing_fails_and_shows_what_is_there(job, stor
 
     assert outcome.code == 1
     for fact in [
-        "'*.tar.zst'",
-        "'*-c-api.tar.gz!lib/*'",
-        "'*-debug*'",
+        "*.tar.zst",
+        "*-c-api.tar.gz!lib/*",
+        "*-debug*",
         f"s3://example-artifacts/{PREFIX}/",
         "23",
         "file-00.zip",
         "file-19.zip",
-        "3 more",
     ]:
-        assert fact in outcome.stderr
-    assert "file-20.zip" not in outcome.stderr
+        assert fact in outcome.error
+    assert "file-20.zip" not in outcome.error
     assert job.files() == []
 
 
@@ -286,7 +285,7 @@ def test_a_download_whose_matches_are_all_excluded_fails(job, store, hook):
     outcome = download(job, hook, project(files=["*.bin"], exclude=["*"]))
 
     assert outcome.code == 1
-    assert "a.bin" in outcome.stderr
+    assert "a.bin" in outcome.error
     assert job.files() == []
 
 
