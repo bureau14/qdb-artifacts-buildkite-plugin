@@ -16,6 +16,7 @@ from lib.snapshot.agent import (
     check_annotation_style,
     check_meta_data_value,
 )
+from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
 from lib.snapshot.git import (
     GitError,
     branch_of,
@@ -163,3 +164,20 @@ class FakeCheckout:
     def checkout_files(self, directory: str, wanted: Callable[[str], bool]) -> dict[str, bytes]:
         check_tree_path(directory)
         return _files_under(self.tree, directory, wanted)
+
+
+class FakePipelines:
+    """``planner.Pipelines`` from facts by slug; an unknown slug is Buildkite's 404.
+
+    ``calls`` records every slug asked, in order.
+    """
+
+    def __init__(self, facts: Mapping[str, PipelineFacts]) -> None:
+        self.facts = dict(facts)
+        self.calls: list[str] = []
+
+    def __call__(self, slug: str) -> PipelineFacts:
+        self.calls.append(slug)
+        if slug not in self.facts:
+            raise PipelineNotFound(f"project {slug}: Buildkite has no pipeline {slug} (404)")
+        return self.facts[slug]

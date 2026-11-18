@@ -25,4 +25,6 @@ the plan step reads a value by the form the job that wrote it checked.
 - ``lines``: the release line of a root build, decided on git's facts.
 - ``plan``: the plan of a chain as data and as the JSON document kept in the
   root build's meta-data.
+- ``planner``: the plan of a root build: its snapshot tree, from git and
+  Buildkite, each behind an interface.
 """
