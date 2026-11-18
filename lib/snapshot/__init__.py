@@ -23,4 +23,6 @@ the plan step reads a value by the form the job that wrote it checked.
   merge-bases with the checkout, the checkout's commit and files), behind one
   small interface.
 - ``lines``: the release line of a root build, decided on git's facts.
+- ``plan``: the plan of a chain as data and as the JSON document kept in the
+  root build's meta-data.
 """
