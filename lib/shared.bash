@@ -70,11 +70,14 @@ plugin_read_list() {
   fi
 }
 
-# True when at least one of the named options is set for this step.
+# True when at least one of the named options is set for this step. Tests each
+# variable itself: through plugin_read_config, echo would take a value such as
+# "-n" for its own option and print nothing.
 plugin_has_any() {
-  local name
+  local name var
   for name in "$@"; do
-    if [[ -n "$(plugin_read_config "${name}" "")" ]]; then
+    var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${name}"
+    if [[ -n "${!var:-}" ]]; then
       return 0
     fi
   done
