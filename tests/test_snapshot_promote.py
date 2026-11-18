@@ -102,6 +102,34 @@ def test_of_two_builds_of_one_key_the_first_to_promote_holds_the_pointer(job, st
     assert store.get(LATEST) == job.env["BUILDKITE_BUILD_ID"].encode()
 
 
+def test_a_create_still_in_flight_when_another_build_creates_the_pointer_names_that_build(
+    job, store, hook, hook_midway
+):
+    held = store.hold("PUT", WHERE)
+    other = job.with_env(
+        BUILDKITE_BUILD_ID=OTHER_BUILD, BUILDKITE_BUILD_NUMBER="511", BUILDKITE_BUILD_URL=OTHER_URL
+    )
+    others = []
+
+    def other_build_promotes_then_release(process):
+        others.append(promote(other, hook, snapshot=KEY))
+        store.release(held)
+
+    first = hook_midway(
+        "post-command",
+        job.with_plugin(promote_step(snapshot=KEY)),
+        held.arrived,
+        other_build_promotes_then_release,
+    )
+
+    (second,) = others
+    assert held.ended_by == "released"
+    assert (first.code, second.code) == (0, 0), first.output + second.output
+    assert json.loads(store.get(WHERE))["build"]["id"] == OTHER_BUILD
+    assert "Created" in second.stderr
+    assert "511" in first.stderr and OTHER_URL in first.stderr
+
+
 def test_a_retried_job_finds_the_pointer_its_own_build_wrote(job, store, hook):
     assert promote(job, hook, snapshot=KEY).code == 0
     first = store.get(WHERE)
