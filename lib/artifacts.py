@@ -1373,7 +1373,7 @@ def resolve_default_download_build_id(project_config, pipeline_name):
     return build_id
 
 
-if __name__ == "__main__":
+def main():
     args = sys.argv[1:]
     cmd = args.pop(0)
     cmd_project_id = None
@@ -1497,3 +1497,7 @@ if __name__ == "__main__":
 
     else:
         die(f"unknown command: {cmd}")
+
+
+if __name__ == "__main__":
+    main()

@@ -906,7 +906,7 @@ def run_hook_interrupted(name, job, when, timeout=HOOK_TIMEOUT):
 
 def run_cli(job, *args):
     """The command line the hooks call. The one place that knows the entry point."""
-    return run_process([venv_python(), PLUGIN_ROOT / "lib" / "artifacts.py", *args], job)
+    return run_process([venv_python(), PLUGIN_ROOT / "artifacts.py", *args], job)
 
 
 def build_plugin_venv(home):

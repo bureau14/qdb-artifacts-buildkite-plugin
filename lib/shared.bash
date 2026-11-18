@@ -4,7 +4,7 @@ set -euo pipefail
 PLUGIN_PREFIX="QDB_ARTIFACTS"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${PLUGIN_DIR}/.venv"
-ARTIFACTS_PY="${PLUGIN_DIR}/lib/artifacts.py"
+ARTIFACTS_PY="${PLUGIN_DIR}/artifacts.py"
 
 # Detect Python 3.
 #   Linux/macOS: "python3" is on PATH.
