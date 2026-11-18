@@ -21,7 +21,7 @@ from . import layout
 from .clients import s3_client
 
 ABSENT = ("NoSuchKey", "404")
-TAKEN = ("PreconditionFailed", "412")
+TAKEN = ("PreconditionFailed",)
 
 
 @dataclass(frozen=True)
