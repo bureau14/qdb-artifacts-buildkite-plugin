@@ -186,7 +186,7 @@ def named_variant(options: Mapping[Any, Any], where: str) -> str | None:
 
 
 def variant_of(options: Mapping[Any, Any], where: str) -> str | None:
-    """``named_variant``, which must have the form of a variant (``configuration.is_variant``).
+    """``named_variant``, which must have the form of a variant (``forms.is_variant``).
 
     Wherever the plan step names a pointer or a build by a variant: the
     pointer is named after the variant the upload interpolated, which is the
