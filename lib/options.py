@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .errors import ArtifactsError
+from .pointer import is_key
 
 
 def _get_env_bool(val, default=False):
@@ -140,6 +141,20 @@ def resolve_default_download_build_id(project_config, pipeline_name):
     return build_id
 
 
+def snapshot_key(variable, option):
+    """The snapshot key of an option that only the plan step writes, or None when
+    the step has none."""
+    value = os.environ.get(f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_{variable}")
+    if not value:
+        return None
+    if not is_key(value):
+        raise ArtifactsError(
+            f"{option} {value!r} is not a snapshot key ('v1-' and 32 hex digits); "
+            "the plan step writes this option, never a person"
+        )
+    return value
+
+
 def upload_requested():
     """Whether the step names files to upload: an upload block without files
     uploads nothing."""
@@ -166,6 +181,8 @@ def upload_arguments():
     build_id = upload_config.get("build_id") or os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+
+    snapshot_key("UPLOAD_SNAPSHOT", "upload.snapshot")
 
     return {
         "project_id": project_id,
@@ -203,6 +220,8 @@ def promote_arguments():
     build_id = os.environ.get(f"{prefix}BUILD_ID") or os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
+
+    snapshot_key("PROMOTE_SNAPSHOT", "promote.snapshot")
 
     return {
         "project_id": project_id,
