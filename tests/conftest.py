@@ -3,15 +3,19 @@
 The suite drives the plugin only through the surfaces its users have: the hooks,
 run the way a Buildkite agent runs them; the command line the hooks call; and the
 names exported by lib/__init__.py. Everything else here is the world around those
-surfaces: an S3 and SSM server (moto, over real HTTP), a fake buildkite-agent on
-PATH, the plugin's own .venv, and the job environment an agent sets.
+surfaces: an S3 and SSM server (moto, over real HTTP) that can also refuse or hold
+chosen requests, a fake buildkite-agent on PATH, a clock that lets the job's
+Python skip its sleeps, the plugin's own .venv, and the job environment an agent
+sets.
 
 When the entry point of the command line moves, only run_cli changes. When the
+command line reports errors differently, only Outcome.error changes. When the
 library stops ending the process on failure, only expect_library_failure changes.
 """
 
 import contextlib
 import dataclasses
+import datetime
 import gzip
 import http.server
 import importlib
@@ -20,6 +24,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -27,6 +32,7 @@ import threading
 import urllib.parse
 import urllib.request
 import zipfile
+from http import HTTPStatus
 from pathlib import Path
 
 import boto3
@@ -70,8 +76,13 @@ def find_bash():
 BASH = find_bash()
 
 
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 # ---------------------------------------------------------------------------
-# The object store: moto in server mode, every request recorded.
+# The object store: moto in server mode. Every request is recorded, and a test
+# can make the store refuse or hold chosen requests of the plugin.
 # ---------------------------------------------------------------------------
 
 
@@ -80,6 +91,7 @@ class StoreRequest:
     """What the suite needs to know about one HTTP request the store received."""
 
     method: str
+    host: str
     path: str
     query: dict
     access_key_id: str
@@ -89,6 +101,13 @@ class StoreRequest:
     content_disposition: str
     target: str
     body: dict
+    arrived_at: datetime.datetime
+
+    @property
+    def key(self):
+        """The object key of a path-style request; "" for the bucket itself."""
+        parts = self.path.split("/", 2)
+        return parts[2] if len(parts) == 3 else ""
 
 
 def parse_credential_scope(authorization):
@@ -114,6 +133,7 @@ def describe_request(environ):
     query = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
     return StoreRequest(
         method=environ["REQUEST_METHOD"],
+        host=environ.get("HTTP_HOST", ""),
         path=environ.get("PATH_INFO", ""),
         query={k: v[0] for k, v in query.items()},
         access_key_id=access_key_id,
@@ -123,15 +143,146 @@ def describe_request(environ):
         content_disposition=environ.get("HTTP_CONTENT_DISPOSITION", ""),
         target=target,
         body=read_json_body(environ) if target else {},
+        arrived_at=utc_now(),
     )
 
 
-def recording(app, requests):
-    def record_and_forward(environ, start_response):
-        requests.append(describe_request(environ))
-        return app(environ, start_response)
+@dataclasses.dataclass(frozen=True)
+class RequestPattern:
+    """A plugin request by method, object key and some of its query parameters."""
 
-    return record_and_forward
+    method: str
+    key: str
+    query: tuple = ()
+
+    def matches(self, request):
+        return (
+            request.access_key_id != ADMIN_ACCESS_KEY_ID
+            and (request.method, request.key) == (self.method, self.key)
+            and all(request.query.get(name) == value for name, value in self.query)
+        )
+
+
+def drain_body(environ):
+    # What the client sent must be read for its connection to stay usable.
+    environ["wsgi.input"].read(int(environ.get("CONTENT_LENGTH") or 0))
+
+
+def answer_with_error(start_response, status, code=""):
+    """An S3 error response; without a code its body is empty, as for a HEAD."""
+    body = b""
+    if code:
+        body = (
+            "<?xml version='1.0' encoding='UTF-8'?>"
+            f"<Error><Code>{code}</Code><Message>refused by test</Message></Error>"
+        ).encode()
+    start_response(
+        f"{status} {HTTPStatus(status).phrase}",
+        [("Content-Type", "application/xml"), ("Content-Length", str(len(body)))],
+    )
+    return [body]
+
+
+@dataclasses.dataclass(frozen=True)
+class Refusal:
+    """Answers every matching plugin request with an S3 error; the store never sees it."""
+
+    pattern: RequestPattern
+    status: int
+    code: str
+
+    def claim(self, request):
+        return self.pattern.matches(request)
+
+    def answer(self, traffic, environ, start_response, forward):
+        drain_body(environ)
+        return answer_with_error(start_response, self.status, self.code)
+
+
+@dataclasses.dataclass
+class Hold:
+    """Keeps the first matching plugin request waiting before the store answers it,
+    until a request matching `until` has arrived ("until"), the test releases it
+    ("released") or `timeout` seconds have passed ("timeout"); ended_by says which
+    and released_at when. A hold still waiting when its test ends is "closed": its
+    request is answered 503 and never reaches the store of the next test."""
+
+    pattern: RequestPattern
+    until: object = None
+    timeout: float = HOOK_TIMEOUT
+    arrived: threading.Event = dataclasses.field(default_factory=threading.Event)
+    ended_by: str = ""
+    released_at: object = None
+
+    def claim(self, request):
+        if self.arrived.is_set() or not self.pattern.matches(request):
+            return False
+        self.arrived.set()
+        return True
+
+    def awaited_request_arrived(self, requests):
+        return self.until is not None and any(self.until.matches(r) for r in requests)
+
+    def answer(self, traffic, environ, start_response, forward):
+        if traffic.wait_out(self) == "closed":
+            return answer_with_error(start_response, 503, "SlowDown")
+        return forward(environ, start_response)
+
+
+class StoreTraffic:
+    """The requests the store received, and the rules it applies to the plugin's."""
+
+    def __init__(self):
+        self.requests = []
+        self.rules = []
+        self.changed = threading.Condition()
+
+    def receive(self, request):
+        """Record a request; return the rule that claims it, if one does."""
+        with self.changed:
+            self.requests.append(request)
+            self.changed.notify_all()
+            return next((rule for rule in self.rules if rule.claim(request)), None)
+
+    def add_rule(self, rule):
+        with self.changed:
+            self.rules.append(rule)
+        return rule
+
+    def end_hold(self, hold, reason):
+        with self.changed:
+            hold.ended_by = hold.ended_by or reason
+            self.changed.notify_all()
+
+    def wait_out(self, hold):
+        """Block until the hold ends; return why it ended."""
+        with self.changed:
+            over = self.changed.wait_for(
+                lambda: hold.ended_by or hold.awaited_request_arrived(self.requests), hold.timeout
+            )
+            hold.ended_by = hold.ended_by or ("until" if over else "timeout")
+            hold.released_at = utc_now()
+            return hold.ended_by
+
+    def clear(self):
+        """Close every hold still waiting, then forget all requests and rules."""
+        with self.changed:
+            for rule in self.rules:
+                if isinstance(rule, Hold):
+                    rule.ended_by = rule.ended_by or "closed"
+            self.changed.notify_all()
+            self.requests.clear()
+            self.rules.clear()
+
+
+def intercepting(app, traffic):
+    def record_and_answer(environ, start_response):
+        rule = traffic.receive(describe_request(environ))
+        if rule is None:
+            return app(environ, start_response)
+        return rule.answer(traffic, environ, start_response, app)
+
+    return record_and_answer
 
 
 class QuietRequestHandler(WSGIRequestHandler):
@@ -139,8 +290,8 @@ class QuietRequestHandler(WSGIRequestHandler):
         pass
 
 
-def start_store_server(requests):
-    app = recording(DomainDispatcherApplication(create_backend_app), requests)
+def start_store_server(traffic):
+    app = intercepting(DomainDispatcherApplication(create_backend_app), traffic)
     server = make_server("127.0.0.1", 0, app, threaded=True, request_handler=QuietRequestHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -178,8 +329,12 @@ class Store:
 
     endpoint: str
     bucket: str
-    requests: list
+    traffic: StoreTraffic
     s3: object
+
+    @property
+    def requests(self):
+        return self.traffic.requests
 
     def put(self, key, body=b""):
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=body)
@@ -221,23 +376,41 @@ class Store:
             if r.access_key_id != ADMIN_ACCESS_KEY_ID and service in (None, r.service)
         ]
 
+    def refuse(self, method, key, status, code="", query=()):
+        """From now on answer the plugin's matching requests with an S3 error."""
+        return self.traffic.add_rule(
+            Refusal(RequestPattern(method, key, tuple(query)), status, code)
+        )
+
+    def hold(self, method, key, query=(), until=None, timeout=HOOK_TIMEOUT):
+        """Keep the plugin's next matching request waiting; until is (method, key,
+        query) of the request whose arrival ends the hold. See Hold."""
+        awaited = RequestPattern(*until) if until else None
+        return self.traffic.add_rule(
+            Hold(RequestPattern(method, key, tuple(query)), awaited, timeout)
+        )
+
+    def release(self, hold):
+        self.traffic.end_hold(hold, "released")
+
 
 @pytest.fixture(scope="session")
 def store_server():
-    requests = []
-    server = start_store_server(requests)
-    yield f"http://127.0.0.1:{server.server_port}", requests
+    traffic = StoreTraffic()
+    server = start_store_server(traffic)
+    yield f"http://127.0.0.1:{server.server_port}", traffic
     server.shutdown()
 
 
 @pytest.fixture
 def store(store_server):
-    endpoint, requests = store_server
+    endpoint, traffic = store_server
     reset_store_server(endpoint)
     s3 = admin_client("s3", endpoint)
     s3.create_bucket(Bucket=BUCKET)
-    requests.clear()
-    return Store(endpoint=endpoint, bucket=BUCKET, requests=requests, s3=s3)
+    traffic.clear()
+    yield Store(endpoint=endpoint, bucket=BUCKET, traffic=traffic, s3=s3)
+    traffic.clear()
 
 
 class DenyingSsmHandler(http.server.BaseHTTPRequestHandler):
@@ -337,7 +510,8 @@ def archive():
 
 
 # ---------------------------------------------------------------------------
-# The fake buildkite-agent: first on PATH, records every call.
+# Fake tools: a buildkite-agent first on PATH, and a Python for post-checkout.
+# Each records every call in its own numbered directory: argv NUL-separated.
 # ---------------------------------------------------------------------------
 
 FAKE_AGENT_SCRIPT = """#!/bin/sh
@@ -352,42 +526,122 @@ cat > "$calls/$n/stdin"
 exit "${FAKE_BUILDKITE_AGENT_EXIT_STATUS:-0}"
 """
 
+FAKE_PYTHON_SCRIPT = """#!/bin/sh
+# Records each call in its own numbered directory: the path it ran as, then its
+# arguments, NUL-separated. Asked for "-m venv <dir>", it lays out <dir>/bin/python
+# as a copy of itself, so the venv's Python records its calls too.
+set -eu
+calls="$FAKE_PYTHON_CALLS"
+n=0
+while [ -e "$calls/$n" ]; do n=$((n + 1)); done
+mkdir "$calls/$n"
+printf '%s\\0' "$0" "$@" > "$calls/$n/argv"
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+  for venv in "$@"; do :; done
+  mkdir -p "$venv/bin"
+  cp "$0" "$venv/bin/python"
+fi
+"""
+
 
 @dataclasses.dataclass(frozen=True)
-class AgentCall:
+class ToolCall:
     argv: list
     stdin: str
 
 
+def read_calls(calls_dir):
+    def read(path):
+        return path.read_bytes().decode() if path.exists() else ""
+
+    numbered = sorted(calls_dir.iterdir(), key=lambda d: int(d.name))
+    return [
+        ToolCall(argv=read(d / "argv").split("\0")[:-1], stdin=read(d / "stdin")) for d in numbered
+    ]
+
+
 @dataclasses.dataclass(frozen=True)
-class FakeAgent:
-    bin_dir: Path
+class FakeTool:
+    path: Path
     calls_dir: Path
 
+    @property
+    def bin_dir(self):
+        return self.path.parent
+
     def calls(self):
-        numbered = sorted(self.calls_dir.iterdir(), key=lambda d: int(d.name))
-        return [
-            AgentCall(
-                argv=(d / "argv").read_bytes().decode().split("\0")[:-1],
-                stdin=(d / "stdin").read_bytes().decode(),
-            )
-            for d in numbered
-        ]
+        return read_calls(self.calls_dir)
 
 
-def install_fake_agent(root):
+def install_fake_tool(root, name, script):
     bin_dir, calls_dir = root / "bin", root / "calls"
     bin_dir.mkdir(parents=True)
     calls_dir.mkdir()
-    script = bin_dir / "buildkite-agent"
-    script.write_bytes(FAKE_AGENT_SCRIPT.encode())
-    script.chmod(0o755)
-    return FakeAgent(bin_dir=bin_dir, calls_dir=calls_dir)
+    path = bin_dir / name
+    path.write_bytes(script.encode())
+    path.chmod(0o755)
+    return FakeTool(path=path, calls_dir=calls_dir)
 
 
 @pytest.fixture
 def agent(tmp_path):
-    return install_fake_agent(tmp_path / "agent")
+    return install_fake_tool(tmp_path / "agent", "buildkite-agent", FAKE_AGENT_SCRIPT)
+
+
+@pytest.fixture
+def fake_python(tmp_path):
+    return install_fake_tool(tmp_path / "fake-python", "python3", FAKE_PYTHON_SCRIPT)
+
+
+# ---------------------------------------------------------------------------
+# A clock for the job's Python: time.sleep returns at once and records how long
+# it was asked to wait, so retry waits cost nothing and can be checked.
+# ---------------------------------------------------------------------------
+
+INSTANT_SLEEP_MODULE = '''"""Imported by every Python of a job whose PYTHONPATH holds this directory."""
+import os
+import threading
+import time
+
+_RECORD = os.environ["QDB_ARTIFACTS_TESTS_SLEEPS"]
+_LOCK = threading.Lock()
+
+
+def _record_instead_of_sleeping(seconds):
+    with _LOCK, open(_RECORD, "a") as record:
+        record.write(f"{seconds}\\n")
+
+
+time.sleep = _record_instead_of_sleeping
+'''
+
+
+@dataclasses.dataclass(frozen=True)
+class InstantClock:
+    """The variables that give a job the instant clock, and what its Python slept."""
+
+    env: dict
+    record: Path
+
+    def sleeps(self):
+        text = self.record.read_text() if self.record.exists() else ""
+        return [float(seconds) for seconds in text.split()]
+
+
+def install_instant_clock(root):
+    # Python imports sitecustomize from PYTHONPATH at start-up, before any plugin
+    # code, so a sleep the plugin binds at import is the instant one too. This
+    # holds as long as the hooks start Python without -E, -I or -S.
+    root.mkdir(parents=True)
+    (root / "sitecustomize.py").write_text(INSTANT_SLEEP_MODULE)
+    record = root / "sleeps"
+    env = {"PYTHONPATH": str(root), "QDB_ARTIFACTS_TESTS_SLEEPS": str(record)}
+    return InstantClock(env=env, record=record)
+
+
+@pytest.fixture
+def instant_clock(tmp_path):
+    return install_instant_clock(tmp_path / "clock")
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +782,8 @@ def job(tmp_path, store, agent, backend, plugin_venv):
 
 
 # ---------------------------------------------------------------------------
-# The plugin's .venv, built by the real post-checkout hook once per session.
+# Running the plugin's processes, and the plugin's .venv, built by the real
+# post-checkout hook once per session.
 # ---------------------------------------------------------------------------
 
 
@@ -546,6 +801,9 @@ def venv_version():
     return {k.strip(): v.strip() for k, v in entries.items()}.get("version")
 
 
+ERROR_MARKER = "[artifacts] ERROR:"
+
+
 @dataclasses.dataclass(frozen=True)
 class Outcome:
     code: int
@@ -555,6 +813,14 @@ class Outcome:
     @property
     def output(self):
         return f"exit {self.code}\n--- stdout\n{self.stdout}\n--- stderr\n{self.stderr}"
+
+    @property
+    def error(self):
+        """The error the plugin reported, without the progress lines before it:
+        today the last "[artifacts] ERROR:" line of stderr and all that follows.
+        "" when it reported none, as when a traceback ended it."""
+        _, marker, rest = self.stderr.rpartition(ERROR_MARKER)
+        return marker + rest if marker else ""
 
 
 def decode_output(raw):
@@ -566,12 +832,12 @@ def stop_process_group(process):
     if os.name == "nt":
         process.kill()
     else:
-        os.killpg(process.pid, 9)
+        os.killpg(process.pid, signal.SIGKILL)
     return process.communicate()
 
 
-def run_process(argv, job, timeout=HOOK_TIMEOUT):
-    process = subprocess.Popen(
+def start_process(argv, job):
+    return subprocess.Popen(
         [str(a) for a in argv],
         cwd=job.workspace,
         env=job.env,
@@ -580,6 +846,9 @@ def run_process(argv, job, timeout=HOOK_TIMEOUT):
         stderr=subprocess.PIPE,
         start_new_session=os.name != "nt",
     )
+
+
+def finish_process(process, argv, timeout):
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -588,9 +857,37 @@ def run_process(argv, job, timeout=HOOK_TIMEOUT):
     return Outcome(process.returncode, decode_output(stdout), decode_output(stderr))
 
 
-def run_hook(name, job, timeout=HOOK_TIMEOUT):
+def run_process(argv, job, timeout=HOOK_TIMEOUT):
+    return finish_process(start_process(argv, job), argv, timeout)
+
+
+def hook_argv(name, root):
+    return [BASH, root / "hooks" / name]
+
+
+def run_hook(name, job, timeout=HOOK_TIMEOUT, root=PLUGIN_ROOT):
     """Run a hook the way the agent does: bash, the job's environment, its checkout."""
-    return run_process([BASH, PLUGIN_ROOT / "hooks" / name], job, timeout)
+    return run_process(hook_argv(name, root), job, timeout)
+
+
+def run_hook_midway(name, job, when, act, timeout=HOOK_TIMEOUT):
+    """Run a hook and, once the event `when` is set, call act(process) while it runs."""
+    argv = hook_argv(name, PLUGIN_ROOT)
+    process = start_process(argv, job)
+    if not when.wait(timeout):
+        _, stderr = stop_process_group(process)
+        pytest.fail(f"{argv[:3]} never got to the awaited point\n{decode_output(stderr)}")
+    act(process)
+    return finish_process(process, argv, timeout)
+
+
+def press_ctrl_c(process):
+    """What Ctrl-C in a terminal does: SIGINT to the whole foreground process group."""
+    os.killpg(process.pid, signal.SIGINT)
+
+
+def run_hook_interrupted(name, job, when, timeout=HOOK_TIMEOUT):
+    return run_hook_midway(name, job, when, press_ctrl_c, timeout)
 
 
 def run_cli(job, *args):
@@ -617,8 +914,30 @@ def plugin_venv(tmp_path_factory):
 
 
 @pytest.fixture
+def plugin_copy(tmp_path):
+    """The plugin's hooks and library in a directory of their own, without .venv, for
+    hooks whose run would replace the .venv every other test uses."""
+    root = tmp_path / "plugin"
+    for part in ("hooks", "lib"):
+        shutil.copytree(
+            PLUGIN_ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__")
+        )
+    return root
+
+
+@pytest.fixture
 def hook():
     return run_hook
+
+
+@pytest.fixture
+def hook_midway():
+    return run_hook_midway
+
+
+@pytest.fixture
+def interrupted_hook():
+    return run_hook_interrupted
 
 
 @pytest.fixture
