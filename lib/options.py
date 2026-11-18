@@ -16,6 +16,7 @@ import functools
 import os
 import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 from . import pointer
@@ -236,12 +237,22 @@ def own_downloads():
     )
 
 
+def without_user(repository):
+    """The repository as a manifest may name it. Every reader of the bucket reads the
+    manifest, and the user part of a URL may hold a token or a password, so a URL
+    loses it. The scp form (git@host:org/repo) has no place for a password."""
+    url = urllib.parse.urlsplit(repository)
+    if not url.scheme or "@" not in url.netloc:
+        return repository
+    return urllib.parse.urlunsplit(url._replace(netloc=url.netloc.rpartition("@")[2]))
+
+
 def upload_provenance(key, build_id):
     """Where the files of an upload in a build with a snapshot key were made."""
     option = "upload.snapshot"
     return Provenance(
         source=Source(
-            repository=job_variable("BUILDKITE_REPO", option),
+            repository=without_user(job_variable("BUILDKITE_REPO", option)),
             commit=checkout_commit(),
             pipeline=job_variable("BUILDKITE_PIPELINE_SLUG", option),
             build_number=job_build_number(option),

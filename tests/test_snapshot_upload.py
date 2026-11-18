@@ -91,6 +91,40 @@ def test_without_a_key_the_manifest_is_todays_and_git_is_not_asked(job, store, h
     assert git.calls() == []
 
 
+@pytest.mark.parametrize(
+    "repository, recorded",
+    [
+        (
+            "https://x-access-token:not-a-real-token@git.example.test/example/widget.git",
+            "https://git.example.test/example/widget.git",
+        ),
+        (
+            "https://not-a-real-token@git.example.test/example/widget.git",
+            "https://git.example.test/example/widget.git",
+        ),
+        (
+            "ssh://git@git.example.test:2222/example/widget.git",
+            "ssh://git.example.test:2222/example/widget.git",
+        ),
+        ("git@git.example.test:example/widget.git", "git@git.example.test:example/widget.git"),
+        (
+            "https://git.example.test/example/widget.git",
+            "https://git.example.test/example/widget.git",
+        ),
+    ],
+    ids=["url-user-and-password", "url-token-as-user", "ssh-url-user", "scp-form", "url"],
+)
+def test_the_source_names_the_repository_without_the_user_of_its_url(
+    job, store, hook, repository, recorded
+):
+    outcome = upload(job.with_env(BUILDKITE_REPO=repository), hook, upload_block(snapshot=KEY))
+
+    assert outcome.code == 0, outcome.output
+    body, manifest = manifest_of(store)
+    assert manifest["source"]["repository"] == recorded
+    assert b"not-a-real-token" not in body
+
+
 def test_a_job_that_downloads_no_named_build_records_no_downloads(job, store, hook):
     downloads = {"projects": [download_project(project_id="gadget")]}
 
