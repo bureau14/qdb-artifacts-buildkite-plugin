@@ -96,6 +96,7 @@ from botocore.exceptions import ClientError
 
 from .clients import _s3_client, aws_clients, resolve_object_auth
 from .errors import die
+from .log import fmt_size, log
 
 # ---------------------------------------------------------------------------
 # Timeout / retry constants
@@ -152,10 +153,6 @@ class ResolvedArtifact:
     rel: str
     size: int
     entry_rules: list[tuple[str | None, str | None]]
-
-
-def log(msg):
-    print(f"[artifacts] {msg}", file=sys.stderr)
 
 
 def _with_retry(fn, description):
@@ -344,14 +341,6 @@ def scope(
         )
 
     return bucket, key_join(prefix, project_id, git_ref, "variants", variant, "builds", build_id)
-
-
-def fmt_size(n):
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if abs(n) < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} TiB"
 
 
 def _upload_manifest(bucket, prefix, manifest_payload, cfg, auth):
