@@ -27,13 +27,22 @@ nothing here imports `snapshot`.
 
 from __future__ import annotations
 
-import datetime
 import json
-import re
 from dataclasses import asdict, dataclass
 
 from . import layout
 from .errors import ArtifactsError
+from .forms import (
+    is_build_id,
+    is_count,
+    is_full_ref,
+    is_https_url,
+    is_iso_utc,
+    is_key,
+    is_object_id,
+    is_slug,
+    is_variant,
+)
 
 SCHEMA = 1
 MEMBERS = ("schema", "project", "key", "variant", "git_ref", "commit", "build", "written_at")
@@ -58,68 +67,9 @@ class Pointer:
     written_at: str  # for people; nothing decides on it
 
 
-def iso_utc(moment: datetime.datetime) -> str:
-    """moment in UTC, ISO 8601 to the millisecond, as snapshot records are stamped."""
-    t = moment.astimezone(datetime.timezone.utc)
-    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
-
-
 # ---------------------------------------------------------------------------
-# The form of each field. The plan step reads pointers with the same forms, so
-# a pointer written here is one it accepts.
+# The form of each field
 # ---------------------------------------------------------------------------
-
-
-def matching(pattern: str):
-    compiled = re.compile(pattern)
-    return lambda value: isinstance(value, str) and compiled.fullmatch(value) is not None
-
-
-is_slug = matching(r"[a-z0-9][a-z0-9-]*")
-is_key = matching(r"v1-[0-9a-f]{32}")
-is_variant = matching(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-is_commit = matching(r"[0-9a-f]{40}")
-is_build_id = matching(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-is_https_url = matching(r"https://[A-Za-z0-9._~:/%+-]+")
-is_iso_utc = matching(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z")
-
-
-def is_count(value) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
-# The bytes no ref name holds (refname_disposition in git's refs.c): the ASCII
-# control characters, DEL, space, and ~ ^ : ? * [ \.
-REFUSED_IN_REFS = frozenset(range(0x20)) | frozenset(b"\x7f ~^:?*[\\")
-
-
-def is_ref_component(component: bytes) -> bool:
-    return bool(component) and not component.startswith(b".") and not component.endswith(b".lock")
-
-
-def is_ref_name(name: str) -> bool:
-    """A name git accepts as a branch or a tag, by the rules of git's
-    check_refname_format and strbuf_check_branch_ref."""
-    try:
-        raw = name.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return (
-        not raw.startswith(b"-")
-        and raw != b"HEAD"
-        and not any(b in REFUSED_IN_REFS for b in raw)
-        and b".." not in raw
-        and b"@{" not in raw
-        and not raw.endswith(b".")
-        and all(is_ref_component(c) for c in raw.split(b"/"))
-    )
-
-
-def is_full_ref(value) -> bool:
-    return isinstance(value, str) and any(
-        value.startswith(kind) and is_ref_name(value[len(kind) :])
-        for kind in ("refs/heads/", "refs/tags/")
-    )
 
 
 def fields_and_forms(p: Pointer):
@@ -128,7 +78,7 @@ def fields_and_forms(p: Pointer):
         ("key", p.key, is_key, "a snapshot key"),
         ("variant", p.variant, is_variant, "a variant name"),
         ("git_ref", p.git_ref, is_full_ref, "a full branch or tag ref"),
-        ("commit", p.commit, is_commit, "a commit id of 40 hex digits"),
+        ("commit", p.commit, is_object_id, "a commit id of 40 hex digits"),
         ("build.id", p.build.id, is_build_id, "a build uuid"),
         ("build.number", p.build.number, is_count, "a build number"),
         ("build.url", p.build.url, is_https_url, "an https URL"),

@@ -23,6 +23,7 @@ module can be read, and tested, with nothing below it:
     annotation  the list of uploaded files on the build page
     upload      select files, transfer, manifest, annotation
     download    resolve, transfer, extract
+    forms       the form of each value a snapshot names, for the pointer and the plan
     pointer     the snapshot pointer: which build holds a variant of a snapshot
     promote     move LATEST_SUCCESSFUL to a build; with a key, create the pointer
     options     the plugin's options as a job sees them in its environment

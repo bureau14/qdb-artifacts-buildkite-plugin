@@ -11,15 +11,15 @@ the agent's variables, and the commit of its checkout, which only git can tell
 when the build was started for a branch rather than a commit.
 """
 
-import datetime
 import functools
 import os
 import re
 import subprocess
+import time
 import urllib.parse
 from pathlib import Path
 
-from . import pointer
+from . import forms, pointer
 from .errors import ArtifactsError
 from .manifest import Download, Provenance, Source
 
@@ -157,7 +157,7 @@ def snapshot_key(variable, option):
     value = os.environ.get(f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_{variable}")
     if not value:
         return None
-    if not pointer.is_key(value):
+    if not forms.is_key(value):
         raise ArtifactsError(
             f"{option} {value!r} is not a snapshot key ('v1-' and 32 hex digits); "
             "the plan step writes this option, never a person"
@@ -178,7 +178,7 @@ def checkout_commit():
     except OSError as error:
         raise ArtifactsError(f"git rev-parse HEAD cannot run in {Path.cwd()}: {error}") from None
     commit = done.stdout.strip()
-    if done.returncode != 0 or not pointer.is_commit(commit):
+    if done.returncode != 0 or not forms.is_object_id(commit):
         told = done.stderr.strip() or commit
         raise ArtifactsError(f"git rev-parse HEAD in {Path.cwd()} names no commit: {told!r}")
     return commit
@@ -226,7 +226,7 @@ def snapshot_pointer(project_id, key, variant, git_ref, build_id):
                 number=job_build_number(option),
                 url=job_variable("BUILDKITE_BUILD_URL", option),
             ),
-            written_at=pointer.iso_utc(datetime.datetime.now(datetime.timezone.utc)),
+            written_at=forms.iso_utc(time.time()),
         )
     )
 
