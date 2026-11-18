@@ -189,6 +189,24 @@ def test_without_strict_ref_match_the_library_falls_back_to_master(
     assert objects[0].key.startswith(f"engine/{MASTER}/")
 
 
+def test_resolve_walks_to_master_unless_asked_for_a_strict_ref_match(
+    library, library_environment, store
+):
+    put_promoted_build(store, ref=MASTER)
+
+    _, resolved, _ = library.resolve_artifacts(
+        cfg=s3_config(library, store),
+        auth=library.ObjectAuth(),
+        project_id="engine",
+        build_id="LATEST_SUCCESSFUL",
+        git_ref=FEATURE,
+        variant="linux",
+        patterns=["*.whl"],
+    )
+
+    assert (resolved.ref, resolved.fallback_applied) == (MASTER, True)
+
+
 def test_an_unresolvable_build_ends_the_process_today(
     library, library_environment, store, expect_library_failure
 ):
@@ -264,6 +282,29 @@ def test_download_extracts_with_entry_rules_and_does_not_clean(
     )
 
     assert sorted(p.name for p in tmp_path.iterdir()) == ["keep.txt", "qdbd"]
+
+
+def test_download_writes_archives_unextracted_into_the_working_directory_by_default(
+    library, library_environment, store, tmp_path, monkeypatch, archive
+):
+    body = archive(".tar.zst", {"bin/qdbd": b"server"})
+    store.put_build("engine", FEATURE, "linux", "b-9", {"widget-server.tar.zst": body})
+    working_directory = tmp_path / "cwd"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+
+    library.download_artifacts(
+        cfg=s3_config(library, store),
+        auth=library.ObjectAuth(),
+        project_id="engine",
+        build_id="b-9",
+        git_ref=FEATURE,
+        variant="linux",
+        patterns=["*.tar.zst"],
+    )
+
+    assert [p.name for p in working_directory.iterdir()] == ["widget-server.tar.zst"]
+    assert (working_directory / "widget-server.tar.zst").read_bytes() == body
 
 
 @pytest.mark.parametrize("backend", ["s3", "r2"])
