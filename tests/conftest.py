@@ -32,6 +32,7 @@ from pathlib import Path
 import boto3
 import pytest
 import zstandard
+from botocore.config import Config
 from moto.server import DomainDispatcherApplication, create_backend_app
 from werkzeug.serving import WSGIRequestHandler, make_server
 
@@ -158,6 +159,8 @@ def admin_client(service, endpoint, region=AWS_REGION):
         region_name=region,
         aws_access_key_id=ADMIN_ACCESS_KEY_ID,
         aws_secret_access_key="test-harness-admin-secret",
+        # moto gives multipart objects a wrong whole-object checksum.
+        config=Config(response_checksum_validation="when_required"),
     )
 
 
@@ -187,7 +190,7 @@ class Store:
     def head(self, key):
         return self.s3.head_object(Bucket=self.bucket, Key=key)
 
-    def keys(self, prefix=""):
+    def stored_keys(self, prefix=""):
         pages = self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix)
         return sorted(o["Key"] for page in pages for o in page.get("Contents", []))
 
