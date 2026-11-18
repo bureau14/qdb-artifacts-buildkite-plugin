@@ -133,6 +133,16 @@ def test_exclude_removes_matched_objects_by_their_path_in_the_build(job, store, 
     assert job.files("out") == ["a-server.tar.zst"]
 
 
+def test_the_objects_of_a_build_are_listed_past_the_first_page(job, store, hook):
+    # The store lists 1000 keys a page, so the file asked for is on the second.
+    put_objects(store, [f"part-{i:04d}.bin" for i in range(1001)])
+
+    outcome = download(job, hook, project(files=["part-1000.bin"], **{"output-dir": "out"}))
+
+    assert outcome.code == 0, outcome.output
+    assert job.files("out") == ["part-1000.bin"]
+
+
 def test_without_output_dir_files_land_in_the_checkout_under_their_build_path(job, store, hook):
     put_objects(store, ["artifacts/x/a.bin"])
 
