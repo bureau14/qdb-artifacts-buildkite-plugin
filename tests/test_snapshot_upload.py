@@ -139,8 +139,17 @@ def test_a_job_without_download_options_records_no_downloads(job, store, hook):
     assert manifest_of(store)[1]["downloads"] == []
 
 
-def test_the_commit_of_the_source_is_the_head_of_the_jobs_checkout(job, store, hook, git):
-    job = job.with_env(FAKE_GIT_HEAD="fedcba9876543210fedcba9876543210fedcba98")
+@pytest.mark.parametrize(
+    "build_commit",
+    ["HEAD", "0123456789abcdef0123456789abcdef01234567"],
+    ids=["build-of-a-branch", "checkout-moved-off-the-builds-commit"],
+)
+def test_the_commit_of_the_source_is_the_head_of_the_jobs_checkout(
+    job, store, hook, git, build_commit
+):
+    job = job.with_env(
+        FAKE_GIT_HEAD="fedcba9876543210fedcba9876543210fedcba98", BUILDKITE_COMMIT=build_commit
+    )
 
     assert upload(job, hook, upload_block(snapshot=KEY)).code == 0
 

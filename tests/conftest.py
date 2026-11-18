@@ -741,6 +741,9 @@ def buildkite_variables(workspace):
         "BUILDKITE_PIPELINE_SLUG": PIPELINE_SLUG,
         "BUILDKITE_REPO": REPOSITORY,
         "BUILDKITE_BRANCH": BRANCH,
+        # What the agent gives a build started for a branch rather than a commit,
+        # so that only git can tell the commit of the checkout.
+        "BUILDKITE_COMMIT": "HEAD",
         "BUILDKITE_JOB_ID": JOB_ID,
         "BUILDKITE_LABEL": JOB_LABEL,
         "BUILDKITE_BUILD_CHECKOUT_PATH": str(workspace),

@@ -57,8 +57,17 @@ def test_the_step_moves_latest_successful_then_creates_the_pointer_of_its_varian
     assert WHERE in outcome.stderr
 
 
-def test_the_commit_of_the_pointer_is_the_head_of_the_jobs_checkout(job, store, hook, git):
-    job = job.with_env(FAKE_GIT_HEAD="fedcba9876543210fedcba9876543210fedcba98")
+@pytest.mark.parametrize(
+    "build_commit",
+    ["HEAD", "0123456789abcdef0123456789abcdef01234567"],
+    ids=["build-of-a-branch", "checkout-moved-off-the-builds-commit"],
+)
+def test_the_commit_of_the_pointer_is_the_head_of_the_jobs_checkout(
+    job, store, hook, git, build_commit
+):
+    job = job.with_env(
+        FAKE_GIT_HEAD="fedcba9876543210fedcba9876543210fedcba98", BUILDKITE_COMMIT=build_commit
+    )
 
     assert promote(job, hook, snapshot=KEY).code == 0
 
