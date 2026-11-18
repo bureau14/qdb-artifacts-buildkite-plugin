@@ -31,4 +31,6 @@ the plan step reads a value by the form the job that wrote it checked.
   make over the records they have read.
 - ``document``: the generated pipeline as data: what the plan step finds in
   it, the one resolution it writes into it, and the trigger and resume steps.
+- ``annotation``: the texts a gate step shows on the build page: the plan, a
+  refusal, a failure and how to retry it.
 """
