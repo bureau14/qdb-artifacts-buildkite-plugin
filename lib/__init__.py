@@ -27,8 +27,8 @@ module can be read, and tested, with nothing below it:
     pointer     the snapshot pointer: which build holds a variant of a snapshot
     promote     move LATEST_SUCCESSFUL to a build; with a key, create the pointer
     options     the plugin's options as a job sees them in its environment
-    cli         the command line the hooks call
     snapshot/   the planning of snapshot dependencies; only the gate steps import it
+    cli         the command line the hooks call
 
 A failure the library can explain raises ArtifactsError. Other failures raise
 the exception of boto3, of zstandard or of the standard library, and a Ctrl-C

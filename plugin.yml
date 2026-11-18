@@ -126,6 +126,15 @@ configuration:
               - git_ref
       required:
         - projects
+    plan:
+      type: string
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. After the command the plugin plans the build, then uploads that pipeline with one build of every snapshot dependency written into it, or the trigger steps of the dependencies that are built first."
+    resume:
+      type: string
+      description: "Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. It uploads that pipeline, or fails and names the dependency that failed."
+    leave:
+      type: boolean
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the gate step that runs after every other step of a build with snapshot dependencies and records which variants did not pass."
     debug:
       type: boolean
       description: "Enable bash debug tracing"
@@ -133,4 +142,7 @@ configuration:
     - required: [upload]
     - required: [download]
     - required: [promote]
+    - required: [plan]
+    - required: [resume]
+    - required: [leave]
   additionalProperties: false

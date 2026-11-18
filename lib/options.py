@@ -4,12 +4,14 @@ The agent flattens the step's plugin configuration into variables: a list as
 KEY_0, KEY_1, ..., a map as KEY_<NAME>, a boolean as "true" or "false". This
 module reads them back, checks them, and fills in what the job implies when an
 option is left out: its pipeline, its build and its ref. What it returns are the
-arguments of upload(), promote() and download().
+arguments of upload(), promote() and download(), and the gate step a step is.
 
 A step with a snapshot key also records facts of its job: the build, read from
 the agent's variables, and the commit of its checkout, which only git can tell
 when the build was started for a branch rather than a commit.
 """
+
+from __future__ import annotations
 
 import functools
 import os
@@ -17,6 +19,7 @@ import re
 import subprocess
 import time
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import forms, pointer
@@ -369,6 +372,43 @@ def promote_arguments():
 def command_exit_status():
     """The exit status of the step's command as the agent reports it; 0 when unset."""
     return int(os.environ.get("BUILDKITE_COMMAND_EXIT_STATUS") or "0")
+
+
+@dataclass(frozen=True)
+class GateStep:
+    """A gate step of a build with snapshot dependencies: its kind and the pipeline it plans.
+
+    ``kind`` is ``plan``, ``resume`` or ``leave``; ``pipeline`` the path of the
+    generated pipeline that ``plan`` and ``resume`` name, None for ``leave``.
+    """
+
+    kind: str
+    pipeline: str | None
+
+
+GATE_OPTIONS = ("plan", "resume", "leave")
+
+
+def gate_step():
+    """The gate option of the step, or None for a step that is no gate step.
+
+    The runner prints the steps of plan and leave, the plan step the step of
+    resume; a person writes none. A step carries one of them: two are an
+    error, and so is a leave that is not true.
+    """
+    prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
+    given = {k: os.environ.get(prefix + k.upper()) for k in GATE_OPTIONS}
+    carried = {k: v for k, v in given.items() if v}
+    if not carried:
+        return None
+    if len(carried) > 1:
+        raise ArtifactsError(f"a step carries one gate option, this one {' and '.join(carried)}")
+    ((kind, value),) = carried.items()
+    if kind == "leave":
+        if value != "true":
+            raise ArtifactsError(f"leave is true on the step that leaves the gate, not {value!r}")
+        return GateStep(kind, None)
+    return GateStep(kind, value)
 
 
 def download_arguments():
