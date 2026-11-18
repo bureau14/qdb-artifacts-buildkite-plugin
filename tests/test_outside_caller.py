@@ -1,4 +1,4 @@
-"""The library as its outside caller uses it: vendored at thirdparty/qdb_artifacts,
+"""The library as a caller outside the plugin uses it: vendored at vendor/qdb_artifacts,
 imported through that namespace path by a fresh interpreter with a clean sys.path."""
 
 import json
@@ -7,24 +7,24 @@ from pathlib import PurePath
 import pytest
 
 MASTER = "refs/heads/master"
-PREFIX = f"widget-build/{MASTER}/variants/linux-aarch64-release/builds/b-5"
+PREFIX = f"widget-build/{MASTER}/variants/widget-arm64-release/builds/b-5"
 REQUEST = {
     "project_id": "widget-build",
     "build_id": "LATEST_SUCCESSFUL",
     "git_ref": MASTER,
-    "variant": "linux-aarch64-release",
-    "patterns": ["artifacts/*-aarch64-server.tar.zst", "artifacts/*-aarch64-utils.tar.zst"],
+    "variant": "widget-arm64-release",
+    "patterns": ["artifacts/*-arm64-server.tar.zst", "artifacts/*-arm64-utils.tar.zst"],
 }
 
 
 def put_promoted_build(store, ref=MASTER):
     files = {
-        "artifacts/widget-1.0-aarch64-server.tar.zst": b"server",
-        "artifacts/widget-1.0-aarch64-utils.tar.zst": b"utils",
-        "artifacts/widget-1.0-aarch64-c-api.tar.zst": b"c-api",
+        "artifacts/widget-1.0-arm64-server.tar.zst": b"server",
+        "artifacts/widget-1.0-arm64-utils.tar.zst": b"utils",
+        "artifacts/widget-1.0-arm64-c-api.tar.zst": b"c-api",
     }
-    store.put_build("widget-build", ref, "linux-aarch64-release", "b-5", files)
-    store.put_pointer("widget-build", ref, "linux-aarch64-release", "b-5")
+    store.put_build("widget-build", ref, "widget-arm64-release", "b-5", files)
+    store.put_pointer("widget-build", ref, "widget-arm64-release", "b-5")
 
 
 @pytest.mark.parametrize("backend", ["s3", "r2"])
@@ -36,7 +36,7 @@ def test_the_vendored_import_resolves_the_promoted_build(outside_caller, store, 
     assert outcome.code == 0, outcome.output
     result = json.loads(outcome.stdout)
     assert PurePath(result["package_file"]).parts[-4:] == (
-        "thirdparty",
+        "vendor",
         "qdb_artifacts",
         "lib",
         "__init__.py",
@@ -44,12 +44,12 @@ def test_the_vendored_import_resolves_the_promoted_build(outside_caller, store, 
     assert (result["bucket"], result["build_id"]) == (store.bucket, "b-5")
     assert result["artifacts"] == [
         {
-            "key": f"{PREFIX}/artifacts/widget-1.0-aarch64-server.tar.zst",
-            "filename": "widget-1.0-aarch64-server.tar.zst",
+            "key": f"{PREFIX}/artifacts/widget-1.0-arm64-server.tar.zst",
+            "filename": "widget-1.0-arm64-server.tar.zst",
         },
         {
-            "key": f"{PREFIX}/artifacts/widget-1.0-aarch64-utils.tar.zst",
-            "filename": "widget-1.0-aarch64-utils.tar.zst",
+            "key": f"{PREFIX}/artifacts/widget-1.0-arm64-utils.tar.zst",
+            "filename": "widget-1.0-arm64-utils.tar.zst",
         },
     ]
     assert result["cfg"] == {"backend": backend, "destination": f"s3://{store.bucket}"}

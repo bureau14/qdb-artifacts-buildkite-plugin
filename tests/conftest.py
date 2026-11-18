@@ -999,8 +999,8 @@ def expect_library_failure(capsys):
 
 
 def link_plugin_under_namespace(root):
-    """Lay the plugin out the way the outside caller vendors it."""
-    link = root / "thirdparty" / "qdb_artifacts"
+    """Lay the plugin out the way the README's outside caller vendors it."""
+    link = root / "vendor" / "qdb_artifacts"
     link.parent.mkdir(parents=True)
     try:
         link.symlink_to(PLUGIN_ROOT, target_is_directory=True)
@@ -1012,7 +1012,7 @@ def link_plugin_under_namespace(root):
 @pytest.fixture
 def outside_caller(tmp_path, store, backend):
     """Run tests/outside_caller.py in a fresh interpreter with a clean sys.path."""
-    namespace_root = link_plugin_under_namespace(tmp_path / "dags")
+    namespace_root = link_plugin_under_namespace(tmp_path / "caller-tree")
     home = tmp_path / "caller-home"
     home.mkdir()
     job = Job(

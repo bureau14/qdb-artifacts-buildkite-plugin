@@ -7,7 +7,7 @@ import pytest
 
 MASTER = "refs/heads/master"
 PREFIX = f"engine/{MASTER}/variants/linux/builds/b-1"
-COMPONENT = {"bin/qdbd": b"server", "lib/libqdb.so": b"library", "README": b"readme"}
+COMPONENT = {"bin/widgetd": b"server", "lib/libwidget.so": b"library", "README": b"readme"}
 RETRY_SLEEPS = [5, 10, 20, 40, 60, 60, 60, 60, 60]
 
 # Python 3.9.17+, 3.10.12+, 3.11.4+ and 3.12+ have tarfile.data_filter; 3.9.6 has not.
@@ -52,8 +52,8 @@ def test_each_supported_format_is_unpacked_into_the_output_dir(job, store, hook,
     outcome = extract(job, hook, ["*"])
 
     assert outcome.code == 0, outcome.output
-    assert job.files("out") == ["README", "bin/qdbd", "lib/libqdb.so"]
-    assert read(job, "out/bin/qdbd") == b"server"
+    assert job.files("out") == ["README", "bin/widgetd", "lib/libwidget.so"]
+    assert read(job, "out/bin/widgetd") == b"server"
 
 
 def test_extraction_without_output_dir_unpacks_into_the_checkout(job, store, hook, archive):
@@ -62,7 +62,7 @@ def test_extraction_without_output_dir_unpacks_into_the_checkout(job, store, hoo
     outcome = extract(job, hook, ["*.tar.zst"], output_dir=".")
 
     assert outcome.code == 0, outcome.output
-    assert job.files() == ["README", "bin/qdbd", "lib/libqdb.so"]
+    assert job.files() == ["README", "bin/widgetd", "lib/libwidget.so"]
 
 
 def test_an_entry_filter_keeps_matching_entries_and_strips_its_fixed_prefix(
@@ -74,7 +74,7 @@ def test_an_entry_filter_keeps_matching_entries_and_strips_its_fixed_prefix(
     outcome = extract(job, hook, ["*-server.tar.zst!bin/*"])
 
     assert outcome.code == 0, outcome.output
-    assert job.files("out") == ["qdbd", "sub/tool"]
+    assert job.files("out") == ["sub/tool", "widgetd"]
 
 
 def test_several_filters_on_one_archive_extract_their_union_from_one_download(
@@ -85,7 +85,7 @@ def test_several_filters_on_one_archive_extract_their_union_from_one_download(
     outcome = extract(job, hook, ["*-c-api.zip!bin/*", "*-c-api.zip!lib/*"])
 
     assert outcome.code == 0, outcome.output
-    assert job.files("out") == ["libqdb.so", "qdbd"]
+    assert job.files("out") == ["libwidget.so", "widgetd"]
     gets = [
         r
         for r in store.plugin_requests("s3")
@@ -97,9 +97,9 @@ def test_several_filters_on_one_archive_extract_their_union_from_one_download(
 @pytest.mark.parametrize(
     "files, expected",
     [
-        (["w.tar.gz!lib/*", "w.tar.gz!*"], ["README", "bin/qdbd", "libqdb.so"]),
-        (["w.tar.gz!*", "w.tar.gz!lib/*"], ["README", "bin/qdbd", "lib/libqdb.so"]),
-        (["w.tar.gz", "w.tar.gz!lib/*"], ["README", "bin/qdbd", "lib/libqdb.so"]),
+        (["w.tar.gz!lib/*", "w.tar.gz!*"], ["README", "bin/widgetd", "libwidget.so"]),
+        (["w.tar.gz!*", "w.tar.gz!lib/*"], ["README", "bin/widgetd", "lib/libwidget.so"]),
+        (["w.tar.gz", "w.tar.gz!lib/*"], ["README", "bin/widgetd", "lib/libwidget.so"]),
     ],
     ids=["strip-first", "keep-first", "unfiltered-first"],
 )
@@ -117,8 +117,8 @@ def test_the_first_matching_rule_in_configuration_order_decides_an_entry_path(
 @pytest.mark.parametrize(
     "rule, entry, expected",
     [
-        ("include/qdb/*.h", "include/qdb/client.h", "client.h"),
-        ("lib/libqdb?.so", "lib/libqdb1.so", "1.so"),
+        ("include/widget/*.h", "include/widget/client.h", "client.h"),
+        ("lib/libwidget?.so", "lib/libwidget1.so", "1.so"),
         ("doc/[a-z]*", "doc/guide.html", "guide.html"),
     ],
 )
@@ -158,23 +158,23 @@ def test_archive_directories_appear_only_through_tar(job, store, hook, archive):
 
 def test_a_tar_symlink_inside_the_output_dir_is_kept(job, store, hook, archive):
     entries = [
-        {"name": "lib/libqdb.so.3", "data": b"so"},
-        {"name": "lib/libqdb.so", "type": "symlink", "target": "libqdb.so.3"},
+        {"name": "lib/libwidget.so.3", "data": b"so"},
+        {"name": "lib/libwidget.so", "type": "symlink", "target": "libwidget.so.3"},
     ]
     store.put(f"{PREFIX}/w.tar.zst", archive(".tar.zst", entries))
 
     outcome = extract(job, hook, ["*.tar.zst"])
 
     assert outcome.code == 0, outcome.output
-    link = job.workspace / "out" / "lib" / "libqdb.so"
-    assert link.is_symlink() and read(job, "out/lib/libqdb.so") == b"so"
+    link = job.workspace / "out" / "lib" / "libwidget.so"
+    assert link.is_symlink() and read(job, "out/lib/libwidget.so") == b"so"
 
 
 def test_tar_modes_keep_the_executable_bit_and_lose_group_write_only_with_data_filter(
     job, store, hook, archive
 ):
     entries = [
-        {"name": "bin/qdbd", "data": b"x", "mode": 0o755},
+        {"name": "bin/widgetd", "data": b"x", "mode": 0o755},
         {"name": "bin/wide", "data": b"w", "mode": 0o777},
     ]
     store.put(f"{PREFIX}/w.tar.zst", archive(".tar.zst", entries))
@@ -182,7 +182,7 @@ def test_tar_modes_keep_the_executable_bit_and_lose_group_write_only_with_data_f
     outcome = extract(job, hook, ["*.tar.zst"])
 
     assert outcome.code == 0, outcome.output
-    assert file_mode(job, "out/bin/qdbd") == 0o755
+    assert file_mode(job, "out/bin/widgetd") == 0o755
     assert file_mode(job, "out/bin/wide") == (0o755 if HAS_DATA_FILTER else 0o777)
 
 
@@ -213,7 +213,7 @@ def test_an_archive_is_downloaded_to_a_temporary_file_inside_the_output_dir(
 
     assert outcome.code == 0, outcome.output
     assert len(seen) == 1 and seen[0].endswith(".tmp")
-    assert job.files("out") == ["README", "bin/qdbd", "lib/libqdb.so"]
+    assert job.files("out") == ["README", "bin/widgetd", "lib/libwidget.so"]
 
 
 def test_extract_false_keeps_an_archive_as_it_is(job, store, hook, archive):

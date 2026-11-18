@@ -265,7 +265,7 @@ def test_download_creates_the_output_dir_writes_the_selection_and_returns_it(
 def test_download_extracts_with_entry_rules_and_does_not_clean(
     library, library_environment, store, tmp_path, archive
 ):
-    body = archive(".tar.zst", {"bin/qdbd": b"server", "lib/libqdb.so": b"lib"})
+    body = archive(".tar.zst", {"bin/widgetd": b"server", "lib/libwidget.so": b"lib"})
     store.put_build("engine", FEATURE, "linux", "b-9", {"widget-server.tar.zst": body})
     (tmp_path / "keep.txt").write_bytes(b"keep")
 
@@ -281,13 +281,13 @@ def test_download_extracts_with_entry_rules_and_does_not_clean(
         extract=True,
     )
 
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["keep.txt", "qdbd"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["keep.txt", "widgetd"]
 
 
 def test_download_writes_archives_unextracted_into_the_working_directory_by_default(
     library, library_environment, store, tmp_path, monkeypatch, archive
 ):
-    body = archive(".tar.zst", {"bin/qdbd": b"server"})
+    body = archive(".tar.zst", {"bin/widgetd": b"server"})
     store.put_build("engine", FEATURE, "linux", "b-9", {"widget-server.tar.zst": body})
     working_directory = tmp_path / "cwd"
     working_directory.mkdir()
