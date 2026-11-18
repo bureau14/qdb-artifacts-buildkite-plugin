@@ -1,5 +1,7 @@
 """What differs between the s3 and r2 backends on the wire, and what does not."""
 
+import urllib.parse
+
 import pytest
 
 PREFIX = "widget-build/refs/heads/master/variants/linux/builds/build-7"
@@ -62,11 +64,23 @@ def test_each_backend_signs_with_its_own_credentials_and_region(job, store, hook
     assert signatures == {expected_signature(job, backend)}
 
 
-@pytest.mark.parametrize("backend", ["s3", "r2"])
-def test_requests_address_the_bucket_in_the_path(job, store, hook, backend):
-    round_trip(job, hook)
+@pytest.mark.parametrize("backend", ["r2"])
+def test_r2_addresses_the_bucket_in_the_path_of_an_endpoint_with_a_host_name(
+    job, store, hook, instant_clock, backend
+):
+    # With an IP address as endpoint botocore puts the bucket in the path whatever
+    # the client asks for, so only a host name shows the plugin's own choice. The
+    # s3 backend leaves that choice to botocore and is not pinned here.
+    named = f"http://localhost:{urllib.parse.urlsplit(store.endpoint).port}"
+    job = job.with_env(ARTIFACTS_ENDPOINT_URL=named, **instant_clock.env)
 
-    assert all(r.path.startswith(f"/{store.bucket}") for r in store.plugin_requests("s3"))
+    uploaded, downloaded = round_trip(job, hook)
+
+    assert uploaded.code == 0, uploaded.output
+    assert downloaded.code == 0, downloaded.output
+    requests = store.plugin_requests("s3")
+    assert {r.host for r in requests} == {urllib.parse.urlsplit(named).netloc}
+    assert {r.path.split("/")[1] for r in requests} == {store.bucket}
 
 
 @pytest.mark.parametrize("backend", ["r2"])
