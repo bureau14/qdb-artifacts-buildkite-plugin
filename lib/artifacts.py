@@ -25,24 +25,6 @@ GETs), then extracted from the local file, then the temp file is removed.
   .tar.zst — zstandard.stream_reader → tarfile 'r|'
   .zip | .jar    — zipfile.ZipFile (seekable local file)
 
-Entry filtering
----------------
-Patterns like ``*-server.tar.zst!bin/*`` match archives by glob, extract only
-entries matching ``bin/*``, and strip the ``bin/`` prefix from output paths.
-Test steps use this to pull only executables/libraries from component archives.
-
-Download exclusions
--------------------
-Download project config can set ``exclude`` archive globs. Exclusions are matched
-against the artifact path after ``files`` includes match, and excluded artifacts
-are not downloaded or extracted.
-
-Upload exclusions
------------------
-Upload config can set ``exclude`` file globs. Exclusions are matched against the
-uploaded artifact path after ``files`` includes match, and excluded files are not
-uploaded or listed in the manifest/annotation.
-
 Usage
 -----
     # upload (build step)
@@ -55,7 +37,6 @@ Usage
 """
 
 import datetime
-import fnmatch
 import glob
 import json
 import os
@@ -81,6 +62,7 @@ from .layout import key_join, scope
 from .log import fmt_size, log
 from .objects import _check_artifacts_exist, _read_latest_successful
 from .retry import _with_retry
+from .rules import _select_entry_path, is_excluded, match_rules, parse_rules
 
 
 @dataclass(frozen=True)
@@ -297,50 +279,6 @@ def upload(
         f"({fmt_size(avg_speed)}/s)"
     )
     return True
-
-
-def parse_rules(patterns):
-    """Parse pattern strings into (archive_glob, entry_filter, strip_prefix) tuples.
-
-    Format: ``archive_glob[!entry_filter]``
-      archive_glob  — fnmatch against S3 key filename (e.g. '*-server.tar.zst')
-      entry_filter  — optional fnmatch against archive entries (e.g. 'bin/*')
-      strip_prefix  — fixed prefix before first glob char, stripped from output paths
-                      so 'bin/qdb' extracts to output_dir/qdb, not output_dir/bin/qdb
-    """
-    rules = []
-    for pat in patterns:
-        if "!" in pat:
-            archive_glob, entry_filter = pat.split("!", 1)
-            prefix_end = len(entry_filter)
-            for i, ch in enumerate(entry_filter):
-                if ch in ("*", "?", "["):
-                    prefix_end = i
-                    break
-            strip_prefix = entry_filter[:prefix_end]
-            rules.append((archive_glob, entry_filter, strip_prefix))
-        else:
-            rules.append((pat, None, None))
-    return rules
-
-
-def match_rules(rel, rules):
-    """Return every (entry_filter, strip_prefix) rule matching an artifact path.
-
-    Multiple filters may intentionally match one archive. The archive is downloaded
-    and decompressed once, while its entries are selected from the union of those
-    filters. Rule order resolves overlapping entry filters.
-    """
-    return [
-        (entry_filter, strip_prefix)
-        for archive_glob, entry_filter, strip_prefix in rules
-        if fnmatch.fnmatch(rel, archive_glob)
-    ]
-
-
-def is_excluded(rel, exclude_patterns):
-    """Return True when rel matches any configured exclude archive glob."""
-    return any(fnmatch.fnmatch(rel, pat) for pat in exclude_patterns or [])
 
 
 def _read_manifest(s3, bucket, prefix):
@@ -763,21 +701,6 @@ def promote(project_id, build_id, git_ref, variant):
         ContentType="text/plain",
     )
     log(f"Set {target_key} → {build_id} for ref {git_ref}")
-
-
-def _select_entry_path(name, entry_rules):
-    """Return the output path for the first matching entry rule, or None.
-
-    Rule order only matters for overlapping entry filters. Selecting one path per
-    archive entry keeps streamed tar extraction to one decompression pass.
-    """
-    for entry_filter, strip_prefix in entry_rules:
-        if entry_filter and not fnmatch.fnmatch(name, entry_filter):
-            continue
-        if strip_prefix and name.startswith(strip_prefix):
-            name = name[len(strip_prefix) :]
-        return name or None
-    return None
 
 
 def _filter_tar_member(member, entry_rules):
