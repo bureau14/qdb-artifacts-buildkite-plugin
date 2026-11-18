@@ -77,5 +77,6 @@ def test_a_build_missing_on_the_requested_branch_fails_the_caller(outside_caller
     outcome = outside_caller({**REQUEST, "git_ref": "refs/heads/topic", "build_id": "b-5"})
 
     assert outcome.code == 1
-    assert "refs/heads/topic" in outcome.error and "widget-build" in outcome.error
+    _, marker, raised = outcome.stderr.rpartition("ArtifactsError:")
+    assert marker and "refs/heads/topic" in raised and "widget-build" in raised
     assert outcome.stdout == ""
