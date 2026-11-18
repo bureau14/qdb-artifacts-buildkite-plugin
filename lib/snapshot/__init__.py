@@ -15,5 +15,7 @@ the plan step reads a value by the form the job that wrote it checked.
 - ``shape``: whether a ``.buildkite/pipeline.py`` hands its pipeline to the
   runner of ``qdb_pipeline``.
 - ``agent``: the calls to ``buildkite-agent``, behind one small interface.
+- ``buildkite``: what Buildkite's REST API says about a pipeline (its
+  repository, and whether its configuration runs ``.buildkite/pipeline.py``).
 - ``shown``: how a foreign value appears in a message.
 """
