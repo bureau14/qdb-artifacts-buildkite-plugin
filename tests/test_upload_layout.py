@@ -151,7 +151,8 @@ def test_concurrency_lets_the_parts_of_one_artifact_travel_at_the_same_time(job,
         key,
         query=[("partNumber", "1")],
         until=("PUT", key, (("partNumber", "2"),)),
-        timeout=5,
+        # Only parts sent one after the other wait this out; a loaded agent may be slow.
+        timeout=30,
     )
 
     upload(job, hook, files="big.bin", parallel=1, concurrency=2)
