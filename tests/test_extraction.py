@@ -2,30 +2,39 @@
 
 import stat
 import tarfile
-import time
 
 import pytest
-import zstandard
 
 MASTER = "refs/heads/master"
 PREFIX = f"engine/{MASTER}/variants/linux/builds/b-1"
 COMPONENT = {"bin/qdbd": b"server", "lib/libqdb.so": b"library", "README": b"readme"}
+RETRY_SLEEPS = [5, 10, 20, 40, 60, 60, 60, 60, 60]
 
 # Python 3.9.17+, 3.10.12+, 3.11.4+ and 3.12+ have tarfile.data_filter; 3.9.6 has not.
 HAS_DATA_FILTER = hasattr(tarfile, "data_filter")
 
 
-def extract(job, hook, files, output_dir="out"):
+def extracting(job, files, output_dir="out", extract=True):
     project = {
         "project_id": "engine",
         "build_id": "b-1",
         "variant": "linux",
         "git_ref": MASTER,
         "files": files,
-        "extract": True,
+        "extract": extract,
         "output-dir": output_dir,
     }
-    return hook("pre-command", job.with_plugin({"download": {"projects": [project]}}))
+    return job.with_plugin({"download": {"projects": [project]}})
+
+
+def extract(job, hook, files, output_dir="out"):
+    return hook("pre-command", extracting(job, files, output_dir))
+
+
+def archive_reads(store, rel):
+    return [
+        r for r in store.plugin_requests("s3") if r.method == "GET" and r.key == f"{PREFIX}/{rel}"
+    ]
 
 
 def read(job, rel):
@@ -186,13 +195,49 @@ def test_the_downloaded_archive_and_its_temporary_file_are_not_kept(job, store, 
     assert not [f for f in job.files("out") if f.endswith((".tmp", ".tar.zst"))]
 
 
-def test_an_unsupported_format_fails_after_download_and_leaves_no_temporary_file(job, store, hook):
+def test_an_archive_is_downloaded_to_a_temporary_file_inside_the_output_dir(
+    job, store, hook_midway, archive
+):
+    store.put(f"{PREFIX}/w.tar.zst", archive(".tar.zst", COMPONENT))
+    # The transfer asks for the size first, after the temporary file exists.
+    size_request = store.hold("HEAD", f"{PREFIX}/w.tar.zst")
+    seen = []
+
+    def look_then_release(process):
+        seen.extend(job.files("out"))
+        store.release(size_request)
+
+    outcome = hook_midway(
+        "pre-command", extracting(job, ["*.tar.zst"]), size_request.arrived, look_then_release
+    )
+
+    assert outcome.code == 0, outcome.output
+    assert len(seen) == 1 and seen[0].endswith(".tmp")
+    assert job.files("out") == ["README", "bin/qdbd", "lib/libqdb.so"]
+
+
+def test_extract_false_keeps_an_archive_as_it_is(job, store, hook, archive):
+    body = archive(".tar.zst", COMPONENT)
+    store.put(f"{PREFIX}/w.tar.zst", body)
+
+    outcome = hook("pre-command", extracting(job, ["*.tar.zst"], extract=False))
+
+    assert outcome.code == 0, outcome.output
+    assert job.files("out") == ["w.tar.zst"]
+    assert read(job, "out/w.tar.zst") == body
+
+
+def test_an_unsupported_format_fails_at_once_after_download_and_leaves_no_temporary_file(
+    job, store, hook, instant_clock
+):
     store.put(f"{PREFIX}/notes.txt", b"plain text")
 
-    outcome = extract(job, hook, ["*"])
+    outcome = extract(job.with_env(**instant_clock.env), hook, ["*"])
 
     assert outcome.code == 1
-    assert "notes.txt" in outcome.stderr
+    assert "notes.txt" in outcome.error
+    assert len(archive_reads(store, "notes.txt")) == 1
+    assert instant_clock.sleeps() == []
     assert job.files("out") == []
 
 
@@ -210,8 +255,9 @@ def test_a_zip_entry_may_write_outside_the_output_dir(job, store, hook, archive,
 
 
 # ---------------------------------------------------------------------------
-# Unsafe tar members. They fail inside the transfer retry loop, which sleeps
-# 375 s in total; these run in-process with time.sleep recorded instead.
+# Archives that fail inside the transfer retry loop. Each attempt downloads the
+# archive again; the job gets the instant clock, so the 375 s of waits cost
+# nothing and are recorded.
 # ---------------------------------------------------------------------------
 
 UNSAFE_TAR_MEMBERS = {
@@ -224,68 +270,82 @@ UNSAFE_TAR_MEMBERS = {
 }
 
 
-@pytest.fixture
-def recorded_sleeps(monkeypatch):
-    sleeps = []
-    monkeypatch.setattr(time, "sleep", sleeps.append)
-    return sleeps
+def extract_on_the_instant_clock(job, store, hook, instant_clock, body, files=("*.tar.zst",)):
+    store.put(f"{PREFIX}/w.tar.zst", body)
+    return extract(job.with_env(**instant_clock.env), hook, list(files))
 
 
-def download_in_process(library, store, tmp_path, variant):
-    return library.download_artifacts(
-        cfg=library.StoreConfig(
-            backend="s3", destination=f"s3://{store.bucket}", endpoint_url=store.endpoint
-        ),
-        auth=library.ObjectAuth(),
-        project_id="engine",
-        build_id="b-1",
-        git_ref=MASTER,
-        variant=variant,
-        patterns=["*.tar.zst"],
-        output_dir=str(tmp_path / "out"),
-        extract=True,
-    )
+def assert_failed_after_ten_attempts(store, instant_clock, outcome):
+    assert outcome.code == 1
+    assert instant_clock.sleeps() == RETRY_SLEEPS
+    assert len(archive_reads(store, "w.tar.zst")) == 10
 
 
 @pytest.mark.parametrize("case", sorted(UNSAFE_TAR_MEMBERS))
 def test_an_unsafe_tar_member_fails_the_download_after_ten_attempts(
-    library, library_environment, store, archive, tmp_path, recorded_sleeps, case
+    job, store, hook, archive, instant_clock, case
 ):
     entry, error_with_data_filter = UNSAFE_TAR_MEMBERS[case]
-    store.put_build("engine", MASTER, "linux", "b-1", {"w.tar.zst": archive(".tar.zst", [entry])})
-    expected = getattr(tarfile, error_with_data_filter) if HAS_DATA_FILTER else AttributeError
 
-    with pytest.raises(expected) as raised:
-        download_in_process(library, store, tmp_path, "linux")
+    outcome = extract_on_the_instant_clock(
+        job, store, hook, instant_clock, archive(".tar.zst", [entry])
+    )
 
-    if not HAS_DATA_FILTER:
-        assert "FilterError" in str(raised.value)
-    assert recorded_sleeps == [5, 10, 20, 40, 60, 60, 60, 60, 60]
-    assert not (tmp_path / "escape").exists()
+    assert_failed_after_ten_attempts(store, instant_clock, outcome)
+    if HAS_DATA_FILTER:
+        assert error_with_data_filter in outcome.stderr
+    else:
+        assert "AttributeError" in outcome.stderr and "FilterError" in outcome.stderr
+    assert job.files() == []
 
 
 def test_an_absolute_tar_member_is_rooted_in_the_output_dir_only_with_data_filter(
-    library, library_environment, store, archive, tmp_path, recorded_sleeps
+    job, store, hook, archive, instant_clock
 ):
-    entries = [{"name": "/abs/file", "data": b"abs"}]
-    store.put_build("engine", MASTER, "linux", "b-1", {"w.tar.zst": archive(".tar.zst", entries)})
+    body = archive(".tar.zst", [{"name": "/abs/file", "data": b"abs"}])
+
+    outcome = extract_on_the_instant_clock(job, store, hook, instant_clock, body)
 
     if HAS_DATA_FILTER:
-        download_in_process(library, store, tmp_path, "linux")
-        assert (tmp_path / "out" / "abs" / "file").read_bytes() == b"abs"
-        assert recorded_sleeps == []
+        assert outcome.code == 0, outcome.output
+        assert read(job, "out/abs/file") == b"abs"
+        assert instant_clock.sleeps() == []
     else:
-        with pytest.raises(AttributeError):
-            download_in_process(library, store, tmp_path, "linux")
-        assert len(recorded_sleeps) == 9
+        assert_failed_after_ten_attempts(store, instant_clock, outcome)
+        assert "AttributeError" in outcome.stderr
 
 
-def test_a_corrupt_archive_fails_the_download_after_ten_attempts(
-    library, library_environment, store, tmp_path, recorded_sleeps
+def test_a_corrupt_archive_fails_the_download_after_ten_attempts(job, store, hook, instant_clock):
+    outcome = extract_on_the_instant_clock(job, store, hook, instant_clock, b"not zstd at all")
+
+    assert_failed_after_ten_attempts(store, instant_clock, outcome)
+    assert "ZstdError" in outcome.stderr
+
+
+HARD_LINKED = [
+    {"name": "dir/a", "data": b"x"},
+    {"name": "dir/b", "type": "hardlink", "target": "dir/a"},
+]
+
+
+def test_a_tar_hard_link_is_extracted_as_a_second_file(job, store, hook, archive):
+    store.put(f"{PREFIX}/w.tar.zst", archive(".tar.zst", HARD_LINKED))
+
+    outcome = extract(job, hook, ["*.tar.zst"])
+
+    assert outcome.code == 0, outcome.output
+    assert job.files("out") == ["dir/a", "dir/b"]
+    assert read(job, "out/dir/b") == b"x"
+
+
+def test_a_tar_hard_link_under_a_prefix_stripping_filter_fails_the_download(
+    job, store, hook, archive, instant_clock
 ):
-    store.put_build("engine", MASTER, "linux", "b-1", {"w.tar.zst": b"not zstd at all"})
+    body = archive(".tar.zst", HARD_LINKED)
 
-    with pytest.raises(zstandard.ZstdError):
-        download_in_process(library, store, tmp_path, "linux")
+    outcome = extract_on_the_instant_clock(
+        job, store, hook, instant_clock, body, files=["*.tar.zst!dir/*"]
+    )
 
-    assert recorded_sleeps == [5, 10, 20, 40, 60, 60, 60, 60, 60]
+    assert_failed_after_ten_attempts(store, instant_clock, outcome)
+    assert "KeyError" in outcome.stderr and "dir/a" in outcome.stderr
