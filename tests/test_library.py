@@ -10,6 +10,7 @@ MASTER = "refs/heads/master"
 FEATURE = "refs/heads/feature/widget"
 PREFIX = f"engine/{FEATURE}/variants/linux/builds/b-9"
 EXPORTED = [
+    "ArtifactsError",
     "ObjectAuth",
     "ResolvedArtifact",
     "ResolvedBuild",
@@ -58,7 +59,7 @@ def resolve(library, store, **overrides):
     return library.resolve_artifacts(**arguments)
 
 
-def test_the_package_exports_exactly_nine_names(library):
+def test_the_package_exports_exactly_the_pinned_names(library):
     assert sorted(library.__all__) == EXPORTED
     assert all(hasattr(library, name) for name in EXPORTED)
 
@@ -207,7 +208,7 @@ def test_resolve_walks_to_master_unless_asked_for_a_strict_ref_match(
     assert (resolved.ref, resolved.fallback_applied) == (MASTER, True)
 
 
-def test_an_unresolvable_build_ends_the_process_today(
+def test_an_unresolvable_build_raises_the_library_error(
     library, library_environment, store, expect_library_failure
 ):
     put_promoted_build(store, ref=MASTER)
@@ -219,7 +220,7 @@ def test_an_unresolvable_build_ends_the_process_today(
     assert f"ref={MASTER}" not in failure.text
 
 
-def test_a_selection_that_matches_nothing_ends_the_process_today(
+def test_a_selection_that_matches_nothing_raises_the_library_error(
     library, library_environment, store, expect_library_failure
 ):
     put_promoted_build(store)
@@ -356,7 +357,7 @@ def test_placeholders_are_refused_only_in_r2_values(
     assert (cfg.destination, cfg.artifacts_domain) == ("TODO", "CHANGEME")
 
 
-def test_a_configuration_failure_ends_the_process_today(
+def test_a_configuration_failure_raises_the_library_error(
     library, library_environment, store, monkeypatch, expect_library_failure
 ):
     monkeypatch.setenv("ARTIFACTS_BACKEND", "gcs")

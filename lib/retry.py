@@ -3,6 +3,7 @@ while does not fail the build."""
 
 import time
 
+from .errors import ArtifactsError
 from .log import log
 
 MAX_RETRIES = 10
@@ -21,7 +22,8 @@ def _with_retry(fn, description):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             return fn()
-        except (KeyboardInterrupt, SystemExit):
+        # An ArtifactsError explains a failure that another attempt would repeat.
+        except (KeyboardInterrupt, SystemExit, ArtifactsError):
             raise
         except Exception as exc:
             if attempt == MAX_RETRIES:

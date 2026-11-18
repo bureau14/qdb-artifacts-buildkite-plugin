@@ -14,7 +14,7 @@ import datetime
 from dataclasses import dataclass
 
 from .clients import _s3_client
-from .errors import die
+from .errors import ArtifactsError
 from .layout import scope
 from .log import fmt_size, log
 from .manifest import _read_manifest
@@ -87,8 +87,9 @@ def _validate_artifact_path(
     By default walks [requested_ref, refs/heads/master, refs/heads/main] in order,
     resolving LATEST_SUCCESSFUL pointers when needed and skipping refs whose prefix
     is empty. require_strict_ref_match limits resolution to the requested ref.
-    Returns a ResolvedBuild describing the winning attempt. On failure, dies with
-    a structured trace listing every attempt that was tried and why each failed.
+    Returns a ResolvedBuild describing the winning attempt. On failure, raises
+    ArtifactsError with a structured trace listing every attempt that was tried and
+    why each failed.
     """
     s3 = _s3_client(cfg, auth)
     master_refs = ("refs/heads/master", "refs/heads/main")
@@ -175,7 +176,7 @@ def _validate_artifact_path(
             )
         else:
             lines.append(f"  - ref={a['ref']}: {a['status']} ({a['detail']})")
-    die("\n".join(lines))
+    raise ArtifactsError("\n".join(lines))
 
 
 def resolve_artifacts(
@@ -197,7 +198,7 @@ def resolve_artifacts(
     branch fallback, exclusions, and ordered entry-filter aggregation are shared
     with the downloader. Returns (bucket, ResolvedBuild, objects), where objects
     is a list of ResolvedArtifact instances. Unresolved builds or empty
-    matches retain the plugin's diagnostic logging and SystemExit(1) behavior.
+    matches keep the plugin's diagnostic logging and raise ArtifactsError.
     """
     # Keep selection independent of transfer/output handling so callers outside plugin
     # can reuse the exact same resolution policy with their own download mechanism.
@@ -291,6 +292,6 @@ def resolve_artifacts(
             # _validate_artifact_path only returns a prefix where _check_artifacts_exist
             # was True, so reaching here means the only object was manifest.json.
             lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
-        die("\n".join(lines))
+        raise ArtifactsError("\n".join(lines))
 
     return bucket, resolved, objects

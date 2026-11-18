@@ -18,7 +18,7 @@ from pathlib import Path
 
 import zstandard
 
-from .errors import die
+from .errors import ArtifactsError
 from .rules import _select_entry_path
 
 
@@ -132,4 +132,4 @@ def extract_local_archive(
                     shutil.copyfileobj(src, dst)
 
     else:
-        die(f"unsupported archive format: {rel}")
+        raise ArtifactsError(f"unsupported archive format: {rel}")

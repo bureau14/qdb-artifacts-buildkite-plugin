@@ -9,8 +9,8 @@ Python skip its sleeps, the plugin's own .venv, and the job environment an agent
 sets.
 
 When the entry point of the command line moves, only run_cli changes. When the
-command line reports errors differently, only Outcome.error changes. When the
-library stops ending the process on failure, only expect_library_failure changes.
+command line or the library reports errors differently, only Outcome.error and
+expect_library_failure change.
 """
 
 import contextlib
@@ -802,7 +802,9 @@ def venv_version():
     return {k.strip(): v.strip() for k, v in entries.items()}.get("version")
 
 
-ERROR_MARKER = "[artifacts] ERROR:"
+# The command line's error line, and the last line of an ArtifactsError traceback
+# that ends a program importing the library.
+ERROR_MARKERS = ("[artifacts] ERROR:", "ArtifactsError:")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -817,11 +819,11 @@ class Outcome:
 
     @property
     def error(self):
-        """The error the plugin reported, without the progress lines before it:
-        today the last "[artifacts] ERROR:" line of stderr and all that follows.
-        "" when it reported none, as when a traceback ended it."""
-        _, marker, rest = self.stderr.rpartition(ERROR_MARKER)
-        return marker + rest if marker else ""
+        """The error the plugin reported, without the progress lines before it: the
+        last of the ERROR_MARKERS in stderr and all that follows. "" when it reported
+        none, as when a traceback of another exception ended it."""
+        at = max(self.stderr.rfind(marker) for marker in ERROR_MARKERS)
+        return self.stderr[at:] if at >= 0 else ""
 
 
 def decode_output(raw):
@@ -998,15 +1000,14 @@ class LibraryFailure:
 
 
 @pytest.fixture
-def expect_library_failure(capsys):
-    """How the library fails today: diagnostics on stderr, then SystemExit(1)."""
+def expect_library_failure(capsys, library):
+    """How the library fails: progress on stderr, then ArtifactsError with the facts."""
 
     @contextlib.contextmanager
     def expecting():
         failure = LibraryFailure()
-        with pytest.raises(SystemExit) as raised:
+        with pytest.raises(library.ArtifactsError) as raised:
             yield failure
-        assert raised.value.code == 1
         failure.text = capsys.readouterr().err + str(raised.value)
 
     return expecting

@@ -8,7 +8,7 @@ left out: its pipeline, its build and its ref.
 
 import os
 
-from .errors import die
+from .errors import ArtifactsError
 
 
 def _get_env_bool(val, default=False):
@@ -134,5 +134,5 @@ def resolve_default_download_build_id(project_config, pipeline_name):
 
     build_id = os.environ.get("BUILDKITE_BUILD_ID")
     if not build_id:
-        die("BUILDKITE_BUILD_ID is not set and no build_id override was given")
+        raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
     return build_id

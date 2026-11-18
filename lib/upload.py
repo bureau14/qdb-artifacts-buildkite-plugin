@@ -18,7 +18,7 @@ from boto3.s3.transfer import TransferConfig
 from .annotation import _create_buildkite_annotation
 from .clients import _s3_client, aws_clients, resolve_object_auth
 from .config import load_store_config
-from .errors import die
+from .errors import ArtifactsError
 from .layout import key_join, scope
 from .log import fmt_size, log
 from .manifest import _upload_manifest
@@ -52,7 +52,7 @@ def upload(
     if base_dir:
         base_path = Path(base_dir).resolve()
         if not base_path.is_dir():
-            die(f"--base-dir {base_dir!r} does not exist or is not a directory")
+            raise ArtifactsError(f"--base-dir {base_dir!r} does not exist or is not a directory")
 
     matched_files = sorted(
         {
@@ -66,14 +66,14 @@ def upload(
         if allow_empty:
             log(f"No files matched: {patterns}; skipping artifact upload (allow_empty=true)")
             return False
-        die(f"no files matched: {patterns}")
+        raise ArtifactsError(f"no files matched: {patterns}")
 
     if base_dir:
         for f in matched_files:
             try:
                 f.relative_to(base_path)
             except ValueError:
-                die(f"file {f} is not under base_dir {base_dir}")
+                raise ArtifactsError(f"file {f} is not under base_dir {base_dir}") from None
 
     files = [
         f
@@ -87,7 +87,9 @@ def upload(
                 f"{exclude_patterns or []}; skipping artifact upload (allow_empty=true)"
             )
             return False
-        die(f"no files left after applying exclude patterns: {exclude_patterns or []}")
+        raise ArtifactsError(
+            f"no files left after applying exclude patterns: {exclude_patterns or []}"
+        )
 
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)

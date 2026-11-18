@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
-from .errors import die
+from .errors import ArtifactsError
 
 # ---------------------------------------------------------------------------
 # SSM parameter paths
@@ -50,7 +50,9 @@ def _ssm_get_optional(ssm, name, with_decryption=True):
         if code == "ParameterNotFound":
             return None
         msg = exc.response.get("Error", {}).get("Message", str(exc))
-        die(f"failed to read SSM parameter {name}: {code} \N{EM DASH} {msg}")
+        raise ArtifactsError(
+            f"failed to read SSM parameter {name}: {code} \N{EM DASH} {msg}"
+        ) from exc
 
 
 # Prefixes that indicate a placeholder / unconfigured value rather than a real one.
@@ -58,9 +60,9 @@ _PLACEHOLDER_PREFIXES = ("SET_ME", "REPLACE_", "TODO", "CHANGEME", "FIXME")
 
 
 def _check_placeholder(value, label):
-    """Die if value looks like a placeholder that was never replaced with a real one."""
+    """Raise if value looks like a placeholder that was never replaced with a real one."""
     if value and any(value.startswith(p) for p in _PLACEHOLDER_PREFIXES):
-        die(
+        raise ArtifactsError(
             f"{label} contains placeholder value {value!r} \N{EM DASH} "
             f"replace it with the real credential in Terraform tfvars or SSM"
         )
@@ -83,7 +85,7 @@ def load_store_config(ssm):
     )
 
     if backend not in {"s3", "r2"}:
-        die(
+        raise ArtifactsError(
             f"unsupported artifact backend: {backend!r} (expected 's3' or 'r2'). "
             f"Check env var ARTIFACTS_BACKEND or SSM parameter {BACKEND_SSM_PARAM}"
         )
@@ -92,7 +94,7 @@ def load_store_config(ssm):
         ssm, DESTINATION_SSM_PARAM
     )
     if not destination:
-        die(
+        raise ArtifactsError(
             f"artifact destination not configured. "
             f"Set env var ARTIFACTS_DESTINATION or SSM parameter {DESTINATION_SSM_PARAM}"
         )
@@ -109,7 +111,7 @@ def load_store_config(ssm):
 
         r2_account_id = _env_or_ssm(ssm, "ARTIFACTS_R2_ACCOUNT_ID", R2_ACCOUNT_ID_SSM_PARAM)
         if not r2_account_id:
-            die(
+            raise ArtifactsError(
                 f"R2 backend requires Cloudflare account ID. "
                 f"Set env var ARTIFACTS_R2_ACCOUNT_ID or SSM parameter {R2_ACCOUNT_ID_SSM_PARAM}"
             )
@@ -121,7 +123,7 @@ def load_store_config(ssm):
             R2_ACCESS_KEY_ID_SSM_PARAM,
         )
         if not r2_access_key_id:
-            die(
+            raise ArtifactsError(
                 f"R2 backend requires access key ID. "
                 f"Set env var ARTIFACTS_R2_ACCESS_KEY_ID or SSM parameter {R2_ACCESS_KEY_ID_SSM_PARAM}"
             )
@@ -134,7 +136,7 @@ def load_store_config(ssm):
             with_decryption=True,
         )
         if not r2_secret_access_key:
-            die(
+            raise ArtifactsError(
                 f"R2 backend requires secret access key. "
                 f"Set env var ARTIFACTS_R2_SECRET_ACCESS_KEY or SSM SecureString {R2_SECRET_ACCESS_KEY_SSM_PARAM}"
             )

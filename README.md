@@ -396,6 +396,16 @@ import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.
 `resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
 `auth` instead of constructing them directly.
 
+### Errors
+
+A failure the library can explain raises `ArtifactsError`, also exported by
+`vendor.qdb_artifacts.lib`, with the facts in its message: an unresolvable build
+names every ref and pointer it tried, an empty selection names the patterns and
+what the build holds, a configuration error names the variable and the SSM
+parameter. The library never ends the caller's process; catch `ArtifactsError`
+to handle the failure. A request the store still refuses after its retries
+raises the exception of boto3 or of the standard library.
+
 ## Backend configuration
 
 Config is resolved in order: **environment variable → SSM parameter → default**.

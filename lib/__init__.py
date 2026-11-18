@@ -8,7 +8,7 @@ functions, independent of Buildkite hooks.
 Each module has one duty and imports only modules listed above it, so that a
 module can be read, and tested, with nothing below it:
 
-    errors      how the library fails
+    errors      ArtifactsError, the one error the library raises
     log         one line to the job log, and sizes as the log shows them
     retry       repeat a call with backoff
     config      StoreConfig: which store, read from the environment, then SSM
@@ -25,14 +25,18 @@ module can be read, and tested, with nothing below it:
     promote     move LATEST_SUCCESSFUL to a build
     options     the plugin's options as a job sees them in its environment
     cli         the command line the hooks call
+
+A failure raises ArtifactsError; the library never ends the caller's process.
 """
 
 from .clients import ObjectAuth, aws_clients, resolve_object_auth
 from .config import StoreConfig, load_store_config
 from .download import download_artifacts
+from .errors import ArtifactsError
 from .resolve import ResolvedArtifact, ResolvedBuild, resolve_artifacts
 
 __all__ = [
+    "ArtifactsError",
     "ObjectAuth",
     "ResolvedArtifact",
     "ResolvedBuild",

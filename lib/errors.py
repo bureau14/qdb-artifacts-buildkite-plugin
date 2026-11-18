@@ -1,12 +1,12 @@
-"""How the plugin fails: one error line in the job log, then exit status 1.
+"""How the library fails: it raises ArtifactsError, whose message is for people.
 
-The hooks pass that status on, so the job fails with the plugin's own message
-as its last error line instead of a traceback.
+The command line turns the error into "[artifacts] ERROR: <message>" and exit
+status 1, which the hooks pass on to the job. A program that imports the
+library catches the error, or lets it end its own process; the library never
+ends the process of its caller.
 """
 
-import sys
 
-
-def die(msg):
-    print(f"[artifacts] ERROR: {msg}", file=sys.stderr)
-    sys.exit(1)
+class ArtifactsError(Exception):
+    """A failure the plugin can explain: a missing option, an unresolvable build,
+    an empty selection, a store configuration it cannot use."""
