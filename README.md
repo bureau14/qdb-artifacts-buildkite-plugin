@@ -640,6 +640,21 @@ directory. A Ctrl-C during the transfers of `download_artifacts` ends the
 process at once with status 130, without running the caller's `finally` blocks
 or exit handlers.
 
+### Upgrading a vendored copy
+
+A program that vendors an earlier copy of the library changes this:
+
+- A failure the library can explain raises `ArtifactsError` where it ended
+  the process before (`SystemExit` with status 1). Catch it, or let it end the
+  process.
+- `read_manifest` is new.
+
+The import path (`vendor.qdb_artifacts.lib` in the examples above) and the nine
+names exported before are unchanged: `ObjectAuth`, `ResolvedArtifact`,
+`ResolvedBuild`, `StoreConfig`, `aws_clients`, `download_artifacts`,
+`load_store_config`, `resolve_artifacts` and `resolve_object_auth`. The
+library never imports `lib/snapshot/`, and needs no PyYAML.
+
 ## Backend configuration
 
 Config is resolved in order: **environment variable → SSM parameter → default**.
