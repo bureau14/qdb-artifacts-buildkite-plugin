@@ -6,6 +6,8 @@ the directory of the script it runs first on sys.path, so `lib` imports here as
 a package, exactly as it does for an outside caller of the library, and the
 modules inside `lib` can import each other relatively. The hooks need no
 PYTHONPATH, so nothing depends on how Git Bash translates path lists on Windows.
+With PYTHONSAFEPATH set (Python 3.11 and later) Python leaves that directory off
+sys.path, and a hook that starts this file fails with "No module named 'lib'".
 """
 
 from lib.cli import main
