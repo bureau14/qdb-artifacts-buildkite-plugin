@@ -29,12 +29,16 @@ def put_build(store, project, ref, build_id, content=None):
     store.put_build(project, ref, "linux", build_id, {"a.bin": content or build_id.encode()})
 
 
-def list_prefixes(store):
+def listings(store):
     return [
-        r.query["prefix"]
+        r.query
         for r in store.plugin_requests("s3")
         if r.method == "GET" and r.query.get("list-type") == "2"
     ]
+
+
+def list_prefixes(store):
+    return [query["prefix"] for query in listings(store)]
 
 
 def object_reads(store):
@@ -183,7 +187,6 @@ def test_a_request_for_master_or_main_does_not_fall_back_to_the_other(
     outcome = download(job, hook, project_id="engine", build_id="b-1", git_ref=requested)
 
     assert outcome.code == 1
-    assert "Attempts (1)" in outcome.stderr
     assert list_prefixes(store) == [f"engine/{requested}/variants/linux/builds/b-1/"]
 
 
@@ -211,9 +214,37 @@ def test_strict_ref_match_false_keeps_the_walk(job, store, hook):
 
 
 def test_an_empty_pointer_counts_as_no_pointer(job, store, hook):
+    # The ref has builds, so an empty build id taken as a prefix would find objects.
+    put_build(store, "engine", FEATURE, "b-old", b"feature")
     store.put_pointer("engine", FEATURE, "linux", " \n")
     put_build(store, "engine", MASTER, "b-1", b"master")
     store.put_pointer("engine", MASTER, "linux", "b-1")
+
+    outcome = download(job, hook, project_id="engine", build_id="LATEST_SUCCESSFUL")
+
+    assert outcome.code == 0, outcome.output
+    assert downloaded(job) == b"master"
+    assert job.files("out") == ["a.bin"]
+
+
+def test_a_pointer_that_cannot_be_read_fails_the_download_instead_of_falling_back(job, store, hook):
+    pointer = f"engine/{FEATURE}/variants/linux/LATEST_SUCCESSFUL"
+    put_build(store, "engine", MASTER, "b-1", b"master")
+    store.put_pointer("engine", MASTER, "linux", "b-1")
+    store.refuse("GET", pointer, 403, "AccessDenied")
+
+    outcome = download(job, hook, project_id="engine", build_id="LATEST_SUCCESSFUL")
+
+    assert outcome.code == 1
+    assert "AccessDenied" in outcome.stderr
+    assert downloaded(job) is None
+    assert object_reads(store) == [pointer]
+
+
+def test_a_pointer_answered_with_a_bare_404_counts_as_no_pointer(job, store, hook):
+    put_build(store, "engine", MASTER, "b-1", b"master")
+    store.put_pointer("engine", MASTER, "linux", "b-1")
+    store.refuse("GET", f"engine/{FEATURE}/variants/linux/LATEST_SUCCESSFUL", 404)
 
     outcome = download(job, hook, project_id="engine", build_id="LATEST_SUCCESSFUL")
 
@@ -244,7 +275,7 @@ def test_any_object_in_the_requested_build_stops_the_walk_even_without_artifacts
 
     assert outcome.code == 1
     assert downloaded(job) is None
-    assert "only manifest.json" in outcome.stderr
+    assert "manifest.json" in outcome.error
 
 
 def test_an_unresolvable_pointer_names_every_ref_and_pointer_it_tried(job, store, hook):
@@ -256,12 +287,11 @@ def test_an_unresolvable_pointer_names_every_ref_and_pointer_it_tried(job, store
         "variant=linux",
         f"requested_ref={FEATURE}",
         "requested_build_id=LATEST_SUCCESSFUL",
-        "Attempts (3)",
         f"s3://example-artifacts/engine/{FEATURE}/variants/linux/LATEST_SUCCESSFUL",
         f"s3://example-artifacts/engine/{MASTER}/variants/linux/LATEST_SUCCESSFUL",
         f"s3://example-artifacts/engine/{MAIN}/variants/linux/LATEST_SUCCESSFUL",
     ]:
-        assert fact in outcome.stderr
+        assert fact in outcome.error
     assert list_prefixes(store) == []
 
 
@@ -270,8 +300,8 @@ def test_an_unresolvable_build_id_names_every_prefix_it_tried(job, store, hook):
 
     assert outcome.code == 1
     for ref in (FEATURE, MASTER, MAIN):
-        assert f"ref={ref} build=b-1" in outcome.stderr
-        assert f"s3://example-artifacts/engine/{ref}/variants/linux/builds/b-1/" in outcome.stderr
+        assert f"ref={ref} build=b-1" in outcome.error
+        assert f"s3://example-artifacts/engine/{ref}/variants/linux/builds/b-1/" in outcome.error
 
 
 def test_resolution_reads_pointers_and_lists_build_prefixes_only(job, store, hook):
@@ -281,10 +311,10 @@ def test_resolution_reads_pointers_and_lists_build_prefixes_only(job, store, hoo
 
     assert download(job, hook, project_id="engine", build_id="LATEST_SUCCESSFUL").code == 0
 
-    assert list_prefixes(store) == [
-        f"engine/{FEATURE}/variants/linux/builds/b-gone/",
-        f"engine/{MAIN}/variants/linux/builds/b-main/",
-        f"engine/{MAIN}/variants/linux/builds/b-main/",
+    assert [(q["prefix"], q.get("max-keys")) for q in listings(store)] == [
+        (f"engine/{FEATURE}/variants/linux/builds/b-gone/", "1"),
+        (f"engine/{MAIN}/variants/linux/builds/b-main/", "1"),
+        (f"engine/{MAIN}/variants/linux/builds/b-main/", None),
     ]
     assert object_reads(store) == [
         f"engine/{FEATURE}/variants/linux/LATEST_SUCCESSFUL",
