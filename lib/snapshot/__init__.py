@@ -27,4 +27,6 @@ the plan step reads a value by the form the job that wrote it checked.
   root build's meta-data.
 - ``planner``: the plan of a root build: its snapshot tree, from git and
   Buildkite, each behind an interface.
+- ``records``: failure records as values, and the decisions the gate steps
+  make over the records they have read.
 """
