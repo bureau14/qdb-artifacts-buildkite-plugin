@@ -66,8 +66,8 @@ from .declaration import (
     step_name,
     yaml_problem,
 )
-from .plan import Plan, dependencies_first
-from .shown import short_commit, shown_text, shown_value
+from .plan import Plan, dependencies_first, trigger_label
+from .shown import shown_text, shown_value
 
 RESUME_OPTION = "resume"
 
@@ -601,7 +601,7 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[str], after: Sequence
         raise DocumentError(f"{project}: the variants {shown_value(wanted)} are not all variants")
     message = f"snapshot dependency of {plan.root.project} build {plan.root.build_number}"
     step: dict[str, Any] = {
-        "label": escaped(f":link: {project} @ {short_commit(node.commit)}"),
+        "label": escaped(trigger_label(plan, project)),
         "key": trigger_key(project),
         "trigger": project,
         "soft_fail": True,

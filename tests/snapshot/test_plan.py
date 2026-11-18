@@ -19,6 +19,7 @@ from lib.snapshot.plan import (
     dependencies_first,
     encode_plan,
     planned_node,
+    trigger_label,
 )
 
 
@@ -221,6 +222,10 @@ def test_dependencies_first():
     assert dependencies_first(p, REST) == [QDB, DUCK, REST]
     assert dependencies_first(p, PYTHON) == [QDB, DUCK, REST, PYTHON]
     assert dependencies_first(p, QDB) == [QDB]
+
+
+def test_the_trigger_step_of_a_node_is_labelled_with_its_project_and_short_commit():
+    assert trigger_label(plan(), DUCK) == f":link: qdb-duck @ {sha(DUCK)[:12]}"
 
 
 def test_dependencies_first_refuses_a_cycle_in_a_plan_read_from_elsewhere():

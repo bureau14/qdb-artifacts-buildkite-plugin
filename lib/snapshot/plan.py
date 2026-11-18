@@ -43,7 +43,7 @@ from ..forms import (
 )
 from .agent import META_DATA_LIMIT
 from .canonical import canonical_json
-from .shown import shown_text, shown_value
+from .shown import short_commit, shown_text, shown_value
 
 SCHEMA = 2
 
@@ -288,3 +288,12 @@ def dependencies_first(p: Plan, project: str) -> list[str]:
 
     visit(project, ())
     return order
+
+
+def trigger_label(p: Plan, project: str) -> str:
+    """The label of the step that triggers the build of ``project`` for the chain.
+
+    The trigger step is written with it, and a failure of that build names it,
+    so that a person finds the step on the build page.
+    """
+    return f":link: {project} @ {short_commit(p.nodes[project].commit)}"
