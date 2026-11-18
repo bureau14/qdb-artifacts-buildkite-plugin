@@ -419,9 +419,14 @@ A failure the library can explain raises `ArtifactsError`, also exported by
 `vendor.qdb_artifacts.lib`, with the facts in its message: an unresolvable build
 names every ref and pointer it tried, an empty selection names the patterns and
 what the build holds, a configuration error names the variable and the SSM
-parameter. The library never ends the caller's process; catch `ArtifactsError`
-to handle the failure. A request the store still refuses after its retries
-raises the exception of boto3 or of the standard library.
+parameter. Catch `ArtifactsError` to handle such a failure.
+
+Other failures raise the exception of boto3, of zstandard or of the standard
+library: a request the store still refuses after its retries, an archive that
+does not decompress, a tar member that would be written outside the output
+directory. A Ctrl-C during the transfers of `download_artifacts` ends the
+process at once with status 130, without running the caller's `finally` blocks
+or exit handlers.
 
 ## Backend configuration
 

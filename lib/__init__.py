@@ -26,7 +26,9 @@ module can be read, and tested, with nothing below it:
     options     the plugin's options as a job sees them in its environment
     cli         the command line the hooks call
 
-A failure raises ArtifactsError; the library never ends the caller's process.
+A failure the library can explain raises ArtifactsError. Other failures raise
+the exception of boto3, of zstandard or of the standard library, and a Ctrl-C
+during a transfer ends the process with status 130.
 """
 
 from .clients import ObjectAuth, aws_clients, resolve_object_auth
