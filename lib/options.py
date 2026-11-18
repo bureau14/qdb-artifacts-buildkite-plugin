@@ -219,8 +219,9 @@ def snapshot_pointer(project_id, key, variant, git_ref, build_id):
 
 
 def own_downloads():
-    """The builds this job's own download options name. LATEST_SUCCESSFUL, or no
-    build_id, names no build: which one it is depends on when the job ran."""
+    """The builds this job's own download options name by their build_id. An option
+    without one, or with LATEST_SUCCESSFUL, names no build: the job resolves it
+    when it runs."""
     pipeline_name = os.environ.get("BUILDKITE_PIPELINE_SLUG")
     return tuple(
         Download(
