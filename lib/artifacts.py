@@ -79,6 +79,7 @@ from .config import load_store_config
 from .errors import die
 from .layout import key_join, scope
 from .log import fmt_size, log
+from .objects import _check_artifacts_exist, _read_latest_successful
 from .retry import _with_retry
 
 
@@ -340,26 +341,6 @@ def match_rules(rel, rules):
 def is_excluded(rel, exclude_patterns):
     """Return True when rel matches any configured exclude archive glob."""
     return any(fnmatch.fnmatch(rel, pat) for pat in exclude_patterns or [])
-
-
-def _check_artifacts_exist(s3, bucket, prefix):
-    """Check if any objects exist under the given prefix."""
-    response = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
-    return response.get("KeyCount") > 0
-
-
-def _read_latest_successful(s3, bucket, key):
-    """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
-    (None, None) if absent. The pointer mtime is useful as a build-age proxy
-    when the build itself has no manifest.json."""
-    try:
-        response = s3.get_object(Bucket=bucket, Key=key)
-        bid = response["Body"].read().decode("utf-8").strip()
-        return bid, response.get("LastModified")
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
-            return None, None
-        raise
 
 
 def _read_manifest(s3, bucket, prefix):
