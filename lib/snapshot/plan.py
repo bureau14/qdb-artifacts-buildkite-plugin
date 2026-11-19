@@ -2,9 +2,8 @@
 
 A root build makes the plan once (``planner.make_plan``) and keeps it as its
 build meta-data ``snapshot-plan``; every build of the chain reads it back from
-there. ``encode_plan`` writes compact JSON with sorted keys and refuses a plan
-larger than one meta-data value holds; ``decode_plan`` reads it and refuses a
-document that is not a plan. ``planned_node`` is the check a build of the
+there. ``encode_plan`` writes compact JSON with sorted keys; ``decode_plan``
+reads it and refuses a document that is not a plan. ``planned_node`` is the check a build of the
 chain makes against it; ``dependencies_first`` orders a tree for triggers.
 
 The nodes are the snapshot tree: the root and, recursively, the snapshot
@@ -41,7 +40,6 @@ from ..forms import (
     is_ref_name,
     is_slug,
 )
-from .agent import META_DATA_LIMIT
 from .canonical import canonical_json
 from .members import member
 from .shown import short_commit, shown_text, shown_value
@@ -131,18 +129,8 @@ def plan_document(p: Plan) -> dict[str, Any]:
 
 
 def encode_plan(p: Plan) -> str:
-    """The plan as compact JSON with sorted keys, as it is written into build meta-data.
-
-    Raises ``PlanError`` when it is larger than one meta-data value holds
-    (``META_DATA_LIMIT`` bytes of UTF-8, experiment 34).
-    """
-    data = canonical_json(plan_document(p))
-    if len(data) > META_DATA_LIMIT:
-        raise PlanError(
-            f"the plan is {len(data)} bytes, more than the {META_DATA_LIMIT} bytes "
-            f"that build meta-data holds; it has {len(p.nodes)} nodes"
-        )
-    return data.decode("utf-8")
+    """The plan as compact JSON with sorted keys, as it is written into build meta-data."""
+    return canonical_json(plan_document(p)).decode("utf-8")
 
 
 # ---------------------------------------------------------------------------

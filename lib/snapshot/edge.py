@@ -12,14 +12,14 @@ back:
     snapshot-mode                  reused, built or failed
     snapshot-promotes              {variant: step key} of the steps that promote
 
-The reads here are those of more than one step: meta-data of this build or of
-another, the pointers at a key, the failure records of a key, the arrival at
-the gate, and the plan of the build's chain.
+The reads here are those of more than one step: the pointers at a key, the
+failure records of a key, the arrival at the gate, and the plan of the build's
+chain. Each meta-data read here is of a value that is set before it is read,
+so an absent value fails the step as any failed call does.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -27,15 +27,14 @@ from typing import Any
 from .. import layout, pointer
 from ..clients import resolve_object_auth
 from ..config import load_store_config
-from ..errors import ArtifactsError
 from ..objects import Store, destination_store
 from ..pointer import Pointer
-from .agent import Agent, MetaDataAbsent
+from .agent import Agent
 from .git import Checkout
 from .job import Job
-from .plan import Node, Plan, PlanError, decode_plan, planned_node
+from .plan import Node, Plan, decode_plan, planned_node
 from .records import Cause, Origin, Record, RecordError, chain_failure, decode_record, encode_record
-from .shown import shown_text, shown_value
+from .shown import shown_text
 
 # The marks on the build, and the meta-data a step reads.
 MODE = "snapshot-mode"
@@ -72,14 +71,6 @@ def opened_store(ssm: Any) -> tuple[Store, str]:
 # ---------------------------------------------------------------------------
 # Reading through the edge
 # ---------------------------------------------------------------------------
-
-
-def meta_data(edge: Edge, key: str, build: str | None = None) -> str | None:
-    """The value of ``key`` on this build, or on ``build``; None when it is not set."""
-    try:
-        return edge.agent.meta_data_get(key, build)
-    except MetaDataAbsent:
-        return None
 
 
 def pointers_at(
@@ -145,13 +136,7 @@ def chain_records(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str, 
 
 def arrival(edge: Edge) -> int:
     """When this build arrived at the gate: ``snapshot-arrived``, epoch seconds the runner set."""
-    value = meta_data(edge, ARRIVED)
-    if value is None or not re.fullmatch(r"[0-9]+", value):
-        raise ArtifactsError(
-            f"{ARRIVED} is {shown_value(value)}, not epoch seconds: the runner sets it when it "
-            "prints the gate"
-        )
-    return int(value)
+    return int(edge.agent.meta_data_get(ARRIVED))
 
 
 # ---------------------------------------------------------------------------
@@ -160,22 +145,11 @@ def arrival(edge: Edge) -> int:
 
 
 def chain_plan(job: Job, edge: Edge) -> Plan:
-    """The plan of a chain node's chain, read from the meta-data of its root build."""
-    if not job.plan_id:
-        raise ArtifactsError("SNAPSHOT_PLAN is empty: a chain node names the build of its plan")
-    text = meta_data(edge, PLAN, job.plan_id)
-    if text is None:
-        raise ArtifactsError(f"build {shown_value(job.plan_id)} holds no {PLAN}")
-    p = decode_plan(text)
-    if p.id != job.plan_id:
-        raise PlanError(f"build {job.plan_id} holds the plan {p.id}")
-    return p
+    """The plan of the build's chain, from the meta-data of its root build.
 
-
-def own_plan(job: Job, edge: Edge) -> Plan | None:
-    """The plan a root wrote on its own build; None before it wrote one."""
-    text = meta_data(edge, PLAN)
-    return None if text is None else decode_plan(text)
+    A chain node names its root in ``SNAPSHOT_PLAN``; a root is its own root.
+    """
+    return decode_plan(edge.agent.meta_data_get(PLAN, job.plan_id))
 
 
 def own_node(job: Job, edge: Edge, p: Plan) -> Node:

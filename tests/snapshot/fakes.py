@@ -7,8 +7,8 @@
   meta-data, step outcomes, uploads and annotations of every build.
 - ``FakePipelines``: ``planner.Pipelines``, Buildkite's facts by slug.
 
-Each refuses what the real one refuses, through the check functions of the
-real module.
+``FakeGit`` refuses what ``git.RealGit`` refuses, through the check functions of
+``git``.
 """
 
 from __future__ import annotations
@@ -20,12 +20,7 @@ import itertools
 from collections.abc import Callable, Mapping, Sequence
 
 from lib.objects import StoredObject
-from lib.snapshot.agent import (
-    MetaDataAbsent,
-    build_option,
-    check_annotation_style,
-    check_meta_data_value,
-)
+from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
 from lib.snapshot.git import (
     GitError,
@@ -163,14 +158,12 @@ class BuildAgent:
     build: str
 
     def meta_data_get(self, key: str, build: str | None = None) -> str:
-        build_option(build)
         found = self.state.meta_data[build or self.build]
         if key not in found:
             raise MetaDataAbsent(f"meta-data {key} is not set")
         return found[key]
 
     def meta_data_set(self, key: str, value: str) -> None:
-        check_meta_data_value(key, value)
         self.state.meta_data[self.build][key] = value
 
     def step_outcome(self, key: str) -> str:
@@ -180,7 +173,6 @@ class BuildAgent:
         self.state.uploads[self.build].append(document)
 
     def annotate(self, body: str, style: str, context: str) -> None:
-        check_annotation_style(style)
         self.state.annotations[self.build][context] = (style, body)
 
 

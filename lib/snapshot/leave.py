@@ -11,69 +11,55 @@ import json
 import time
 
 from ..clients import aws_clients
-from ..errors import ArtifactsError
-from ..forms import is_variant
 from ..log import log
-from .agent import RealAgent
+from .agent import MetaDataAbsent, RealAgent
 from .annotation import failure_annotation
 from .edge import (
     BUILT,
     MODE,
-    PLAN,
     PROMOTES,
     Edge,
     chain_plan,
     create_record,
-    meta_data,
     opened_store,
     origin_of,
     own_node,
-    own_plan,
     pointers_at,
 )
 from .failing import EDGE_ERRORS, gated
 from .git import RealGit
-from .job import Job, is_chain_node, job_of
-from .plan import Plan
-from .records import is_step_key, leave_record, unpassed
+from .job import Job, job_of
+from .records import leave_record, unpassed
 from .shown import shown_value
 
 # One annotation per context: a retried leave replaces its own.
 LEAVE_CONTEXT = "snapshot-leave"
 
 
+def build_mode(edge: Edge) -> str | None:
+    """``snapshot-mode``; None when no plan step set it.
+
+    Absence is an answer here: an enter that ended before it set a mode (its
+    hook failed, it was cancelled or timed out) leaves none, and leave's
+    command has failed the step already.
+    """
+    try:
+        return edge.agent.meta_data_get(MODE)
+    except MetaDataAbsent:
+        return None
+
+
 def step_promotes(edge: Edge) -> dict[str, str]:
     """``snapshot-promotes``: the step key of each variant the build makes."""
-    text = meta_data(edge, PROMOTES)
-    try:
-        promotes = json.loads(text) if text is not None else None
-    except ValueError:
-        promotes = None
-    if not isinstance(promotes, dict) or not all(
-        is_variant(v) and isinstance(s, str) and is_step_key(s) for v, s in promotes.items()
-    ):
-        raise ArtifactsError(
-            f"{PROMOTES} is {shown_value(text)}, not the steps of the variants a built build makes"
-        )
-    return promotes
-
-
-def leave_plan(job: Job, edge: Edge) -> Plan:
-    """The plan of this build's chain: its root's, or its own as a root."""
-    if is_chain_node(job):
-        return chain_plan(job, edge)
-    p = own_plan(job, edge)
-    if p is None:
-        raise ArtifactsError(f"the mode is {BUILT}, and this root build holds no {PLAN}")
-    return p
+    return json.loads(edge.agent.meta_data_get(PROMOTES))
 
 
 def leave_decisions(job: Job, edge: Edge) -> None:
-    mode = meta_data(edge, MODE)
+    mode = build_mode(edge)
     if mode != BUILT:
         edge.log(f"the mode is {shown_value(mode)}: nothing to record")
         return
-    p = leave_plan(job, edge)
+    p = chain_plan(job, edge)
     node = own_node(job, edge, p)
     if node.key is None:
         edge.log(f"{job.project} has no snapshot: nothing to record")

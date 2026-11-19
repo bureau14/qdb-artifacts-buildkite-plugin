@@ -30,7 +30,6 @@ from typing import Any, NoReturn
 from ..clients import aws_clients
 from ..config import env_or_ssm
 from ..errors import ArtifactsError
-from ..forms import is_variant
 from ..log import log
 from ..options import job_variable
 from ..pointer import Pointer
@@ -101,7 +100,7 @@ from .records import (
     shared_failure,
     shared_record,
 )
-from .shown import short_commit, shown_text, shown_value
+from .shown import short_commit, shown_text
 
 # One annotation per context: a retried step replaces its own.
 PLAN_CONTEXT = "snapshot-plan"
@@ -250,18 +249,7 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
 
 def asked(job: Job, d: frozenset[str]) -> frozenset[str]:
     """5. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
-    if not is_chain_node(job):
-        return d
-    try:
-        needs = json.loads(job.needs or "")
-    except ValueError:
-        needs = None
-    if not isinstance(needs, list) or not all(is_variant(v) for v in needs):
-        raise ArtifactsError(
-            f"SNAPSHOT_NEEDS {shown_value(job.needs)} is not a JSON list of variants: the "
-            "trigger step of a chain node hands down what its consumer downloads"
-        )
-    return frozenset(needs)
+    return frozenset(json.loads(job.needs)) if is_chain_node(job) else d
 
 
 def check_declared(

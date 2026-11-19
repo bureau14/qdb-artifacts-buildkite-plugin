@@ -14,9 +14,8 @@ The plan step and the gate steps talk to Buildkite only through an ``Agent``:
   this build, with Buildkite's usual interpolation;
 - ``annotate(body, style, context)``: create or replace an annotation.
 
-``RealAgent`` runs ``buildkite-agent``. The checks both it and a fake need
-(``build_option``, ``check_meta_data_value``, ``check_annotation_style``) are
-functions here, so a fake refuses what the agent refuses.
+``RealAgent`` runs ``buildkite-agent``, which refuses what it refuses with its
+own message.
 """
 
 from __future__ import annotations
@@ -26,18 +25,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-ANNOTATION_STYLES = ("success", "info", "warning", "error")
-
 # ``buildkite-agent meta-data exists`` exits with this status when the key is
 # not set; it exits 1 when the build cannot be read.
 META_DATA_ABSENT = 100
 
-# The largest value ``meta-data set`` accepts, in bytes (experiment 34, P1).
-META_DATA_LIMIT = 102400
-
 
 class AgentError(RuntimeError):
-    """A ``buildkite-agent`` call failed, or was refused before it was made."""
+    """A ``buildkite-agent`` call failed."""
 
 
 class MetaDataAbsent(AgentError):
@@ -58,38 +52,9 @@ class Agent(Protocol):
     def annotate(self, body: str, style: str, context: str) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# What the agent refuses, for the real agent and its fakes alike
-# ---------------------------------------------------------------------------
-
-
 def build_option(build: str | None) -> list[str]:
-    """The ``--build`` option that names another build; none for this build.
-
-    An empty id is refused: ``--build ""`` makes the agent read this job's own
-    build without a warning (experiment 34, P8).
-    """
-    if build is None:
-        return []
-    if not build:
-        raise AgentError("empty build id: the agent would read this job's own build instead")
-    return ["--build", build]
-
-
-def check_meta_data_value(key: str, value: str) -> None:
-    """Refuse a value ``meta-data set`` refuses: empty, only whitespace, or too large."""
-    if not value.strip():
-        raise AgentError(f"meta-data {key}: the agent refuses an empty or blank value")
-    size = len(value.encode("utf-8"))
-    if size > META_DATA_LIMIT:
-        raise AgentError(
-            f"meta-data {key}: {size} bytes, more than the agent's limit of {META_DATA_LIMIT}"
-        )
-
-
-def check_annotation_style(style: str) -> None:
-    if style not in ANNOTATION_STYLES:
-        raise ValueError(f"annotate: unknown style {style!r}")
+    """The ``--build`` option that names another build; none for this build."""
+    return [] if build is None else ["--build", build]
 
 
 def strip_one_newline(text: str) -> str:
@@ -120,14 +85,9 @@ def run_process(args: Sequence[str], stdin: str | None) -> Outcome:
     Standard output and standard error are captured apart, so that a failure
     can be reported in one line and an output is never mixed with warnings.
     Text goes both ways as UTF-8, as the agent reads and writes it, whatever
-    the locale. A command that cannot be started exits 127, as in a shell.
+    the locale.
     """
-    try:
-        p = subprocess.run(
-            list(args), input=stdin, capture_output=True, encoding="utf-8", check=False
-        )
-    except OSError as exc:
-        return Outcome(127, "", str(exc))
+    p = subprocess.run(list(args), input=stdin, capture_output=True, encoding="utf-8", check=False)
     return Outcome(p.returncode, p.stdout, p.stderr)
 
 
@@ -180,7 +140,6 @@ class RealAgent:
         raise failure(o, command)
 
     def meta_data_set(self, key: str, value: str) -> None:
-        check_meta_data_value(key, value)
         o, command = self._agent(["meta-data", "set", key], value)
         checked(o, command)
 
@@ -193,6 +152,5 @@ class RealAgent:
         checked(o, command)
 
     def annotate(self, body: str, style: str, context: str) -> None:
-        check_annotation_style(style)
         o, command = self._agent(["annotate", "--style", style, "--context", context], body)
         checked(o, command)
