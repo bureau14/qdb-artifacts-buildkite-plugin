@@ -6,9 +6,6 @@
 - ``BuildAgent``: ``agent.Agent`` of one build, over ``AgentState``, the
   meta-data, step outcomes, uploads and annotations of every build.
 - ``FakePipelines``: ``planner.Pipelines``, Buildkite's facts by slug.
-
-``FakeGit`` refuses what ``git.RealGit`` refuses, through the check functions of
-``git``.
 """
 
 from __future__ import annotations
@@ -22,15 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from lib.objects import StoredObject
 from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
-from lib.snapshot.git import (
-    GitError,
-    branch_of,
-    branch_ref,
-    check_full_ref,
-    check_object_id,
-    check_tree_path,
-    check_url,
-)
+from lib.snapshot.git import branch_of, branch_ref
 
 
 class MemoryStore:
@@ -101,29 +90,19 @@ class FakeGit:
     hosting: Hosting
 
     def commits_of(self, repository: str, refs: Sequence[str]) -> dict[str, str]:
-        check_url(repository, ("https",))
-        asked = [check_full_ref(r) for r in refs]
-        return {
-            r: self.hosting.refs[(repository, r)]
-            for r in asked
-            if (repository, r) in self.hosting.refs
-        }
+        known = self.hosting.refs
+        return {r: known[(repository, r)] for r in refs if (repository, r) in known}
 
     def read_files(
         self, repository: str, commit: str, directory: str, wanted: Callable[[str], bool]
     ) -> dict[str, bytes]:
-        check_url(repository, ("https",))
-        check_tree_path(directory)
-        if check_object_id(commit) not in self.hosting.trees:
-            raise GitError(f"{repository} has no commit {commit}")
         return files_under(self.hosting.trees[commit], directory, wanted)
 
     def branches(self, repository: str) -> dict[str, str]:
-        check_url(repository, ("https",))
         return {branch_of(r): c for (u, r), c in self.hosting.refs.items() if u == repository}
 
     def merge_base_times(self, repository: str, commits: Sequence[str]) -> dict[str, None]:
-        return {check_object_id(c): None for c in commits}
+        return {c: None for c in commits}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -137,7 +116,7 @@ class FakeCheckout:
         return self.commit
 
     def checkout_files(self, directory: str, wanted: Callable[[str], bool]) -> dict[str, bytes]:
-        return files_under(self.hosting.trees[self.commit], check_tree_path(directory), wanted)
+        return files_under(self.hosting.trees[self.commit], directory, wanted)
 
 
 @dataclasses.dataclass
