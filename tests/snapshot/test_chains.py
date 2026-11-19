@@ -21,6 +21,7 @@ from world import paired
 
 from lib import layout
 from lib.snapshot.buildkite import PipelineFacts
+from lib.snapshot.records import RULE
 
 MASTER = "refs/heads/master"
 POINTERS = "_snapshot/v1/pointers/"
@@ -38,8 +39,9 @@ def holders(world, root_build, projects, variants) -> dict:
 
 
 def held_responsible(world, root_build) -> set[tuple[str, str]]:
-    """The ``(project, variant)`` that failed, found by following the root's failure record
-    down the records of its chain that it names as causes."""
+    """The ``(project, variant)`` that failed, and the ``(project, reason)`` of a build that
+    failed before it built, found by following the root's failure record down the records of
+    its chain that it names as causes."""
     plan = world.plan(root_build)
     records = {(r.project, r.key): r for r in world.records() if r.plan == plan.id}
     pending, seen, found = [(root_build.project, plan.nodes[root_build.project].key)], set(), set()
@@ -48,8 +50,10 @@ def held_responsible(world, root_build) -> set[tuple[str, str]]:
         if at in seen or at not in records:
             continue
         seen.add(at)
-        found |= {(at[0], f.variant) for f in records[at].failed}
-        pending += [(c.project, c.key) for c in records[at].caused_by]
+        r = records[at]
+        found |= {(at[0], f.variant) for f in r.failed}
+        found |= {(at[0], r.reason)} if r.reason else set()
+        pending += [(c.project, c.key) for c in r.caused_by]
     return found
 
 
@@ -142,15 +146,26 @@ def test_two_roots_use_one_build_of_a_dependency_they_share(worlds, graph_node, 
     }
 
 
+# How a node fails its last variant: its step fails, or its pipeline promotes that variant in
+# two steps, which its gate refuses before anything compiles; and what its record holds then.
+FAILURES = {"its-step-fails": None, "two-steps-promote-it": RULE}
+
+
+@pytest.mark.parametrize("failure", sorted(FAILURES))
 def test_a_failed_variant_fails_every_build_above_and_holds_its_project_responsible(
-    worlds, graph_node, matrix
+    worlds, graph_node, matrix, failure
 ):
-    """When a variant a consumer needs fails at a node, that node's build, every build above it
-    and the root fail; no project is built twice in the chain; nothing above it is promoted;
-    and the failure records of the chain lead from the root to that node and variant alone."""
+    """When a variant a consumer needs fails at a node, in its step or at the node's gate, that
+    node's build, every build above it and the root fail; no project is built twice in the
+    chain; nothing above it is promoted; and the failure records of the chain lead from the
+    root to that node and variant alone, or to that node and the rule its pipeline breaks."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     world = worlds(graph, matrix)
-    world.broken.add((node, matrix[-1]))
+    if FAILURES[failure] is None:
+        world.broken.add((node, matrix[-1]))
+    else:
+        world.projects[node].packaged = (matrix[-1],)
+        world.commit(node)
 
     top = world.build(root)
 
@@ -163,7 +178,7 @@ def test_a_failed_variant_fails_every_build_above_and_holds_its_project_responsi
     assert len(built) == len(set(built))
     assert promoted & above(graph, node) == set()
     assert moved <= {node}
-    assert held_responsible(world, top) == {(node, matrix[-1])}
+    assert held_responsible(world, top) == {(node, FAILURES[failure] or matrix[-1])}
 
 
 def first_consumer(at) -> str:

@@ -3,7 +3,8 @@ simulated Buildkite that plays their builds in process, over the fakes of ``fake
 
 Every project is a repository with a step template and a ``pipeline.py`` of the
 runner's shape. Its template has one step per variant, which downloads the same
-variant of each snapshot dependency, uploads and promotes it.
+variant of each snapshot dependency, uploads and promotes it; a test may add a
+second step that promotes a variant again (``Project.packaged``).
 
 A build starts with the runner's gate. The gate steps run the library's own
 decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
@@ -129,8 +130,11 @@ def entry(project: str, variant: str, ref="{git_ref}", latest=False, spelling="s
     return {**e, s("build_id"): LATEST} if latest else e
 
 
-def build_step(project: str, variant: str, entries: list, spelling="snake") -> dict:
-    """The step that builds ``variant`` from ``entries``, uploads and promotes it."""
+def build_step(
+    project: str, variant: str, entries: list, spelling="snake", step="build", plugin=PLUGIN
+) -> dict:
+    """The step ``step`` that builds ``variant`` from ``entries``, uploads and promotes it, with
+    the plugin's options under the name ``plugin``."""
     s = SPELLINGS[spelling]
     options = {
         "upload": {"variant": variant, s("git_ref"): "{git_ref}", "files": "out/*"},
@@ -139,10 +143,10 @@ def build_step(project: str, variant: str, entries: list, spelling="snake") -> d
     if entries:
         options = {"download": {"projects": entries}, **options}
     return {
-        "label": f"{project} {variant}",
-        "key": f"build-{variant}",
+        "label": f"{project} {step} {variant}",
+        "key": f"{step}-{variant}",
         "command": "make",
-        "plugins": [{f"{PLUGIN}#master": options}],
+        "plugins": [{f"{plugin}#master": options}],
     }
 
 
@@ -166,6 +170,7 @@ class Project:
     latest: tuple = ()  # projects it takes as latest successful
     pipeline_py: bytes = SHAPED
     extra: tuple = ()  # (dependency, variant) that every step downloads besides its own variant
+    packaged: tuple = ()  # variants a second step, "package", builds and promotes again
 
 
 @dataclasses.dataclass(eq=False)
@@ -288,7 +293,9 @@ class World:
             extra = [entry(d, x, p.pins.get(d, "{git_ref}")) for d, x in p.extra]
             return deps + extra + [entry(t, v, latest=True) for t in p.latest]
 
-        return {"steps": [build_step(name, v, entries(v)) for v in p.variants]}
+        built = [build_step(name, v, entries(v)) for v in p.variants]
+        packaged = [build_step(name, v, entries(v), step="package") for v in p.packaged]
+        return {"steps": built + packaged}
 
     def commit(self, name: str, branch: str = "master") -> str:
         """A new commit of the project's repository as its ``Project`` says, on ``branch``."""

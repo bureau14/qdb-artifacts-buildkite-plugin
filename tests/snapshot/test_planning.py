@@ -89,28 +89,40 @@ FIXTURE_FILES = {
 }
 
 
+# The plugin's name in another case: the agent runs the plugin for it, the reader reads only
+# the plugin's own name, so the rule refuses it in a generated pipeline.
+MISNAMED = PLUGIN.capitalize()
+
+
 @dataclasses.dataclass(frozen=True)
 class Template:
-    """A committed template of ``own``, the ref a build of it generates for, and the
-    entries ``(project, type, pin)`` its declaration must hold."""
+    """A committed template of ``own``, the ref a build of it generates for, the entries
+    ``(project, type, pin)`` its declaration must hold, and the keys of the steps that name the
+    plugin another way, which the rule reports in the pipeline generated from it."""
 
     name: str
     own: str
     text: str
     own_ref: str
     expected: frozenset
+    misnamed: tuple = ()
 
     def __str__(self) -> str:
         return self.name
 
 
-def generated_template(at, spelling: str, kind: str) -> Template:
-    """A node's template whose download entries are of ``kind``, its keys spelled ``spelling``."""
+def generated_template(at, spelling: str, kind: str, misnamed: bool) -> Template:
+    """A node's template whose download entries are of ``kind``, its keys spelled ``spelling``;
+    when ``misnamed``, its macos step names the plugin ``MISNAMED``."""
     deps = at.graph[at.node]
     ref = PIN if kind == "pinned" else "{git_ref}"
     steps = [
         build_step(
-            at.node, v, [entry(d, v, ref, kind == "latest", spelling) for d in deps], spelling
+            at.node,
+            v,
+            [entry(d, v, ref, kind == "latest", spelling) for d in deps],
+            spelling,
+            plugin=MISNAMED if misnamed and v == "macos" else PLUGIN,
         )
         for v in ("linux", "macos")
     ]
@@ -118,8 +130,10 @@ def generated_template(at, spelling: str, kind: str) -> Template:
         expected = {(d, LATEST_SUCCESSFUL, None) for d in deps}
     else:
         expected = {(d, SNAPSHOT, PIN if kind == "pinned" else None) for d in deps}
-    name = f"{at}-{spelling}-{kind}"
-    return Template(name, at.node, yaml.safe_dump({"steps": steps}), MASTER, frozenset(expected))
+    name = f"{at}-{spelling}-{kind}" + ("-misnamed" if misnamed else "")
+    text = yaml.safe_dump({"steps": steps})
+    reported = ("build-macos",) if misnamed else ()
+    return Template(name, at.node, text, MASTER, frozenset(expected), reported)
 
 
 def real_template(own: str) -> Template:
@@ -131,13 +145,16 @@ def real_template(own: str) -> Template:
     )
 
 
+# Each type of entry, and the snapshot type with one step that names the plugin another way.
+KINDS = [*((kind, False) for kind in TYPES), ("snapshot", True)]
+
 TEMPLATES = [
     *(
-        generated_template(at, spelling, kind)
+        generated_template(at, spelling, kind, misnamed)
         for at in GRAPH_NODES
         if at.graph[at.node]
         for spelling in ("snake", "kebab")
-        for kind in TYPES
+        for kind, misnamed in KINDS
     ),
     *(real_template(own) for own in sorted(REAL)),
 ]
@@ -146,13 +163,15 @@ TEMPLATES = [
 @pytest.fixture(params=TEMPLATES, ids=str)
 def template(request) -> Template:
     """Templates of every node that has dependencies, in both spellings of option keys and
-    with each type of entry; and the five real pipelines."""
+    with each type of entry, also with a step that names the plugin another way; and the five
+    real pipelines."""
     return request.param
 
 
 def test_the_declaration_holds_every_download_of_another_project(template):
     """Reading a template gives every other project it downloads, with the entry's type and
-    pin, in either spelling; and the pipeline generated from it keeps the rule."""
+    pin, in either spelling; and the pipeline generated from it keeps the rule, but in each step
+    that names the plugin another way."""
     declaration = read_declaration({".buildkite/steps.yml": template.text}, template.own)
     doc = load_document(generated(template.text, template.own_ref))
 
@@ -160,7 +179,7 @@ def test_the_declaration_holds_every_download_of_another_project(template):
     violations = rule_violations(
         pipeline_downloads(doc), declaration, template.own, template.own_ref
     )
-    assert (entries, violations) == (template.expected, [])
+    assert (entries, [v.step for v in violations]) == (template.expected, list(template.misnamed))
 
 
 # ---------------------------------------------------------------------------
