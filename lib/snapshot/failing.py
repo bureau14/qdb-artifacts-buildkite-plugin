@@ -6,10 +6,10 @@ key; show why on the build page; set the mode ``failed``; end with
 failure of one of these effects is logged and added to the message, so that
 the step still ends with its own cause.
 
-A decision fails the step by raising a ``Refusal``. An error of the edge fails
-it the same way and writes no record: a record saves a waiting build from
-compiling in vain, and an error of the store, of git or of an API says
-nothing of the build of a key.
+A decision fails the step by raising a ``Refusal``. An error of the edge, or
+any other exception, fails it the same way and writes no record: a record
+saves a waiting build from compiling in vain, and an error of the store, of
+git or of an API says nothing of the build of a key.
 """
 
 from __future__ import annotations
@@ -46,9 +46,8 @@ class Refusal(Exception):
 EDGE_ERRORS = (ArtifactsError, AgentError, GitError, PlanError, ClientError, BotoCoreError)
 
 
-def error_refusal(job: Job, error: Exception) -> Refusal:
-    """The refusal of a step that an error of the edge ended: no record."""
-    message = str(error) or type(error).__name__
+def error_refusal(job: Job, message: str) -> Refusal:
+    """The refusal of a step that an error ended: its message on the build page, no record."""
     shown = "\n".join(shown_text(line) for line in message.splitlines())
     return Refusal(message, refusal_annotation(STEP_ERROR, job.project, job.build, shown))
 
@@ -89,11 +88,20 @@ def gated(
     context: str,
     mark: bool,
 ) -> int:
-    """Run a step's decisions; a refusal, or an error of ``errors``, fails the step."""
+    """Run a step's decisions; a refusal or any exception fails the step.
+
+    An error of ``errors`` is one that a module of the step raises with a
+    message for people, shown as it is. Any other exception is shown by its
+    type and its text, short and in ASCII: that text was written for no reader
+    and may quote anything the step was given.
+    """
     try:
         decisions(job, edge)
     except Refusal as refusal:
         fail(edge, refusal, context, mark)
     except errors as exc:
-        fail(edge, error_refusal(job, exc), context, mark)
+        fail(edge, error_refusal(job, str(exc) or type(exc).__name__), context, mark)
+    except Exception as exc:  # noqa: BLE001 -- whatever ends a gate step, it ends as failed
+        unforeseen = f"{type(exc).__name__}: {shown_text(str(exc))}"
+        fail(edge, error_refusal(job, unforeseen), context, mark)
     return 0

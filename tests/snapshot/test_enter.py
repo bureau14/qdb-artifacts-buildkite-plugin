@@ -671,6 +671,41 @@ class Mute(RecordingAgent):
         raise AgentError("buildkite-agent annotate failed (1): gone")
 
 
+class Garbled(RecordingAgent):
+    """An agent whose answer is not UTF-8, which ``agent.run_process`` decodes strictly."""
+
+    def meta_data_get(self, key: str, build: str | None = None) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
+def test_an_exception_no_module_names_fails_the_step_with_its_mode_and_annotation(tmp_path):
+    gate = Gate(tmp_path, LIB)
+    gate.agent = Garbled(builds=gate.agent.builds)
+
+    message = gate.fails()
+
+    assert message == (
+        "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+    )
+    assert gate.mode == "failed"
+    body, style = gate.annotation()
+    assert style == "error" and body.startswith("The snapshot step of `lib` build 21 failed")
+
+
+def test_the_text_of_an_exception_no_module_names_is_shown_short_and_in_ascii(tmp_path):
+    gate = Gate(tmp_path, APP)
+
+    def broken(slug):
+        raise KeyError("\x1b[31m" + "x" * 1000)
+
+    gate.pipelines = broken
+
+    message = gate.fails()
+
+    assert message.startswith("KeyError: '\\x1b[31mxxx") and len(message) < 250
+    assert all(" " <= c <= "~" for c in message)
+
+
 def test_a_failing_step_that_cannot_annotate_still_sets_its_mode_and_says_so(tmp_path):
     gate = Gate(tmp_path, APP, exit_status=1)
     gate.agent = Mute()

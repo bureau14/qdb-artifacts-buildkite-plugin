@@ -9,6 +9,7 @@ import dataclasses
 import json
 
 import pytest
+from fakes import RecordingAgent
 from gates import (
     APP,
     BUILDS,
@@ -119,6 +120,24 @@ def test_a_retried_leave_leaves_its_record_as_it_is(tmp_path):
 
     assert gate.store.objects == first
     assert gate.lines[-1].endswith("exists; left as it is")
+
+
+class Garbled(RecordingAgent):
+    """An agent whose answer is not UTF-8, which ``agent.run_process`` decodes strictly."""
+
+    def step_outcome(self, key: str) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
+def test_an_exception_no_module_names_fails_leave_with_its_annotation(tmp_path):
+    gate = leaving(tmp_path, CORE, {})
+    gate.agent = Garbled(meta_data=gate.agent.meta_data, builds=gate.agent.builds)
+
+    assert gate.fails().startswith("UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff")
+    assert gate.mode == "built"
+    assert gate.annotation("snapshot-leave")[0].startswith(
+        "The snapshot step of `core` build 31 failed"
+    )
 
 
 def test_an_error_of_the_store_fails_leave_and_leaves_the_mode(tmp_path):
