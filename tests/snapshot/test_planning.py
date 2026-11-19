@@ -1,0 +1,236 @@
+"""The plan's inputs and outputs, without builds: the key of a snapshot, the declaration
+a template makes, and the rewrite that writes one build into every snapshot download.
+
+Graphs and templates come from ``chain.py``; the five sanitised real pipelines of
+``fixtures/`` are read as their repositories would commit them.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from pathlib import Path
+
+import pytest
+import yaml
+from chain import (
+    GRAPH_NODES,
+    PLUGIN,
+    PLUGIN_COMMIT,
+    REAL,
+    T0,
+    above,
+    agent_view,
+    build_step,
+    entry,
+    generated,
+    roots,
+)
+
+from lib.pointer import Build, Pointer
+from lib.snapshot.declaration import (
+    LATEST_SUCCESSFUL,
+    SNAPSHOT,
+    pipeline_downloads,
+    read_declaration,
+    rule_violations,
+)
+from lib.snapshot.document import Rewrite, load_document, needed_variants, planned
+from lib.snapshot.planner import Root, make_plan
+
+MASTER = "refs/heads/master"
+KEY = "v1-" + "0" * 32
+
+
+# ---------------------------------------------------------------------------
+# The key
+# ---------------------------------------------------------------------------
+
+
+def keys(world, number: int) -> dict[str, set[str]]:
+    """The keys each project has in the plans of every root of the world, made by root
+    builds numbered ``number``."""
+    found: dict[str, set[str]] = {}
+    for r in roots({p: n.deps for p, n in world.projects.items()}):
+        commit = world.hosting.head(r)
+        root = Root(
+            r,
+            "master",
+            commit,
+            f"01890000-0000-7000-8000-{number:012d}",
+            number,
+            "https://ci.example/b",
+        )
+        reading = read_declaration(world.hosting.trees[commit], r)
+        for p, node in make_plan(root, reading, world.git, world.pipelines, T0).nodes.items():
+            found.setdefault(p, set()).add(node.key)
+    return found
+
+
+def test_a_new_commit_changes_the_keys_of_its_node_and_every_node_above(worlds, graph_node):
+    """A new commit of a node changes the key of that node and of every node above it, and of
+    no other; the same commits give the same keys, in another build and through another root."""
+    graph, node = graph_node.graph, graph_node.node
+    world = worlds(graph)
+
+    before, again = keys(world, 1), keys(world, 2)
+    world.commit(node)
+    after = keys(world, 3)
+
+    assert before == again
+    assert all(len(k) == 1 for k in (*before.values(), *after.values()))
+    assert {p for p in graph if before[p] != after[p]} == {node} | above(graph, node)
+
+
+# ---------------------------------------------------------------------------
+# Templates: generated ones, and the five real pipelines
+# ---------------------------------------------------------------------------
+
+TYPES = ("snapshot", "pinned", "latest")
+PIN = "refs/heads/3.14.x"
+FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURE_FILES = {
+    "qdb-api-go": "qdb-api-go.yml",
+    "qdb-api-python": "qdb-api-python.yml",
+    "qdb-api-rest": "qdb-api-rest.yml",
+    "qdb-duck": "qdb-duck.yml",
+    "quasardb-build": "quasardb.yml",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class Template:
+    """A committed template of ``own``, the ref a build of it generates for, and the
+    entries ``(project, type, pin)`` its declaration must hold."""
+
+    name: str
+    own: str
+    text: str
+    own_ref: str
+    expected: frozenset
+
+    def __str__(self) -> str:
+        return self.name
+
+
+def generated_template(at, spelling: str, kind: str) -> Template:
+    """A node's template whose download entries are of ``kind``, its keys spelled ``spelling``."""
+    deps = at.graph[at.node]
+    ref = PIN if kind == "pinned" else "{git_ref}"
+    steps = [
+        build_step(
+            at.node, v, [entry(d, v, ref, kind == "latest", spelling) for d in deps], spelling
+        )
+        for v in ("linux", "macos")
+    ]
+    if kind == "latest":
+        expected = {(d, LATEST_SUCCESSFUL, None) for d in deps}
+    else:
+        expected = {(d, SNAPSHOT, PIN if kind == "pinned" else None) for d in deps}
+    name = f"{at}-{spelling}-{kind}"
+    return Template(name, at.node, yaml.safe_dump({"steps": steps}), MASTER, frozenset(expected))
+
+
+def real_template(own: str) -> Template:
+    """A real generated pipeline, committed as a template: its literal refs are pins."""
+    text = (FIXTURES / FIXTURE_FILES[own]).read_text()
+    feature = "refs/heads/feature"
+    return Template(
+        f"real-{own}", own, text, feature, frozenset((d, SNAPSHOT, feature) for d in REAL[own])
+    )
+
+
+TEMPLATES = [
+    *(
+        generated_template(at, spelling, kind)
+        for at in GRAPH_NODES
+        if at.graph[at.node]
+        for spelling in ("snake", "kebab")
+        for kind in TYPES
+    ),
+    *(real_template(own) for own in sorted(REAL)),
+]
+
+
+@pytest.fixture(params=TEMPLATES, ids=str)
+def template(request) -> Template:
+    """Templates of every node that has dependencies, in both spellings of option keys and
+    with each type of entry; and the five real pipelines."""
+    return request.param
+
+
+def test_the_declaration_holds_every_download_of_another_project(template):
+    """Reading a template gives every other project it downloads, with the entry's type and
+    pin, in either spelling; and the pipeline generated from it keeps the rule."""
+    reading = read_declaration({".buildkite/steps.yml": template.text}, template.own)
+    doc = load_document(generated(template.text, template.own_ref))
+
+    entries = {(e.project, e.type, e.pin) for e in reading.declaration.entries}
+    violations = rule_violations(
+        pipeline_downloads(doc), reading.declaration, template.own, template.own_ref
+    )
+    assert (reading.errors, entries, violations) == ((), template.expected, [])
+
+
+# ---------------------------------------------------------------------------
+# The rewrite
+# ---------------------------------------------------------------------------
+
+
+def leaf_steps(doc: dict) -> list[dict]:
+    return [s for top in doc["steps"] for s in (top.get("steps", []) if "group" in top else [top])]
+
+
+def options_of(doc: dict) -> list[tuple[str, dict]]:
+    """``(plugin key, options)`` of every step's artifacts plugin, in document order."""
+    return [
+        (name, options)
+        for s in leaf_steps(doc)
+        for plugin in s.get("plugins", [])
+        for name, options in plugin.items()
+        if name.split("#", 1)[0] == PLUGIN
+    ]
+
+
+def held_by(project: str, variant: str, number: int) -> Pointer:
+    build = Build(f"01890000-0000-7000-9000-{number:012d}", number, f"https://ci.example/{number}")
+    return Pointer(
+        project, "v1-" + "1" * 32, variant, MASTER, "c" * 40, build, "2026-11-19T00:00:00.000Z"
+    )
+
+
+def test_the_rewrite_names_the_planned_build_in_every_snapshot_download(template):
+    """The pipeline the plan step uploads names, in every snapshot download, the build, ref and
+    strict matching of the pointer of its project and variant; a latest successful download is
+    left as generated; every upload and promote carries the key; every step runs the plugin at
+    the plan step's commit."""
+    doc = load_document(generated(template.text, template.own_ref))
+    needs = needed_variants(doc, template.own, {})
+    wanted = sorted((p, v) for p in needs for v in needs[p])
+    held = {(p, v): held_by(p, v, n) for n, (p, v) in enumerate(wanted)}
+
+    out = planned(doc, Rewrite(template.own, KEY, PLUGIN_COMMIT, held, {}))
+
+    pairs = list(zip(options_of(doc), options_of(out)))
+    assert len(pairs) == len(options_of(out)) > 0
+    for (_, before), (plugin, after) in pairs:
+        view = agent_view(after)
+        assert plugin == f"{PLUGIN}#{PLUGIN_COMMIT}"
+        assert all(
+            view[block]["SNAPSHOT"] == KEY for block in ("UPLOAD", "PROMOTE") if block in view
+        )
+        downloads = zip(
+            before.get("download", {}).get("projects", []),
+            view.get("DOWNLOAD", {}).get("PROJECTS", []),
+        )
+        for generated_entry, e in downloads:
+            if e.get("PROJECT_ID", template.own) == template.own:
+                continue
+            if "BUILD_ID" in agent_view(generated_entry):
+                assert agent_view(generated_entry) == e
+                continue
+            p = held[(e["PROJECT_ID"], e["VARIANT"])]
+            assert (e["BUILD_ID"], e["GIT_REF"], e["REQUIRE_STRICT_REF_MATCH"]) == (
+                p.build.id,
+                p.git_ref,
+                True,
+            )
