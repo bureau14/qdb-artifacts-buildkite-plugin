@@ -11,12 +11,13 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 from fakes import FakeCheckout, FakeGit, FakePipelines, MemoryStore, RecordingAgent
+from repos import commit as commit_files
+from repos import new_repository
 
 from lib import layout, pointer
 from lib.errors import ArtifactsError
@@ -1169,13 +1170,16 @@ def test_the_api_is_asked_with_the_organisation_and_the_token_read_once(monkeypa
     assert len(ssm.asked) == 1
 
 
-def test_the_plugin_commit_is_the_head_of_the_plugins_own_checkout():
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=steps.PLUGIN_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+def test_the_plugins_own_checkout_is_the_directory_of_its_hooks_and_library():
+    assert steps.PLUGIN_ROOT == Path(steps.__file__).resolve().parents[2]
+    assert (steps.PLUGIN_ROOT / "hooks" / "post-command").is_file()
 
-    assert steps.plugin_checkout_commit() == head.stdout.strip()
+
+def test_the_plugin_commit_is_the_head_of_the_plugins_own_checkout(
+    isolated_git, tmp_path, monkeypatch
+):
+    checkout = new_repository(tmp_path / "plugin")
+    head = commit_files(checkout, {"hooks/post-command": "#!/usr/bin/env bash\n"}, "the plugin")
+    monkeypatch.setattr(steps, "PLUGIN_ROOT", checkout)
+
+    assert steps.plugin_checkout_commit() == head
