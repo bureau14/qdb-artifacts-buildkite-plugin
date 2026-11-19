@@ -207,19 +207,16 @@ def refuse_another_build(build_id, option, key_option):
 
 
 def snapshot_pointer(project_id, key, variant, git_ref):
-    """The pointer promote creates in a build with a snapshot key, checked before
-    anything is written. It names the job's own build: refuse_another_build holds
-    the build_id option to it."""
-    return pointer.checked(
-        pointer.Pointer(
-            project=project_id,
-            key=key,
-            variant=variant,
-            git_ref=git_ref,
-            commit=checkout_commit(),
-            build=job_build(),
-            written_at=forms.iso_utc(time.time()),
-        )
+    """The pointer promote creates in a build with a snapshot key. It names the job's
+    own build: refuse_another_build holds the build_id option to it."""
+    return pointer.Pointer(
+        project=project_id,
+        key=key,
+        variant=variant,
+        git_ref=git_ref,
+        commit=checkout_commit(),
+        build=job_build(),
+        written_at=forms.iso_utc(time.time()),
     )
 
 

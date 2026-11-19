@@ -377,9 +377,8 @@ class Rewrite:
     ``plugin_commit`` the commit the plan step runs (``git rev-parse HEAD`` of
     the plugin's checkout); ``dependencies`` the pointer of each snapshot
     dependency and variant the entries name, by ``(project, variant)``;
-    ``existing`` the pointer of each own variant at ``key``, by variant. Each
-    pointer is one that ``pointer.find`` read, which checked the form of every
-    field that goes into an entry or a step command.
+    ``existing`` the pointer of each own variant at ``key``, by variant, each
+    as ``pointer.find`` read it.
     """
 
     own: str
