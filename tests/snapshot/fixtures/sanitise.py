@@ -3,9 +3,11 @@
 Usage: python sanitise.py <generated.yml> <out.yml>
 
 Keeps the step structure (groups, keys, labels, dependencies) and the
-qdb-artifacts plugin blocks verbatim. Commands become ``echo step``; the
+qdb-artifacts plugin blocks verbatim, but for the git ref of a branch, which
+becomes ``refs/heads/feature``. Commands become ``echo step``; the
 configuration of every other plugin, environment, agents, retries and
-priorities are dropped, so that no host name or build detail is copied.
+priorities are dropped, so that no host name, branch name or build detail is
+copied.
 """
 
 from __future__ import annotations
@@ -24,13 +26,34 @@ KEPT = (
     "timeout_in_minutes",
 )
 ARTIFACTS = "bureau14/qdb-artifacts"
+BRANCH_PREFIX = "refs/heads/"
+# The branch a pipeline was generated on names work in its repository.
+PUBLIC_BRANCH = BRANCH_PREFIX + "feature"
+
+
+def is_branch_ref(key, value):
+    """True for an option ``git_ref`` (as the agent reads the key) that names a branch."""
+    named = isinstance(key, str) and key.upper().replace("-", "_") == "GIT_REF"
+    return named and isinstance(value, str) and value.startswith(BRANCH_PREFIX)
+
+
+def with_public_branch(value):
+    """``value`` with the git ref of every branch in it written as ``PUBLIC_BRANCH``."""
+    if isinstance(value, list):
+        return [with_public_branch(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        k: PUBLIC_BRANCH if is_branch_ref(k, v) else with_public_branch(v) for k, v in value.items()
+    }
 
 
 def sanitise_plugin(p):
     if isinstance(p, str):
         return p
     return {
-        name: (config if name.split("#", 1)[0] == ARTIFACTS else {}) for name, config in p.items()
+        name: (with_public_branch(config) if name.split("#", 1)[0] == ARTIFACTS else {})
+        for name, config in p.items()
     }
 
 

@@ -569,7 +569,7 @@ def test_pipeline_downloads_on_a_real_pipeline_with_groups():
 # The rule
 # ---------------------------------------------------------------------------
 
-TEST_BRANCH = "refs/heads/sc-20192/snapshot-dependencies"
+TEST_BRANCH = "refs/heads/feature"
 
 # Fixture -> (its own project, the projects of other pipelines it downloads).
 FIXTURE_PROJECTS = {

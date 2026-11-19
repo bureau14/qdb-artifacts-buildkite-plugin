@@ -43,7 +43,7 @@ B = "b" * 40
     [
         "master",
         "3.14.x",
-        "sc-20192/snapshot-dependencies",
+        "feature/snapshot-dependencies",
         "sc-12345/-a-component-that-starts-with-a-dash",
         "agent/a-component-that-ends-with-a-dash-/then/more",
         "3.14.x-20990101-pinned",
@@ -214,7 +214,7 @@ def test_parse_ls_remote_takes_the_peeled_commit_of_an_annotated_tag():
     "ref, full",
     [
         ("refs/heads/master", True),
-        ("refs/heads/sc-20192/snapshot-dependencies", True),
+        ("refs/heads/feature/snapshot-dependencies", True),
         ("refs/tags/v3.14.3", True),
         ("master", False),
         ("refs/heads/", False),

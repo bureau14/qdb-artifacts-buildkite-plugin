@@ -7,12 +7,12 @@ steps:
   - docker#v5.13.0: {}
   - bureau14/qdb-artifacts#master:
       promote:
-        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        git_ref: refs/heads/feature
         variant: linux-haswell-release
       upload:
         allow_empty: false
         files: artifacts/**/*.tar.zst
-        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        git_ref: refs/heads/feature
         variant: linux-haswell-release
   - ./.buildkite/plugins/timing: {}
 - label: build (freebsd-haswell-release)
@@ -22,12 +22,12 @@ steps:
   plugins:
   - bureau14/qdb-artifacts#master:
       promote:
-        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        git_ref: refs/heads/feature
         variant: freebsd-haswell-release
       upload:
         allow_empty: false
         files: artifacts/**/*.tar.zst
-        git_ref: refs/heads/sc-20192/snapshot-dependencies
+        git_ref: refs/heads/feature
         variant: freebsd-haswell-release
   - ./.buildkite/plugins/timing: {}
 - label: ':bar_chart: Build timing summary'
