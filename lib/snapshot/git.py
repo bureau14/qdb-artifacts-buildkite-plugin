@@ -12,7 +12,9 @@ Two interfaces, one for each caller. ``Git`` is what the planner asks:
 - ``branches(url)``: ``{branch: commit}`` of every branch of ``url``;
 - ``merge_base_times(url, commits)``: for each of ``commits`` of ``url``, the
   committer time of its merge-base with the commit checked out in the current
-  directory, None when none is known.
+  directory. ``RealGit`` fails when git finds no merge-base; None is the
+  answer of an answerer that knows no history (the fakes), and ``lines``
+  reads it as no time.
 
 ``Checkout`` is what a build asks of its own checkout, in the current
 directory:

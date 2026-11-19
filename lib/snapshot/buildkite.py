@@ -66,7 +66,7 @@ def https_repository(repository: str) -> str:
     return f"https://{host.rpartition('@')[2]}/{path}"
 
 
-# How the first step of every generated pipeline ends its command line.
+# How the configuration of every generated pipeline runs its generator.
 GENERATOR_LINE = ".buildkite/pipeline.py | buildkite-agent pipeline upload"
 
 

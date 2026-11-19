@@ -294,7 +294,7 @@ def dependency_of(reached: Reached) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The four conditions of section 3
+# The three conditions of section 3
 # ---------------------------------------------------------------------------
 
 
@@ -309,7 +309,7 @@ class Unmet:
 def unmet_buildkite(project: str) -> Unmet:
     return Unmet(
         f"Buildkite's configuration of {project} does not run {PIPELINE_PY} into a pipeline upload",
-        f"{project} adopts: the first step of its Buildkite configuration runs "
+        f"{project} adopts: its Buildkite configuration runs "
         f"{PIPELINE_PY} | buildkite-agent pipeline upload",
     )
 
