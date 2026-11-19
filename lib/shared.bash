@@ -5,39 +5,30 @@ PLUGIN_PREFIX="QDB_ARTIFACTS"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACTS_PY="${PLUGIN_DIR}/artifacts.py"
 
-# Detect Python 3.
-#   Linux/macOS: "python3" is on PATH.
-#   Windows:     Packer installs Python to C:\Python<ver>-<bits>\ which may not
-#                be on PATH. We search known locations as a fallback.
-_find_python3() {
-  # 1. Agent-provided path (set by packer via QDB_CICD_AGENT_PYTHON3)
-  if [[ -n "${QDB_CICD_AGENT_PYTHON3:-}" ]] && [[ -x "${QDB_CICD_AGENT_PYTHON3}" ]]; then
-    echo "${QDB_CICD_AGENT_PYTHON3}"
-    return
-  fi
+# Git Bash, the shell of the hooks on the Windows agents.
+on_windows() {
+  [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]
+}
 
-  # 2. Try standard commands on PATH
-  for cmd in python3 python; do
-    if command -v "$cmd" &>/dev/null \
-       && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
-      echo "$cmd"
-      return
-    fi
-  done
-
-  # 3. Windows fallback: scan well-known install directories (newest first)
-  if [[ -n "${SYSTEMROOT:-}" ]]; then
-    for dir in /c/Python3.*-64 /c/Python3.*-32 /c/Python3*; do
-      if [[ -x "${dir}/python.exe" ]] \
-         && "${dir}/python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
-        echo "${dir}/python.exe"
-        return
-      fi
-    done
+# The Python the agent image names, and no other: QDB_CICD_AGENT_PYTHON3, or
+# where that is not set QDB_CICD_AGENT_PYTHON_313_PATH, as the macOS image names
+# one Python per version. The Windows image names a Windows path
+# (C:\Python3.12-64\python.exe), which cygpath turns into the form Git Bash runs.
+agent_python() {
+  local named="${QDB_CICD_AGENT_PYTHON3:-${QDB_CICD_AGENT_PYTHON_313_PATH:-}}"
+  if [[ -n "${named}" ]] && on_windows; then
+    cygpath -u "${named}"
+  else
+    printf '%s\n' "${named}"
   fi
 }
 
-PYTHON3_CMD="$(_find_python3)"
+# The version of a Python, as "3.13.1", or nothing when it does not run. Written
+# without a newline: Python on Windows ends a line with CR LF, and the command
+# substitution that reads the version strips the LF only.
+python_version() {
+  "$1" -c 'import platform, sys; sys.stdout.write(platform.python_version())' 2>/dev/null || true
+}
 
 plugin_read_config() {
   local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
@@ -92,7 +83,7 @@ fi
 # Venv layout differs between platforms:
 #   Linux/macOS: .venv/bin/python3, .venv/bin/pip
 #   Windows:     .venv/Scripts/python.exe, .venv/Scripts/pip.exe
-if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]; then
+if on_windows; then
   VENV_BIN="${VENV_DIR}/Scripts"
 else
   VENV_BIN="${VENV_DIR}/bin"

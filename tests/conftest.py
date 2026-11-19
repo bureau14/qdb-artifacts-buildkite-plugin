@@ -537,10 +537,16 @@ exit "${FAKE_BUILDKITE_AGENT_EXIT_STATUS:-0}"
 """
 
 FAKE_PYTHON_SCRIPT = """#!/bin/sh
-# Records each call in its own numbered directory: the path it ran as, then its
-# arguments, NUL-separated. Asked for "-m venv <dir>", it lays out <dir>/bin/python
-# as a copy of itself, so the venv's Python records its calls too.
+# Asked for its version with "-c", it answers 3.13.0 and records nothing, so that
+# the calls are those that make and fill a venv. Records each other call in its own
+# numbered directory: the path it ran as, then its arguments, NUL-separated. Asked
+# for "-m venv <dir>", it lays out <dir>/bin/python as a copy of itself, so the
+# venv's Python records its calls too.
 set -eu
+if [ "${1:-}" = "-c" ]; then
+  printf '3.13.0'
+  exit 0
+fi
 calls="$FAKE_PYTHON_CALLS"
 n=0
 while [ -e "$calls/$n" ]; do n=$((n + 1)); done

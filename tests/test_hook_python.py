@@ -196,17 +196,83 @@ def test_the_leave_step_loads_its_modules_in_a_venv_without_pyyaml(plugin_venv):
     assert (loaded.returncode, loaded.stdout.strip()) == (0, "[]"), loaded.stderr
 
 
-def test_post_checkout_without_any_python_fails_before_touching_the_venv(
-    job, hook, plugin_venv, tmp_path
+def test_post_checkout_says_which_python_it_runs(job, hook, plugin_copy, fake_python):
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(fake_python.path), FAKE_PYTHON_CALLS=str(fake_python.calls_dir)
+    )
+
+    outcome = hook("post-checkout", job, root=plugin_copy)
+
+    assert outcome.code == 0, outcome.output
+    assert f"\nPython 3.13.0 at {fake_python.path}\n" in outcome.stdout
+
+
+def test_post_checkout_runs_the_python_of_the_macos_variable_where_the_agent_variable_is_unset(
+    job, hook, plugin_copy, fake_python
+):
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=None,
+        QDB_CICD_AGENT_PYTHON_313_PATH=str(fake_python.path),
+        FAKE_PYTHON_CALLS=str(fake_python.calls_dir),
+    )
+
+    outcome = hook("post-checkout", job, root=plugin_copy)
+
+    assert outcome.code == 0, outcome.output
+    assert fake_python.calls()[0].argv[:3] == [str(fake_python.path), "-m", "venv"]
+
+
+def test_post_checkout_takes_the_agent_variable_before_the_macos_variable(
+    job, hook, plugin_copy, fake_python, tmp_path
+):
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(fake_python.path),
+        QDB_CICD_AGENT_PYTHON_313_PATH=str(tmp_path / "absent" / "python3.13"),
+        FAKE_PYTHON_CALLS=str(fake_python.calls_dir),
+    )
+
+    outcome = hook("post-checkout", job, root=plugin_copy)
+
+    assert outcome.code == 0, outcome.output
+    assert fake_python.calls()[0].argv[:3] == [str(fake_python.path), "-m", "venv"]
+
+
+def test_an_agent_variable_that_names_no_python_that_runs_fails_post_checkout(
+    job, hook, plugin_copy, fake_python, tmp_path
+):
+    absent = tmp_path / "absent" / "python3"
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(absent),
+        QDB_CICD_AGENT_PYTHON_313_PATH=str(fake_python.path),
+        FAKE_PYTHON_CALLS=str(fake_python.calls_dir),
+    )
+
+    outcome = hook("post-checkout", job, root=plugin_copy)
+
+    assert outcome.code == 1
+    assert f"\nQDB_CICD_AGENT_PYTHON3={absent}\n" in outcome.stdout
+    assert f"\nQDB_CICD_AGENT_PYTHON_313_PATH={fake_python.path}\n" in outcome.stdout
+    assert fake_python.calls() == []
+    assert not (plugin_copy / ".venv").exists()
+
+
+def test_post_checkout_without_an_agent_variable_fails_and_takes_no_python_from_path(
+    job, hook, plugin_venv, fake_python
 ):
     venv_config = plugin_venv.parent.parent / "pyvenv.cfg"
     before = venv_config.stat().st_mtime_ns
-    job = job.with_env(PATH=path_without_python(tmp_path), QDB_CICD_AGENT_PYTHON3=None)
+    job = job.with_env(
+        PATH=os.pathsep.join([str(fake_python.bin_dir), job.env["PATH"]]),
+        QDB_CICD_AGENT_PYTHON3=None,
+        FAKE_PYTHON_CALLS=str(fake_python.calls_dir),
+    )
 
     outcome = hook("post-checkout", job)
 
     assert outcome.code == 1
-    assert "python3" in outcome.stdout
+    assert "\nQDB_CICD_AGENT_PYTHON3=\n" in outcome.stdout
+    assert "\nQDB_CICD_AGENT_PYTHON_313_PATH=\n" in outcome.stdout
+    assert fake_python.calls() == []
     assert venv_config.stat().st_mtime_ns == before
 
 
