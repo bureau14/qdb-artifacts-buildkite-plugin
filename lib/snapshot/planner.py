@@ -1,6 +1,6 @@
 """The plan of a root build (specification sections 2, 3 and 4).
 
-``make_plan(root, own, git, pipelines, now)`` fixes, at one instant, the commit
+``make_plan(root, own, git, pipelines)`` fixes, at one instant, the commit
 every project of the root's snapshot tree is built from, its key, and the
 branch name a build of it runs under, and returns the plan (``plan.Plan``). It
 is a function of its inputs: the root's facts (``Root``), the declaration read
@@ -81,7 +81,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, TypeVar, Union
 
-from ..forms import BRANCH_PREFIX, is_full_ref, is_ref_name, iso_utc
+from ..forms import BRANCH_PREFIX, is_full_ref, is_ref_name
 from .buildkite import PipelineFacts, PipelineNotFound
 from .canonical import snapshot_key
 from .declaration import (
@@ -150,7 +150,6 @@ class Root:
     commit: str
     build_id: str
     build_number: int
-    build_url: str
     rebuild: str = REBUILD_NONE
 
 
@@ -718,7 +717,7 @@ def label_of(p: str, as_itself: bool, tree: Mapping[str, Member], context: str) 
 
 def plan_node(n: Member, key: str | None, label: str) -> Node:
     p = n.place
-    return Node(p.repository, p.ref, p.commit, key, label, tuple(deps_of(n)))
+    return Node(p.ref, p.commit, key, label, tuple(deps_of(n)))
 
 
 # ---------------------------------------------------------------------------
@@ -748,8 +747,8 @@ def check_root(root: Root, own: Reading) -> None:
         )
 
 
-def make_plan(root: Root, own: Reading, git: Git, pipelines: Pipelines, now: float) -> Plan:
-    """The plan of ``root``, made at ``now`` (epoch seconds); see the module docstring.
+def make_plan(root: Root, own: Reading, git: Git, pipelines: Pipelines) -> Plan:
+    """The plan of ``root``; see the module docstring.
 
     ``own`` is the declaration read from the root's own commit. Raises
     ``PlanError`` when the tree cannot be planned; other errors of git and of
@@ -770,8 +769,7 @@ def make_plan(root: Root, own: Reading, git: Git, pipelines: Pipelines, now: flo
         id=root.build_id,
         context=root.branch,
         rebuild=root.rebuild,
-        created_at=iso_utc(now),
-        root=RootInfo(root.project, root.build_number, root.build_url),
+        root=RootInfo(root.project, root.build_number),
         nodes={
             p: plan_node(tree[p], keys[p], label_of(p, as_itself[p], tree, root.branch))
             for p in order

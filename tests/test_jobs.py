@@ -559,14 +559,8 @@ def chain_plan(widget_commit: str) -> str:
             id=build_id(ROOT),
             context="master",
             rebuild="none",
-            created_at="2026-11-19T00:00:00.000Z",
-            root=RootInfo("app", ROOT, build_url("app", ROOT)),
-            nodes={
-                p: Node(
-                    f"https://git.example.test/example/{p}.git", MASTER, c, KEYS[p], "master", deps
-                )
-                for p, (c, deps) in nodes.items()
-            },
+            root=RootInfo("app", ROOT),
+            nodes={p: Node(MASTER, c, KEYS[p], "master", deps) for p, (c, deps) in nodes.items()},
         )
     )
 

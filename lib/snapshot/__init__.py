@@ -22,8 +22,6 @@ of leave runs without PyYAML.
 - ``buildkite``: what Buildkite's REST API says about a pipeline (its
   repository, and whether its configuration runs ``.buildkite/pipeline.py``).
 - ``shown``: how a foreign value appears in a message.
-- ``members``: a member of a JSON object read back from elsewhere, of the
-  type its reader expects.
 - ``git``: everything asked of git (the commit of a branch or tag, the files
   of another repository's commit, the branches of a repository and their
   merge-bases with the checkout, the checkout's commit and files), behind one

@@ -209,15 +209,13 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
             commit=edge.checkout.head_commit(),
             build_id=job.build.id,
             build_number=job.build.number,
-            build_url=job.build.url,
             rebuild=rebuild_setting(job.rebuild),
         )
-        p = make_plan(root, generated.reading, edge.git, edge.pipelines, edge.clock())
-        text = encode_plan(p)
+        p = make_plan(root, generated.reading, edge.git, edge.pipelines)
     except PlanError as exc:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
-    edge.agent.meta_data_set(PLAN, text)
+    edge.agent.meta_data_set(PLAN, encode_plan(p))
     edge.agent.annotate(plan_annotation(p, job.project), "info", PLAN_CONTEXT)
     return p
 
@@ -305,10 +303,7 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
 
 def dependency_key(p: Plan, project: str) -> str:
     """The key of a snapshot dependency of this build, as the plan fixed it."""
-    node = p.nodes.get(project)
-    if node is None or node.key is None:
-        raise PlanError(f"the pipeline downloads {project}, which plan {p.id} holds no key of")
-    return node.key
+    return p.nodes[project].key
 
 
 def dependency_pointers(

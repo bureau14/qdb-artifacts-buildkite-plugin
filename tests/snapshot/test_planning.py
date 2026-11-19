@@ -17,7 +17,6 @@ from chain import (
     PLUGIN,
     PLUGIN_COMMIT,
     REAL,
-    T0,
     above,
     agent_view,
     build_step,
@@ -52,16 +51,9 @@ def keys(world, number: int) -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for r in roots({p: n.deps for p, n in world.projects.items()}):
         commit = world.hosting.head(r)
-        root = Root(
-            r,
-            "master",
-            commit,
-            f"01890000-0000-7000-8000-{number:012d}",
-            number,
-            "https://ci.example/b",
-        )
+        root = Root(r, "master", commit, f"01890000-0000-7000-8000-{number:012d}", number)
         reading = read_declaration(world.hosting.trees[commit], r)
-        for p, node in make_plan(root, reading, world.git, world.pipelines, T0).nodes.items():
+        for p, node in make_plan(root, reading, world.git, world.pipelines).nodes.items():
             found.setdefault(p, set()).add(node.key)
     return found
 
