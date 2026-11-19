@@ -207,6 +207,24 @@ def test_post_checkout_says_which_python_it_runs(job, hook, plugin_copy, fake_py
     assert f"\nPython 3.13.0 at {fake_python.path}\n" in outcome.stdout
 
 
+@pytest.mark.parametrize("version", ["2.7.18", "3.9.6", "3.11.9"])
+def test_post_checkout_refuses_a_python_older_than_3_12_before_making_anything(
+    job, hook, plugin_copy, fake_python, version
+):
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(fake_python.path),
+        FAKE_PYTHON_CALLS=str(fake_python.calls_dir),
+        FAKE_PYTHON_VERSION=version,
+    )
+
+    outcome = hook("post-checkout", job, root=plugin_copy)
+
+    assert outcome.code == 1
+    assert " plugin needs Python 3.12 or newer\n" in outcome.stdout
+    assert f"\n{fake_python.path} is Python {version}.\n" in outcome.stdout
+    assert fake_python.calls() == []
+
+
 def test_post_checkout_runs_the_python_of_the_macos_variable_where_the_agent_variable_is_unset(
     job, hook, plugin_copy, fake_python
 ):

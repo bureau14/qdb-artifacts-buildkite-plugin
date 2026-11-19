@@ -10,7 +10,6 @@ from there:
     .zip, .jar          zipfile, seekable
 """
 
-import posixpath
 import shutil
 import tarfile
 import zipfile
@@ -29,67 +28,17 @@ def _filter_tar_member(member, entry_rules):
     return member if member.name else None
 
 
-def _assert_tar_path_is_safe(out, name):
-    normalized = posixpath.normpath(name)
-    if normalized in ("", ".") or normalized.startswith("../") or normalized == "..":
-        raise tarfile.FilterError(f"refusing unsafe tar member path: {name}")
-    if posixpath.isabs(normalized):
-        raise tarfile.FilterError(f"refusing absolute tar member path: {name}")
-
-    out = out.resolve()
-    target = (out / normalized).resolve()
-    try:
-        target.relative_to(out)
-    except ValueError as exc:
-        raise tarfile.FilterError(f"refusing tar member outside output dir: {name}") from exc
-    return target
-
-
-def _safe_tar_member(member, out):
-    """Apply Python 3.12-style data filtering without the 3.12-only
-    TarFile.extract(..., filter=...) keyword.
-
-    Python 3.9 agents do not accept that keyword, so pre-filter members and call
-    extract() with the older signature. On Python versions with
-    tarfile.data_filter, delegate to the stdlib implementation. Otherwise use a
-    conservative fallback that rejects traversal/absolute paths, device files,
-    and links escaping the output directory.
-    """
-    data_filter = getattr(tarfile, "data_filter", None)
-    if data_filter is not None:
-        return data_filter(member, str(out))
-
-    target = _assert_tar_path_is_safe(out, member.name)
-    if member.isdev():
-        raise tarfile.FilterError(f"refusing special tar member: {member.name}")
-
-    if member.issym() or member.islnk():
-        if posixpath.isabs(member.linkname):
-            raise tarfile.FilterError(f"refusing absolute tar link target: {member.name}")
-        link_base = out.resolve() if member.islnk() else target.parent
-        try:
-            (link_base / member.linkname).resolve().relative_to(out.resolve())
-        except ValueError as exc:
-            raise tarfile.FilterError(
-                f"refusing tar link outside output dir: {member.name}"
-            ) from exc
-
-    return member
-
-
 def _extract_tar(tar, out, entry_filter=None, strip_prefix=None, entry_rules=None):
-    """Extract tar members with optional filtering. Data filtering rejects
-    absolute paths, traversal (../), and device files. Streaming mode means
+    """Extract tar members with optional filtering, through tarfile's data filter:
+    it roots absolute paths in the output dir, and refuses special files and the
+    members and links that would land outside it. Streaming mode means
     sequential-only access -- skipped members still consume I/O from the stream."""
     entry_rules = entry_rules or [(entry_filter, strip_prefix)]
     for member in tar:
         member = _filter_tar_member(member, entry_rules)
         if member is None:
             continue
-        member = _safe_tar_member(member, out)
-        if member is None:
-            continue
-        tar.extract(member, path=out)
+        tar.extract(member, path=out, filter="data")
 
 
 def extract_local_archive(

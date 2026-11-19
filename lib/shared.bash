@@ -30,6 +30,14 @@ python_version() {
   "$1" -c 'import platform, sys; sys.stdout.write(platform.python_version())' 2>/dev/null || true
 }
 
+# True when a version, as "3.13.1", is 3.12 or newer: the first Python whose
+# every release has tarfile's data filter, and the oldest the pipeline tests.
+is_python_312_or_newer() {
+  local major minor
+  IFS=. read -r major minor _ <<<"$1"
+  (( major > 3 || (major == 3 && minor >= 12) ))
+}
+
 plugin_read_config() {
   local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
   local default="${2:-}"

@@ -1,7 +1,6 @@
 """How a download with extract unpacks archives, which entries it keeps, what it refuses."""
 
 import stat
-import tarfile
 
 import pytest
 
@@ -9,9 +8,6 @@ MASTER = "refs/heads/master"
 PREFIX = f"engine/{MASTER}/variants/linux/builds/b-1"
 COMPONENT = {"bin/widgetd": b"server", "lib/libwidget.so": b"library", "README": b"readme"}
 RETRY_SLEEPS = [5, 10, 20, 40, 60, 60, 60, 60, 60]
-
-# Python 3.9.17+, 3.10.12+, 3.11.4+ and 3.12+ have tarfile.data_filter; 3.9.6 has not.
-HAS_DATA_FILTER = hasattr(tarfile, "data_filter")
 
 
 def extracting(job, files, output_dir="out", extract=True):
@@ -170,9 +166,7 @@ def test_a_tar_symlink_inside_the_output_dir_is_kept(job, store, hook, archive):
     assert link.is_symlink() and read(job, "out/lib/libwidget.so") == b"so"
 
 
-def test_tar_modes_keep_the_executable_bit_and_lose_group_write_only_with_data_filter(
-    job, store, hook, archive
-):
+def test_tar_modes_keep_the_executable_bit_and_lose_group_write(job, store, hook, archive):
     entries = [
         {"name": "bin/widgetd", "data": b"x", "mode": 0o755},
         {"name": "bin/wide", "data": b"w", "mode": 0o777},
@@ -183,7 +177,7 @@ def test_tar_modes_keep_the_executable_bit_and_lose_group_write_only_with_data_f
 
     assert outcome.code == 0, outcome.output
     assert file_mode(job, "out/bin/widgetd") == 0o755
-    assert file_mode(job, "out/bin/wide") == (0o755 if HAS_DATA_FILTER else 0o777)
+    assert file_mode(job, "out/bin/wide") == 0o755
 
 
 def test_the_downloaded_archive_and_its_temporary_file_are_not_kept(job, store, hook, archive):
@@ -285,34 +279,27 @@ def assert_failed_after_ten_attempts(store, instant_clock, outcome):
 def test_an_unsafe_tar_member_fails_the_download_after_ten_attempts(
     job, store, hook, archive, instant_clock, case
 ):
-    entry, error_with_data_filter = UNSAFE_TAR_MEMBERS[case]
+    entry, error = UNSAFE_TAR_MEMBERS[case]
 
     outcome = extract_on_the_instant_clock(
         job, store, hook, instant_clock, archive(".tar.zst", [entry])
     )
 
     assert_failed_after_ten_attempts(store, instant_clock, outcome)
-    if HAS_DATA_FILTER:
-        assert error_with_data_filter in outcome.stderr
-    else:
-        assert "AttributeError" in outcome.stderr and "FilterError" in outcome.stderr
+    assert error in outcome.stderr
     assert job.files() == []
 
 
-def test_an_absolute_tar_member_is_rooted_in_the_output_dir_only_with_data_filter(
+def test_an_absolute_tar_member_is_rooted_in_the_output_dir(
     job, store, hook, archive, instant_clock
 ):
     body = archive(".tar.zst", [{"name": "/abs/file", "data": b"abs"}])
 
     outcome = extract_on_the_instant_clock(job, store, hook, instant_clock, body)
 
-    if HAS_DATA_FILTER:
-        assert outcome.code == 0, outcome.output
-        assert read(job, "out/abs/file") == b"abs"
-        assert instant_clock.sleeps() == []
-    else:
-        assert_failed_after_ten_attempts(store, instant_clock, outcome)
-        assert "AttributeError" in outcome.stderr
+    assert outcome.code == 0, outcome.output
+    assert read(job, "out/abs/file") == b"abs"
+    assert instant_clock.sleeps() == []
 
 
 def test_a_corrupt_archive_fails_the_download_after_ten_attempts(job, store, hook, instant_clock):
