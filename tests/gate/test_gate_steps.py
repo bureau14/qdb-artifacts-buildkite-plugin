@@ -158,6 +158,26 @@ def test_a_chain_node_asked_for_a_variant_it_does_not_promote_stores_its_record(
     assert buildkite.agent.meta_data(engine.id)["snapshot-mode"] == "failed"
 
 
+def test_a_resume_step_whose_triggered_build_left_nothing_fails_and_triggers_nothing(
+    buildkite, store
+):
+    buildkite.add_pipeline("engine", ENGINE)
+    buildkite.add_pipeline("widget", WIDGET)
+    widget = buildkite.start("widget")
+    assert enter(buildkite, widget).outcome == "passed"
+    label = widget.step("snapshot-dep-engine")["label"]
+
+    run = buildkite.run_step(widget, widget.step("snapshot-resume"))
+
+    assert run.outcome == "hard_failed"
+    assert (
+        "the build of engine triggered by this build ended without linux and left no record; "
+        f"see the step {label}"
+    ) in run.output
+    assert len(buildkite.agent.uploads(widget.id)) == 1
+    assert buildkite.agent.meta_data(widget.id)["snapshot-mode"] == "failed"
+
+
 def test_leave_stores_the_record_of_a_variant_whose_step_failed(buildkite, store):
     buildkite.add_pipeline("engine", ENGINE)
     (buildkite.breaks / "engine-linux").write_text("")
