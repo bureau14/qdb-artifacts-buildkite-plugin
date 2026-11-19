@@ -252,7 +252,7 @@ class World:
         self.hosting = Hosting()
         self.git = FakeGit(self.hosting)
         self.store = MemoryStore()
-        self.facts = {p: PipelineFacts(p, url(p), True) for p in graph}
+        self.facts = {p: PipelineFacts(url(p), True) for p in graph}
         self.pipelines = FakePipelines(self.facts)
         self.agents = AgentState()
         self.broken: set[tuple[str, str]] = set()

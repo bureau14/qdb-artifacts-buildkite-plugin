@@ -284,7 +284,7 @@ def test_a_root_with_a_latest_successful_dependency_builds_every_time(worlds, gr
 
 def cannot_give_a_snapshot(world, project: str, condition: str) -> None:
     if condition == "buildkite":
-        world.facts[project] = PipelineFacts(project, url(project), False)
+        world.facts[project] = PipelineFacts(url(project), False)
     elif condition == "shape":
         world.projects[project].pipeline_py = SHAPED.replace(b"run(", b"print(")
     else:
