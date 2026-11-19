@@ -157,8 +157,13 @@ def chain_origin(job: Job, edge: Edge) -> Origin | None:
 # ---------------------------------------------------------------------------
 
 
+def uploaded_before(job: Job, edge: Edge) -> bool:
+    """1. The step's marker holds this build's id: a retry after the upload."""
+    return meta_data(edge, UPLOADED + job.step_key) == job.build.id
+
+
 def check_command(job: Job, edge: Edge) -> None:
-    """1. The command failed: record ``generator_failed`` when a chain node; fail."""
+    """2. The command failed: record ``generator_failed`` when a chain node; fail."""
     if job.exit_status != 0:
         message = (
             f"the command exited {job.exit_status}: it generates the pipeline into "
@@ -166,11 +171,6 @@ def check_command(job: Job, edge: Edge) -> None:
         )
         origin = chain_origin(job, edge)
         raise reason_refusal(job, GENERATOR_FAILED, message, origin, edge.clock())
-
-
-def uploaded_before(job: Job, edge: Edge) -> bool:
-    """2. The step's marker holds this build's id: a retry after the upload."""
-    return meta_data(edge, UPLOADED + job.step_key) == job.build.id
 
 
 @dataclass(frozen=True)
@@ -449,7 +449,7 @@ def build_pipeline(
     built: a replaced step promotes nothing, so leave asks for no outcome of it.
     The marks leave reads are set before the upload, so that no uploaded step
     runs in a build without them; an upload the agent refuses then fails the
-    step, which sets the mode ``failed``. The marker of step 2 comes last.
+    step, which sets the mode ``failed``. The marker of step 1 comes last.
     """
     dependencies = held_only(held)
     rewrite = Rewrite(job.project, key, edge.plugin_commit(), dependencies, existing)
@@ -485,10 +485,10 @@ class Prepared:
 
 
 def first_steps(job: Job, edge: PlanEdge) -> Prepared | None:
-    """Steps 1 to 6, the same in enter and resume; None when the step uploaded before (2).
+    """Steps 1 to 6, the same in enter and resume; None when the step uploaded before (1).
 
-    Step 2 comes before step 1: once the step uploaded, the build goes as it
-    uploaded, also when a retry of the step's command fails.
+    Once the step uploaded, the build goes as it uploaded, also when a retry
+    of the step's command fails.
     """
     if uploaded_before(job, edge):
         edge.log(f"{job.step_key} uploaded in this build before; nothing more to do")
@@ -565,10 +565,10 @@ ENTER_ERRORS = (*EDGE_ERRORS, DocumentError, BuildkiteError)
 def enter(job: Job, edge: PlanEdge) -> int:
     """The plan step: decide what this build does.
 
-    2. The step's marker holds this build's id (a retry after the upload):
-       done. This comes before 1: once the step uploaded, the build goes as
-       it uploaded, also when the command of a retry fails.
-    1. The command failed: record ``generator_failed`` when a chain node; fail.
+    1. The step's marker holds this build's id (a retry after the upload):
+       done. Once the step uploaded, the build goes as it uploaded, also when
+       the command of a retry fails.
+    2. The command failed: record ``generator_failed`` when a chain node; fail.
     3. The generated pipeline breaks the rule of section 2: record ``rule``
        when a chain node; fail.
     4. A chain node loads the plan and checks its commit; a root makes the

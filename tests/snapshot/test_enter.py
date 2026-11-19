@@ -66,7 +66,7 @@ from lib.snapshot.records import (
 )
 
 # ---------------------------------------------------------------------------
-# Enter, step 1: the command failed
+# Enter, step 2: the command failed
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +95,7 @@ def test_1_a_failed_command_of_a_chain_node_records_generator_failed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Step 2: a retry after the upload
+# Step 1: a retry after the upload
 # ---------------------------------------------------------------------------
 
 
