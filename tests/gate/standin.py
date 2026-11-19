@@ -551,7 +551,8 @@ class Agent:
 # ---------------------------------------------------------------------------
 
 LEAVE = "snapshot-leave"
-GATE_OPTIONS = ("plan", "resume", "leave")
+# The gate steps whose post-checkout installs PyYAML; leave reads no document.
+READS_DOCUMENTS = {"plan", "resume"}
 
 
 def gate_steps(project: str, commit: str, plugin_commit: str) -> list[dict]:
@@ -650,9 +651,11 @@ class Buildkite:
 
     ``template`` is a job of the suite's harness (``tests/conftest.py``), whose
     environment holds the store and the host's variables; ``hook`` runs a hook
-    as the agent does. Gate steps run the plugin at ``gate_plugin`` (its .venv
-    holds PyYAML), every other step the plugin at ``plugin_root`` (its .venv
-    does not). ``compiled`` is the file every build step's command appends to.
+    as the agent does. The steps of enter and resume run the plugin at
+    ``gate_plugin``, whose .venv post-checkout made with PyYAML; every other
+    step, leave too, the plugin at ``plugin_root``, whose .venv has none, as
+    on an agent. ``compiled`` is the file every build step's command appends
+    to.
     """
 
     def __init__(self, root, template, hook, gate_plugin, plugin_root, hosting, api, agent):
@@ -840,8 +843,7 @@ class Buildkite:
             ref, options = plugin
             if ref != self.plugin_commit:
                 raise AssertionError(f"{build.project} {step['key']} runs the plugin at {ref}")
-            gate = any(k in options for k in GATE_OPTIONS)
-            root = self.gate_plugin if gate else self.plugin_root
+            root = self.gate_plugin if READS_DOCUMENTS & set(options) else self.plugin_root
             job = job.with_plugin(options)
             pre = self.hook("pre-command", job, root=root)
             output.append(pre.output)

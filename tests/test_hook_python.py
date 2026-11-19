@@ -150,6 +150,23 @@ def test_an_ordinary_job_runs_in_a_venv_without_pyyaml(job, store, hook, plugin_
     assert store.get(latest) == job.env["BUILDKITE_BUILD_ID"].encode()
 
 
+def test_the_leave_step_loads_its_modules_in_a_venv_without_pyyaml(plugin_venv):
+    probe = (
+        "import sys; from lib.snapshot import steps; "
+        "print(sorted(m for m in sys.modules if m.split('.')[0] == 'yaml'))"
+    )
+
+    loaded = subprocess.run(
+        [str(plugin_venv), "-c", probe],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert (loaded.returncode, loaded.stdout.strip()) == (0, "[]"), loaded.stderr
+
+
 def test_post_checkout_without_any_python_fails_before_touching_the_venv(
     job, hook, plugin_venv, tmp_path
 ):
