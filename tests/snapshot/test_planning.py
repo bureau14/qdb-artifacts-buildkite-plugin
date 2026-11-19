@@ -210,25 +210,26 @@ def test_the_rewrite_names_the_planned_build_in_every_snapshot_download(template
 
     out = planned(doc, Rewrite(template.own, KEY, PLUGIN_COMMIT, held, {}))
 
-    pairs = list(zip(options_of(doc), options_of(out)))
-    assert len(pairs) == len(options_of(out)) > 0
-    for (_, before), (plugin, after) in pairs:
+    blocks = (options_of(doc), options_of(out))
+    assert len(blocks[0]) == len(blocks[1]) > 0
+    for (_, before), (plugin, after) in zip(*blocks):
         view = agent_view(after)
         assert plugin == f"{PLUGIN}#{PLUGIN_COMMIT}"
         assert all(
             view[block]["SNAPSHOT"] == KEY for block in ("UPLOAD", "PROMOTE") if block in view
         )
-        downloads = zip(
-            before.get("download", {}).get("projects", []),
+        downloads = (
+            [agent_view(e) for e in before.get("download", {}).get("projects", [])],
             view.get("DOWNLOAD", {}).get("PROJECTS", []),
         )
-        for generated_entry, e in downloads:
-            if e.get("PROJECT_ID", template.own) == template.own:
+        assert len(downloads[0]) == len(downloads[1])
+        for generated_entry, e in zip(*downloads):
+            if generated_entry.get("PROJECT_ID", template.own) == template.own:
                 continue
-            if "BUILD_ID" in agent_view(generated_entry):
-                assert agent_view(generated_entry) == e
+            if "BUILD_ID" in generated_entry:
+                assert generated_entry == e
                 continue
-            p = held[(e["PROJECT_ID"], e["VARIANT"])]
+            p = held[(generated_entry["PROJECT_ID"], generated_entry["VARIANT"])]
             assert (e["BUILD_ID"], e["GIT_REF"], e["REQUIRE_STRICT_REF_MATCH"]) == (
                 p.build.id,
                 p.git_ref,
