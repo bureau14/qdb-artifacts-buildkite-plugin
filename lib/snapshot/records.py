@@ -4,9 +4,8 @@ A failure record says that one build of a key did not give some variants, and
 why. Only a build that has a key writes one, and it carries the plan of its
 chain. It is written once into the bucket and never changed; where it lives
 and how it is read are the store's business. Here: the record as a value
-(``Record``), its JSON (``encode_record``, ``decode_record``, which checks the
-form of every field), and the decisions of section 7 over records the caller
-has read:
+(``Record``), its JSON (``encode_record``, ``decode_record``), and the
+decisions of section 7 over records the caller has read:
 
 - ``unpassed`` and ``leave_record``: the variants whose step did not pass,
   whose pointers the leave step reads, and its record of those that have no
@@ -39,16 +38,13 @@ from __future__ import annotations
 import datetime
 import json
 import math
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
-from ..forms import is_build_id, is_https_url, is_iso_utc, is_key, is_slug, is_variant, iso_utc
+from ..forms import iso_utc
 from ..pointer import Build
 from .canonical import canonical_json
-from .members import member
-from .shown import shown_text, shown_value
 
 SCHEMA = 1
 
@@ -57,7 +53,6 @@ SCHEMA = 1
 GENERATOR_FAILED = "generator_failed"
 RULE = "rule"
 NOT_DECLARED = "not_declared"
-REASONS = (GENERATOR_FAILED, RULE, NOT_DECLARED)
 
 # The outcome of a step that failed the build; the only one another build
 # shares (step 7). ``buildkite-agent step get outcome`` gives it.
@@ -68,10 +63,6 @@ PASSED = "passed"
 # recorded this many seconds after the build arrived at the gate: one recorded
 # before belongs to a build that ended before this one could wait for it.
 SHARED_AFTER = 5
-
-
-class RecordError(ValueError):
-    """A value or a text that is not a failure record of this schema."""
 
 
 @dataclass(frozen=True)
@@ -123,13 +114,6 @@ class Origin:
 # ---------------------------------------------------------------------------
 
 
-def _stated(r: Record) -> Record:
-    """A record that states a failure: a reason, failed variants or a cause."""
-    if r.reason is None and not r.failed and not r.caused_by:
-        raise RecordError(f"record of {r.project} build {r.build.number}: states no failure")
-    return r
-
-
 def compose_record(
     origin: Origin,
     now: float,
@@ -138,32 +122,25 @@ def compose_record(
     caused_by: Iterable[Cause],
     shared_with: Build | None,
 ) -> Record:
-    """The record ``origin`` writes at ``now`` (epoch seconds), its entries sorted.
-
-    A record that states no failure is a ``RecordError``: a record is never
-    replaced, and no reader accepts one (``decode_record``).
-    """
-    if reason is not None and reason not in REASONS:
-        raise ValueError(f"reason {shown_value(reason)} is none of {', '.join(REASONS)}")
+    """The record ``origin`` writes at ``now`` (epoch seconds), its entries sorted."""
     causes = (Cause(c.project, c.key, tuple(sorted(set(c.variants)))) for c in caused_by)
-    return _stated(
-        Record(
-            project=origin.project,
-            key=origin.key,
-            plan=origin.plan,
-            build=origin.build,
-            reason=reason,
-            failed=tuple(sorted(failed, key=lambda f: (f.variant, f.step))),
-            caused_by=tuple(sorted(causes, key=lambda c: (c.project, c.key))),
-            shared_with=shared_with,
-            recorded_at=iso_utc(now),
-            recorded_at_epoch=math.floor(now),
-        )
+    return Record(
+        project=origin.project,
+        key=origin.key,
+        plan=origin.plan,
+        build=origin.build,
+        reason=reason,
+        failed=tuple(sorted(failed, key=lambda f: (f.variant, f.step))),
+        caused_by=tuple(sorted(causes, key=lambda c: (c.project, c.key))),
+        shared_with=shared_with,
+        recorded_at=iso_utc(now),
+        recorded_at_epoch=math.floor(now),
     )
 
 
 def reason_record(origin: Origin, reason: str, now: float) -> Record:
-    """The record of a build that failed before it built, for one of ``REASONS``."""
+    """The record of a build that failed before it built: its generator, the rule, or a
+    variant it does not promote."""
     return compose_record(origin, now, reason, (), (), None)
 
 
@@ -204,131 +181,28 @@ def encode_record(r: Record) -> str:
     return canonical_json(record_document(r)).decode("utf-8")
 
 
-_STEP_KEY = re.compile(r"[!-~]+")
-_OUTCOME = re.compile(r"[a-z_]*")
-
-
-def is_step_key(text: str) -> bool:
-    """True for a step key as a record holds it: printable ASCII without white space."""
-    return _STEP_KEY.fullmatch(text) is not None
-
-
-def is_outcome(text: str) -> bool:
-    """True for a step outcome: lowercase letters and ``_``; empty for a step not finished."""
-    return _OUTCOME.fullmatch(text) is not None
-
-
-def _member(d: Any, name: str, kind: type, where: str) -> Any:
-    """``d[name]``, which must be of ``kind``; ``RecordError`` naming ``where`` otherwise."""
-    return member(d, name, kind, where, RecordError)
-
-
-def _text(d: Any, name: str, form: Callable[[str], bool], what: str, where: str) -> str:
-    v = _member(d, name, str, where)
-    if not form(v):
-        raise RecordError(f"{where}.{name}: {shown_value(v)} is not {what}")
-    return v
-
-
-def _count(d: Any, name: str, where: str) -> int:
-    v = _member(d, name, int, where)
-    if v < 0:
-        raise RecordError(f"{where}.{name}: {v} is negative")
-    return v
-
-
-def _list(d: Any, name: str, where: str) -> list[Any]:
-    return _member(d, name, list, where)
-
-
-def _build(d: Any, project: str, where: str) -> Build:
-    """A build of ``project``, as a record names it."""
-    build = Build(
-        id=_text(d, "id", is_build_id, "a build id", where),
-        number=_count(d, "number", where),
-        url=_text(d, "url", is_https_url, "an https URL", where),
-    )
-    pipeline = _member(d, "pipeline", str, where)
-    if pipeline != project:
-        shown = shown_value(pipeline)
-        raise RecordError(f"{where}.pipeline: {shown} is not the record's project {project}")
-    return build
-
-
-def _failed(d: Any, where: str) -> Failed:
-    return Failed(
-        variant=_text(d, "variant", is_variant, "a variant", where),
-        step=_text(d, "step", is_step_key, "a step key", where),
-        outcome=_text(d, "outcome", is_outcome, "a step outcome", where),
-    )
-
-
-def _variant(v: Any, where: str) -> str:
-    if not is_variant(v):
-        raise RecordError(f"{where}: {shown_value(v)} is not a variant")
-    return v
-
-
-def _cause(d: Any, where: str) -> Cause:
-    variants = _list(d, "variants", where)
-    if not variants:
-        raise RecordError(f"{where}.variants: empty")
-    return Cause(
-        project=_text(d, "project", is_slug, "a pipeline slug", where),
-        key=_text(d, "key", is_key, "a key", where),
-        variants=tuple(_variant(v, f"{where}.variants") for v in variants),
-    )
-
-
-def _reason(d: Any) -> str | None:
-    if not isinstance(d, dict) or "reason" not in d:
-        raise RecordError("record: no reason")
-    reason = d["reason"]
-    if reason is not None and reason not in REASONS:
-        raise RecordError(f"record.reason: {shown_value(reason)} is none of {', '.join(REASONS)}")
-    return reason
-
-
-def _shared_with(d: Any, project: str) -> Build | None:
-    if not isinstance(d, dict) or "shared_with" not in d:
-        raise RecordError("record: no shared_with")
-    shared = d["shared_with"]
-    return None if shared is None else _build(shared, project, "record.shared_with")
+def build_of(d: Mapping[str, Any]) -> Build:
+    """A build as a record names it; its ``pipeline`` is the record's project."""
+    return Build(id=d["id"], number=d["number"], url=d["url"])
 
 
 def decode_record(text: str) -> Record:
-    """The record in ``text``, as ``encode_record`` wrote it; ``RecordError`` when it is not one.
-
-    Every text of the record must have its form: a project a pipeline slug,
-    the pipeline of a build the record's project, a key a key, the plan and a
-    build id a build uuid, a URL an https URL, a variant a variant
-    (``forms.is_variant``), a step a step key, an outcome lowercase letters and
-    ``_``; a number is an integer that is not negative. Members of no meaning
-    here are not read.
-    """
-    try:
-        d = json.loads(text)
-    except (ValueError, RecursionError) as exc:
-        raise RecordError(f"record: not JSON: {shown_text(str(exc))}") from exc
-    if not isinstance(d, dict) or type(d.get("schema")) is not int or d["schema"] != SCHEMA:
-        shown = shown_value(d.get("schema") if isinstance(d, dict) else type(d).__name__)
-        raise RecordError(f"record: not a failure record of schema {SCHEMA} ({shown})")
-    failed = _list(d, "failed", "record")
-    causes = _list(d, "caused_by", "record")
-    project = _text(d, "project", is_slug, "a pipeline slug", "record")
-    return _stated(
-        Record(
-            project=project,
-            key=_text(d, "key", is_key, "a key", "record"),
-            plan=_text(d, "plan", is_build_id, "a build id", "record"),
-            build=_build(_member(d, "build", dict, "record"), project, "record.build"),
-            reason=_reason(d),
-            failed=tuple(_failed(f, f"record.failed[{i}]") for i, f in enumerate(failed)),
-            caused_by=tuple(_cause(c, f"record.caused_by[{i}]") for i, c in enumerate(causes)),
-            shared_with=_shared_with(d, project),
-            recorded_at=_text(d, "recorded_at", is_iso_utc, "a UTC ISO 8601 time", "record"),
-            recorded_at_epoch=_count(d, "recorded_at_epoch", "record"),
-        )
+    """The record in ``text``, as ``encode_record`` wrote it."""
+    d = json.loads(text)
+    shared = d["shared_with"]
+    return Record(
+        project=d["project"],
+        key=d["key"],
+        plan=d["plan"],
+        build=build_of(d["build"]),
+        reason=d["reason"],
+        failed=tuple(Failed(f["variant"], f["step"], f["outcome"]) for f in d["failed"]),
+        caused_by=tuple(
+            Cause(c["project"], c["key"], tuple(c["variants"])) for c in d["caused_by"]
+        ),
+        shared_with=None if shared is None else build_of(shared),
+        recorded_at=d["recorded_at"],
+        recorded_at_epoch=d["recorded_at_epoch"],
     )
 
 

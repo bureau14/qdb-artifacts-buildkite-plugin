@@ -129,8 +129,9 @@ REFUSAL_HEADINGS = {
 def refusal_annotation(kind: str, project: str, build: Build, message: str) -> str:
     """A gate step that failed before anything was built: what of the build, and why.
 
-    ``kind`` is a reason of ``records.REASONS``, ``PLAN_REFUSED`` or
-    ``STEP_ERROR``; ``message`` holds the facts, one per line.
+    ``kind`` is the reason of a record (``GENERATOR_FAILED``, ``RULE``,
+    ``NOT_DECLARED``), ``PLAN_REFUSED`` or ``STEP_ERROR``; ``message`` holds
+    the facts, one per line.
     """
     heading = REFUSAL_HEADINGS[kind].format(project=project, number=build.number)
     return message_annotation(heading, message)

@@ -33,8 +33,7 @@ from .agent import Agent
 from .git import Checkout
 from .job import Job
 from .plan import Node, Plan, decode_plan, planned_node
-from .records import Cause, Origin, Record, RecordError, chain_failure, decode_record, encode_record
-from .shown import shown_text
+from .records import Cause, Origin, Record, chain_failure, decode_record, encode_record
 
 # The marks on the build, and the meta-data a step reads.
 MODE = "snapshot-mode"
@@ -85,27 +84,11 @@ def held_only(held: Mapping[Any, Pointer | None]) -> dict[Any, Pointer]:
     return {k: found for k, found in held.items() if found is not None}
 
 
-def decoded_record(edge: Edge, where: str, project: str, key: str) -> Record | None:
-    """The record stored at ``where``; None, with a line in the log, when it is none of the key."""
-    stored = edge.store.get(where)
-    if stored is None:
-        return None
-    try:
-        r = decode_record(stored.body.decode("utf-8"))
-    except (RecordError, UnicodeDecodeError) as exc:
-        edge.log(f"skipped s3://{edge.store.bucket}/{where}: {shown_text(str(exc))}")
-        return None
-    if (r.project, r.key) != (project, key):
-        edge.log(f"skipped s3://{edge.store.bucket}/{where}: a record of {r.project} at {r.key}")
-        return None
-    return r
-
-
 def stored_records(edge: Edge, project: str, key: str) -> list[Record]:
-    """Every failure record of ``project`` at ``key`` that decodes."""
+    """Every failure record of ``project`` at ``key``."""
     listed = edge.store.list(layout.failure_records(edge.prefix, project, key))
-    found = (decoded_record(edge, where, project, key) for where, _ in listed)
-    return [r for r in found if r is not None]
+    found = (edge.store.get(where) for where, _ in listed)
+    return [decode_record(s.body.decode("utf-8")) for s in found if s is not None]
 
 
 def create_record(edge: Edge, r: Record) -> None:
