@@ -296,7 +296,7 @@ def host_variables(home: Path, *path_dirs: Path) -> dict:
     return {
         "PATH": os.pathsep.join([*map(str, path_dirs), os.environ["PATH"]]),
         "HOME": str(home),
-        "QDB_CICD_AGENT_PYTHON3": sys.executable,
+        "QDB_CICD_AGENT_PLUGIN_PYTHON": sys.executable,
         "PYTHONDONTWRITEBYTECODE": "1",
         **GIT_IDENTITY,
         **{k: os.environ[k] for k in ("TMPDIR",) if k in os.environ},

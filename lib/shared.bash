@@ -10,12 +10,11 @@ on_windows() {
   [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]
 }
 
-# The Python the agent image names, and no other: QDB_CICD_AGENT_PYTHON3, or
-# where that is not set QDB_CICD_AGENT_PYTHON_313_PATH, as the macOS image names
-# one Python per version. The Windows image names a Windows path
-# (C:\Python3.12-64\python.exe), which cygpath turns into the form Git Bash runs.
+# The Python the agent image names for its plugins, and no other:
+# QDB_CICD_AGENT_PLUGIN_PYTHON. The Windows image names a Windows path
+# (C:\Python3.13-64\python.exe), which cygpath turns into the form Git Bash runs.
 agent_python() {
-  local named="${QDB_CICD_AGENT_PYTHON3:-${QDB_CICD_AGENT_PYTHON_313_PATH:-}}"
+  local named="${QDB_CICD_AGENT_PLUGIN_PYTHON:-}"
   if [[ -n "${named}" ]] && on_windows; then
     cygpath -u "${named}"
   else
@@ -28,14 +27,6 @@ agent_python() {
 # substitution that reads the version strips the LF only.
 python_version() {
   "$1" -c 'import platform, sys; sys.stdout.write(platform.python_version())' 2>/dev/null || true
-}
-
-# True when a version, as "3.13.1", is 3.12 or newer: the first Python whose
-# every release has tarfile's data filter, and the oldest the pipeline tests.
-is_python_312_or_newer() {
-  local major minor
-  IFS=. read -r major minor _ <<<"$1"
-  (( major > 3 || (major == 3 && minor >= 12) ))
 }
 
 plugin_read_config() {

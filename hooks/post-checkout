@@ -14,17 +14,11 @@ PYTHON="$(agent_python)"
 VERSION="$(python_version "${PYTHON}")"
 if [[ -z "${VERSION}" ]]; then
   echo "+++ :rotating_light: qdb-artifacts plugin finds no Python that runs"
-  echo "It runs the Python the agent names in QDB_CICD_AGENT_PYTHON3 or, where that is not set, in QDB_CICD_AGENT_PYTHON_313_PATH:"
-  echo "QDB_CICD_AGENT_PYTHON3=${QDB_CICD_AGENT_PYTHON3:-}"
-  echo "QDB_CICD_AGENT_PYTHON_313_PATH=${QDB_CICD_AGENT_PYTHON_313_PATH:-}"
+  echo "It runs the Python the agent names in QDB_CICD_AGENT_PLUGIN_PYTHON:"
+  echo "QDB_CICD_AGENT_PLUGIN_PYTHON=${QDB_CICD_AGENT_PLUGIN_PYTHON:-}"
   exit 1
 fi
 echo "Python ${VERSION} at ${PYTHON}"
-if ! is_python_312_or_newer "${VERSION}"; then
-  echo "+++ :rotating_light: qdb-artifacts plugin needs Python 3.12 or newer"
-  echo "${PYTHON} is Python ${VERSION}."
-  exit 1
-fi
 
 REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
 if step_reads_documents; then

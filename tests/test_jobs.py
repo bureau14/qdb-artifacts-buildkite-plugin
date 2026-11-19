@@ -520,9 +520,9 @@ def test_the_library_downloads_what_the_hooks_download(
 
 @pytest.mark.parametrize("step_kind", sorted(STEP_KINDS))
 def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
-    """post-checkout makes, with the Python the agent names, the venv the step's options call
-    for, in which the plugin's job side imports, and its planning half only for a step that
-    plans."""
+    """post-checkout makes, with the Python that QDB_CICD_AGENT_PLUGIN_PYTHON names (the suite's
+    own), the venv the step's options call for, in which the plugin's job side imports, and its
+    planning half only for a step that plans."""
     venv = plugin.root / (".venv-snapshot" if step_kind == "plan" else ".venv") / "bin" / "python"
 
     def imports(module):
