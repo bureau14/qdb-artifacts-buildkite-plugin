@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 from ..forms import BRANCH_PREFIX, TAG_PREFIX, is_full_ref, is_object_id
+from ..options import checkout_commit
 from .shown import shown_value
 
 # How ``git ls-remote`` names the commit an annotated tag points to.
@@ -449,8 +450,7 @@ class RealGit:
 
     def head_commit(self) -> str:
         """The commit checked out in ``cwd`` (``git rev-parse HEAD``)."""
-        out = self._ok(["rev-parse", "--verify", "--end-of-options", "HEAD"])
-        return check_object_id(out.decode("ascii", "replace").strip())
+        return checkout_commit(self._cwd)
 
     def _is_shallow(self) -> bool:
         out = self._ok(["rev-parse", "--is-shallow-repository"])

@@ -153,37 +153,16 @@ def resolve_default_download_build_id(project_config, pipeline_name):
     return build_id
 
 
-def snapshot_key(variable, option):
+def snapshot_key(variable):
     """The snapshot key of an option that only the plan step writes, or None when
     the step has none."""
-    value = os.environ.get(f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_{variable}")
-    if not value:
-        return None
-    if not forms.is_key(value):
-        raise ArtifactsError(
-            f"{option} {value!r} is not a snapshot key ('v1-' and 32 hex digits); "
-            "the plan step writes this option, never a person"
-        )
-    return value
+    return os.environ.get(f"BUILDKITE_PLUGIN_QDB_ARTIFACTS_{variable}") or None
 
 
-def checkout_commit():
-    """`git rev-parse HEAD` of the job's checkout, the directory the hook runs in."""
-    try:
-        done = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except OSError as error:
-        raise ArtifactsError(f"git rev-parse HEAD cannot run in {Path.cwd()}: {error}") from None
-    commit = done.stdout.strip()
-    if done.returncode != 0 or not forms.is_object_id(commit):
-        told = done.stderr.strip() or commit
-        raise ArtifactsError(f"git rev-parse HEAD in {Path.cwd()} names no commit: {told!r}")
-    return commit
+def checkout_commit(cwd="."):
+    """`git rev-parse HEAD` of a checkout: by default the job's, the directory the hook
+    runs in."""
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=cwd, text=True).strip()
 
 
 def job_build():
@@ -195,20 +174,9 @@ def job_build():
     )
 
 
-def refuse_another_build(build_id, option, key_option):
-    """A step with a snapshot key records the build it runs in, by the id, number
-    and URL the agent gives, so a build_id option may name only that build."""
-    own = os.environ["BUILDKITE_BUILD_ID"]
-    if build_id != own:
-        raise ArtifactsError(
-            f"{option} {build_id!r} is not this job's build {own!r}, "
-            f"and a step with {key_option} records the build it runs in"
-        )
-
-
 def snapshot_pointer(project_id, key, variant, git_ref):
     """The pointer promote creates in a build with a snapshot key. It names the job's
-    own build: refuse_another_build holds the build_id option to it."""
+    own build."""
     return pointer.Pointer(
         project=project_id,
         key=key,
@@ -294,10 +262,7 @@ def upload_arguments():
     if not build_id:
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no build_id override was given")
 
-    key = snapshot_key("UPLOAD_SNAPSHOT", "upload.snapshot")
-    if key is not None:
-        refuse_another_build(build_id, "upload.build_id", "upload.snapshot")
-
+    key = snapshot_key("UPLOAD_SNAPSHOT")
     return {
         "project_id": project_id,
         "build_id": build_id,
@@ -339,10 +304,7 @@ def promote_arguments():
         raise ArtifactsError("BUILDKITE_BUILD_ID is not set and no --build-id override was given")
 
     variant = os.environ.get(f"{prefix}VARIANT")
-    key = snapshot_key("PROMOTE_SNAPSHOT", "promote.snapshot")
-    if key is not None:
-        refuse_another_build(build_id, "promote.build_id", "promote.snapshot")
-
+    key = snapshot_key("PROMOTE_SNAPSHOT")
     return {
         "project_id": project_id,
         "build_id": build_id,
@@ -378,22 +340,14 @@ def gate_step():
     """The gate option of the step, or None for a step that is no gate step.
 
     The runner prints the steps of plan and leave, the plan step the step of
-    resume; a person writes none. A step carries one of them: two are an
-    error, and so is a leave that is not true.
+    resume; a person writes none, and each carries one of them.
     """
     prefix = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
-    given = {k: os.environ.get(prefix + k.upper()) for k in GATE_OPTIONS}
-    carried = {k: v for k, v in given.items() if v}
-    if not carried:
-        return None
-    if len(carried) > 1:
-        raise ArtifactsError(f"a step carries one gate option, this one {' and '.join(carried)}")
-    ((kind, value),) = carried.items()
-    if kind == "leave":
-        if value != "true":
-            raise ArtifactsError(f"leave is true on the step that leaves the gate, not {value!r}")
-        return GateStep(kind, None)
-    return GateStep(kind, value)
+    for kind in GATE_OPTIONS:
+        value = os.environ.get(prefix + kind.upper())
+        if value:
+            return GateStep(kind, None if kind == "leave" else value)
+    return None
 
 
 def download_arguments():
