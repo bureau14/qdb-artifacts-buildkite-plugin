@@ -162,21 +162,45 @@ def test_a_failed_variant_fails_every_build_above_and_holds_its_project_responsi
     assert held_responsible(world, top) == {(node, matrix[-1])}
 
 
-def test_a_failed_variant_nobody_needs_lets_the_chain_pass(worlds, lower_node, matrix):
-    """A variant of a dependency that no consumer downloads fails, and the root passes with
-    every needed variant of every project of its tree held."""
+def first_consumer(at) -> str:
+    """The first project of the node's tree that takes the node as a snapshot dependency."""
+    return min(c for c in tree(at.graph, at.root) if at.node in at.graph[c])
+
+
+@pytest.mark.parametrize("docs", ["passes", "fails"])
+def test_a_variant_nobody_downloads_is_built_once_a_consumer_starts_to(
+    worlds, lower_node, matrix, docs
+):
+    """A variant of a dependency that no consumer downloads may fail, and the root passes with
+    every needed variant held. When one consumer then starts to download it, with no change
+    outside that consumer, the next chain compiles that consumer and the nodes above it and, of
+    the dependency, that variant alone when it is missing; each download of it takes the build
+    that holds it."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds(graph, matrix)
     world.projects[node].variants += ("docs",)
     world.commit(node)
-    world.broken.add((node, "docs"))
+    if docs == "fails":
+        world.broken.add((node, "docs"))
+    first = world.build(root)
+    world.broken.clear()
+    consumer = first_consumer(lower_node)
+    world.projects[consumer].extra = ((node, "docs"),)
+    world.commit(consumer)
+    done, fetched = len(world.compiled), len(world.downloads)
 
-    top = world.build(root)
+    again = world.build(root)
 
-    held = holders(world, top, tree(graph, root), matrix)
-    assert top.state == "passed"
+    held = holders(world, first, tree(graph, root), matrix)
+    (docs_held,) = holders(world, again, [node], ["docs"]).values()
+    rebuilt = ({consumer} | above(graph, consumer)) & tree(graph, root)
+    missing = {(node, "docs")} if docs == "fails" else set()
+    assert (first.state, again.state) == ("passed", "passed")
     assert all(found is not None for found in held.values())
-    assert holders(world, top, [node], ["docs"]) == {(node, "docs"): None}
+    assert compiled_since(world, done) == {(p, v) for p in rebuilt for v in matrix} | missing
+    assert {d.build_id for d in world.downloads[fetched:] if d.variant == "docs"} == {
+        docs_held.build.id
+    }
 
 
 def test_a_snapshot_missing_a_variant_builds_only_that_variant(worlds, graph_node):
@@ -207,7 +231,7 @@ def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, matrix
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds(graph, matrix)
     pinned = world.commit(node, branch="3.14.x")
-    consumer = min(c for c in tree(graph, root) if node in graph[c])
+    consumer = first_consumer(lower_node)
     world.projects[consumer].pins[node] = "refs/heads/3.14.x"
     world.commit(consumer)
 

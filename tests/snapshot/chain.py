@@ -165,6 +165,7 @@ class Project:
     pins: dict = dataclasses.field(default_factory=dict)  # dependency -> literal ref
     latest: tuple = ()  # projects it takes as latest successful
     pipeline_py: bytes = SHAPED
+    extra: tuple = ()  # (dependency, variant) that every step downloads besides its own variant
 
 
 @dataclasses.dataclass(eq=False)
@@ -279,7 +280,8 @@ class World:
                 for d in p.deps
                 if v in self.projects[d].variants
             ]
-            return deps + [entry(t, v, latest=True) for t in p.latest]
+            extra = [entry(d, x, p.pins.get(d, "{git_ref}")) for d, x in p.extra]
+            return deps + extra + [entry(t, v, latest=True) for t in p.latest]
 
         return {"steps": [build_step(name, v, entries(v)) for v in p.variants]}
 
