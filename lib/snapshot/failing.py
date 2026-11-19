@@ -22,7 +22,6 @@ from .annotation import STEP_ERROR, refusal_annotation
 from .edge import FAILED, MODE, Edge, create_record
 from .job import Job
 from .records import Record
-from .shown import shown_text
 
 
 class Refusal(Exception):
@@ -39,8 +38,7 @@ def error_refusal(job: Job, exc: Exception) -> Refusal:
     """The refusal of a step that an error ended: its type and text on the build page, no
     record."""
     message = f"{type(exc).__name__}: {exc}"
-    shown = "\n".join(shown_text(line) for line in message.splitlines())
-    return Refusal(message, refusal_annotation(STEP_ERROR, job.project, job.build, shown))
+    return Refusal(message, refusal_annotation(STEP_ERROR, job.project, job.build, message))
 
 
 def fail(edge: Edge, refusal: Refusal, context: str, mark: bool) -> NoReturn:

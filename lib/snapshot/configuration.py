@@ -27,8 +27,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .shown import shown_value
-
 PLUGIN = "bureau14/qdb-artifacts"
 
 # The plugin's blocks and the options the planning half reads.
@@ -163,7 +161,7 @@ def download_entries(value: Any) -> list[dict[str, Any]]:
 def misnamed_plugins(value: Any) -> list[str]:
     """Why each key in ``value`` that names the plugin another way is an error."""
     return [
-        f"the plugin is named {shown_value(k)}: the agent runs it for that key, and the "
+        f"the plugin is named {k!r}: the agent runs it for that key, and the "
         f"reading rule reads only {PLUGIN} or {PLUGIN}#<ref>"
         for k, _ in mapping_items(value)
         if names_plugin_another_way(k)

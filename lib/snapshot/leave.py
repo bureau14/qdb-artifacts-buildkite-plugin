@@ -30,7 +30,6 @@ from .failing import gated
 from .git import RealGit
 from .job import Job, job_of
 from .records import leave_record, unpassed
-from .shown import shown_value
 
 # One annotation per context: a retried leave replaces its own.
 LEAVE_CONTEXT = "snapshot-leave"
@@ -57,7 +56,7 @@ def step_promotes(edge: Edge) -> dict[str, str]:
 def leave_decisions(job: Job, edge: Edge) -> None:
     mode = build_mode(edge)
     if mode != BUILT:
-        edge.log(f"the mode is {shown_value(mode)}: nothing to record")
+        edge.log(f"the mode is {mode}: nothing to record")
         return
     p = chain_plan(job, edge)
     node = own_node(job, edge, p)

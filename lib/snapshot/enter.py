@@ -84,7 +84,7 @@ from .edge import (
 from .failing import Refusal, gated
 from .git import Git, RealGit
 from .job import Job, is_chain_node, job_of, own_ref
-from .plan import Node, Plan, PlanError, encode_plan
+from .plan import Node, Plan, PlanError, encode_plan, short_commit
 from .planner import Pipelines, Root, make_plan, rebuild_setting
 from .records import (
     GENERATOR_FAILED,
@@ -99,7 +99,6 @@ from .records import (
     shared_failure,
     shared_record,
 )
-from .shown import short_commit, shown_text
 
 # One annotation per context: a retried step replaces its own.
 PLAN_CONTEXT = "snapshot-plan"
@@ -157,7 +156,7 @@ def check_command(job: Job, edge: Edge) -> None:
     if job.exit_status != 0:
         message = (
             f"the command exited {job.exit_status}: it generates the pipeline into "
-            f"{shown_text(job.pipeline or '')}, which this step plans"
+            f"{job.pipeline}, which this step plans"
         )
         origin = chain_origin(job, edge)
         raise reason_refusal(job, GENERATOR_FAILED, message, origin, edge.clock())

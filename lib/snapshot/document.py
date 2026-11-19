@@ -58,7 +58,6 @@ from .declaration import (
     step_name,
 )
 from .plan import Plan, dependencies_first, trigger_label
-from .shown import shown_text
 
 RESUME_OPTION = "resume"
 
@@ -192,9 +191,9 @@ def promoted_twice(v: str, first: tuple[int, Any], second: tuple[int, Any]) -> D
     """The error of ``v`` promoted at two places, each ``(position, step)``."""
     (p1, s1), (p2, s2) = first, second
     if s1 is s2:
-        who = f"the step {shown_text(step_name(s1, p1))} at two places, steps {p1} and {p2}"
+        who = f"the step {step_name(s1, p1)} at two places, steps {p1} and {p2}"
     else:
-        who = f"two steps, {shown_text(step_name(s1, p1))} and {shown_text(step_name(s2, p2))}"
+        who = f"two steps, {step_name(s1, p1)} and {step_name(s2, p2)}"
     return DocumentError(
         f"{v} is promoted by {who}: the first to pass would write its pointer while the other "
         "still uploads"

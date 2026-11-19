@@ -106,7 +106,6 @@ from .plan import (
     RootInfo,
 )
 from .shape import has_shape
-from .shown import shown_text, shown_value
 
 PIPELINE_PY = ".buildkite/pipeline.py"
 DIRECTORY = BUILDKITE_DIR.rstrip("/")
@@ -158,7 +157,7 @@ def rebuild_setting(value: str | None) -> str:
         return REBUILD_NONE
     settings = {"1": REBUILD_ONE, "all": REBUILD_ALL}
     if value not in settings:
-        raise PlanError(f"SNAPSHOT_REBUILD={shown_value(value)}: expected 1 or all")
+        raise PlanError(f"SNAPSHOT_REBUILD={value!r}: expected 1 or all")
     return settings[value]
 
 
@@ -292,7 +291,7 @@ def deps_of(n: Member) -> list[str]:
 
 def dependency_of(reached: Reached) -> str:
     """How a message says who needs the project: the consumer and the template of its entry."""
-    return f"It is a snapshot dependency of {reached.consumer} ({shown_text(reached.entry.path)})."
+    return f"It is a snapshot dependency of {reached.consumer} ({reached.entry.path})."
 
 
 # ---------------------------------------------------------------------------
@@ -319,17 +318,17 @@ def unmet_buildkite(project: str) -> Unmet:
 def unmet_shape(project: str, place: Place, problem: str) -> Unmet:
     return Unmet(
         f"{PIPELINE_PY} {problem}",
-        f"{project} adopts on {shown_text(place.ref)}: its {PIPELINE_PY} imports run from "
+        f"{project} adopts on {place.ref}: its {PIPELINE_PY} imports run from "
         'qdb_pipeline and ends with if __name__ == "__main__": run(generate_pipeline)',
     )
 
 
 def unmet_latest(project: str, place: Place, latest: Entry) -> Unmet:
-    path = shown_text(latest.path)
+    path = latest.path
     return Unmet(
         f"its declaration holds a latest successful dependency, which a snapshot never "
         f"contains: {path} downloads {latest.project} with build_id",
-        f"{project} takes {latest.project} as a snapshot dependency on {shown_text(place.ref)} "
+        f"{project} takes {latest.project} as a snapshot dependency on {place.ref} "
         f"(no build_id in its entry of {latest.project} in {path})",
     )
 
@@ -367,8 +366,8 @@ def first_unmet(
 
 def refusal(project: str, reached: Reached, place: Place, unmet: Unmet) -> Refused:
     """A dependency that cannot give a snapshot: who needs it, where, what failed, the way out."""
-    consumer, path = reached.consumer, shown_text(reached.entry.path)
-    at = f"{shown_text(place.ref)} {place.commit} of {place.repository}"
+    consumer, path = reached.consumer, reached.entry.path
+    at = f"{place.ref} {place.commit} of {place.repository}"
     return Refused(
         f"{project} cannot give a snapshot at {at}: "
         f"{unmet.failed}. {dependency_of(reached)} Way out: {unmet.adopt}; or {consumer} "
@@ -394,7 +393,7 @@ class Pin:
 
 
 def shown_pin(pin: Pin) -> str:
-    return f"{shown_text(pin.ref)} (in {shown_text(pin.path)} of {pin.node} at {pin.commit})"
+    return f"{pin.ref} (in {pin.path} of {pin.node} at {pin.commit})"
 
 
 def default_refs(context: str, line: str) -> tuple[str, ...]:
@@ -425,7 +424,7 @@ def place_by_default(
         return Place(repository, *found)
     return Refused(
         f"{project} cannot be planned: {repository} has none of "
-        f"{', '.join(shown_text(r) for r in refs)}. {dependency_of(reached)}"
+        f"{', '.join(refs)}. {dependency_of(reached)}"
     )
 
 
@@ -510,7 +509,7 @@ def pin_refs(pins: Mapping[str, Pin]) -> dict[str, str]:
 
 
 def shown_pins(refs: Mapping[str, str]) -> str:
-    return "{" + ", ".join(f"{p}: {shown_text(r)}" for p, r in sorted(refs.items())) + "}"
+    return "{" + ", ".join(f"{p}: {r}" for p, r in sorted(refs.items())) + "}"
 
 
 def settled_walk(root: Root, first: Member, src: Sources) -> dict[str, Found]:

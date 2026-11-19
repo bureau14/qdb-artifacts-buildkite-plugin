@@ -31,9 +31,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from .canonical import canonical_json
-from .shown import short_commit
 
 SCHEMA = 3
+
+# How many hex digits of a commit a label or a message shows.
+SHORT_COMMIT = 12
 
 REBUILD_NONE = "none"
 REBUILD_ONE = "one"
@@ -155,6 +157,11 @@ def dependencies_first(p: Plan, project: str) -> list[str]:
 
     visit(project)
     return order
+
+
+def short_commit(commit: str) -> str:
+    """A commit id as a label or a message shows it: its first ``SHORT_COMMIT`` hex digits."""
+    return commit[:SHORT_COMMIT]
 
 
 def trigger_label(p: Plan, project: str) -> str:

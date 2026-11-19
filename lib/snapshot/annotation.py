@@ -13,10 +13,7 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
   without variants, also one without a record of its own.
 
 Everything that is not a heading or the closing sentence is in a fenced code
-block, because template paths and branch names hold Markdown characters; the
-fence is longer than any run of backticks in the block, so no text closes it
-early. A value of a plan or a record that is free text is shown in ASCII
-(``shown_text``).
+block, because template paths and branch names hold Markdown characters.
 """
 
 from __future__ import annotations
@@ -24,27 +21,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from ..pointer import Build
-from .plan import Plan, trigger_label
+from .plan import Plan, short_commit, trigger_label
 from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Cause, Record
-from .shown import short_commit, shown_text
 
 INDENT = "  "
 
 
-def longest_backticks(text: str) -> int:
-    """The length of the longest run of backticks in ``text``."""
-    longest = run = 0
-    for c in text:
-        run = run + 1 if c == "`" else 0
-        longest = max(longest, run)
-    return longest
-
-
 def fenced(lines: Sequence[str]) -> str:
-    """``lines`` as a fenced code block whose fence no run of backticks in them closes."""
-    text = "\n".join(lines)
-    fence = "`" * max(3, longest_backticks(text) + 1)
-    return f"{fence}\n{text}\n{fence}"
+    """``lines`` as a fenced code block."""
+    return "```\n" + "\n".join(lines) + "\n```"
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +50,7 @@ def node_line(plan: Plan, project: str, depth: int) -> str:
     """One node: its commit, ref and key, and the branch a build of it runs under."""
     n = plan.nodes[project]
     key = n.key if n.key is not None else "no snapshot"
-    at = f"{short_commit(n.commit)} {shown_text(n.ref)}"
-    return f"{INDENT * depth}{project} @ {at} {key} runs as {shown_text(n.label)}"
+    return f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {key} runs as {n.label}"
 
 
 def tree_lines(plan: Plan, project: str) -> list[str]:
@@ -89,7 +73,7 @@ def tree_lines(plan: Plan, project: str) -> list[str]:
 
 def plan_annotation(plan: Plan, project: str) -> str:
     """The plan as ``project`` builds it: the root's branch and rebuild setting, and its tree."""
-    context = f"branch {shown_text(plan.context)}, rebuild {plan.rebuild}"
+    context = f"branch {plan.context}, rebuild {plan.rebuild}"
     return f"{plan_heading(plan, project)}\n\n{fenced([context, *tree_lines(plan, project)])}"
 
 
@@ -98,7 +82,7 @@ def reused_annotation(plan: Plan, project: str, builds: Mapping[str, Build]) -> 
 
     ``builds`` maps each variant to the build its pointer names.
     """
-    held = [f"{v} in build {b.number} {shown_text(b.url)}" for v, b in sorted(builds.items())]
+    held = [f"{v} in build {b.number} {b.url}" for v, b in sorted(builds.items())]
     heading = f"`{project}` is reused: every variant it was asked for exists, so nothing is built"
     return f"{heading}\n\n{fenced(held)}\n\n{plan_annotation(plan, project)}"
 
@@ -157,8 +141,7 @@ REASON_TEXTS = {
 
 def entry_lines(r: Record, depth: int) -> list[str]:
     return [
-        f"{INDENT * depth}{shown_text(f.variant)}: step {shown_text(f.step)}: "
-        f"{shown_text(f.outcome) or 'did not finish'}"
+        f"{INDENT * depth}{f.variant}: step {f.step}: {f.outcome or 'did not finish'}"
         for f in r.failed
     ]
 
@@ -166,8 +149,8 @@ def entry_lines(r: Record, depth: int) -> list[str]:
 def cause_line(plan: Plan, c: Cause, depth: int, nested: bool) -> str:
     node = plan.nodes.get(c.project)
     commit = short_commit(node.commit) if node is not None else "a commit not in the plan"
-    which = f"{c.project} @ {commit} ({shown_text(c.key)})"
-    variants = ", ".join(shown_text(v) for v in c.variants)
+    which = f"{c.project} @ {commit} ({c.key})"
+    variants = ", ".join(c.variants)
     if nested:
         return f"{INDENT * depth}caused by {which}, which has no {variants}."
     return f"{INDENT * depth}{which} has no {variants}."
@@ -219,7 +202,7 @@ def content_part(
         lines.append(
             f"{pad}build {s.number} of the same snapshot failed while this build waited behind it."
         )
-        lines.append(f"{pad}{INDENT}FAILED in {r.project} build {s.number}: {shown_text(s.url)}")
+        lines.append(f"{pad}{INDENT}FAILED in {r.project} build {s.number}: {s.url}")
         lines.extend(entry_lines(r, depth + 2))
         retry.append((r.project, s))
     elif r.failed:
@@ -237,7 +220,7 @@ def failure_part(
 ) -> Part:
     """The record of a dependency's build: where it failed, and what its record says."""
     b = r.build
-    head = f"{INDENT * depth}FAILED in {r.project} build {b.number}: {shown_text(b.url)}"
+    head = f"{INDENT * depth}FAILED in {r.project} build {b.number}: {b.url}"
     lines, retry, shown = content_part(plan, r, records, depth + 1, shown, nested=True)
     return [head, *lines], retry, shown
 
@@ -307,7 +290,7 @@ def failure_annotation(plan: Plan, record: Record, records: Mapping[str, Record]
 
 def left_no_record(plan: Plan, c: Cause) -> str:
     """A dependency this build triggered whose build ended without the variants and said nothing."""
-    variants = ", ".join(shown_text(v) for v in c.variants)
+    variants = ", ".join(c.variants)
     return (
         f"the build of {c.project} triggered by this build ended without {variants} and left "
         f"no record; see the step {trigger_label(plan, c.project)}"

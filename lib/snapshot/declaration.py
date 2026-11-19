@@ -37,7 +37,6 @@ from .configuration import (
     option_items,
     option_value,
 )
-from .shown import shown_text, shown_value
 
 BUILDKITE_DIR = ".buildkite/"
 TEMPLATE_SUFFIXES = (".yml", ".yaml")
@@ -124,7 +123,7 @@ def has_snapshot(d: Declaration) -> bool:
 
 def violation_message(v: Violation) -> str:
     """How a violation is shown in the job log and the annotation."""
-    return f"step {shown_text(v.step)}: {v.reason}"
+    return f"step {v.step}: {v.reason}"
 
 
 # ---------------------------------------------------------------------------
@@ -310,16 +309,16 @@ def read_declaration(files: Mapping[str, str | bytes], own: str) -> Declaration:
 
 
 def _shown_ref(value: Any) -> str:
-    return "no git ref" if value is None else shown_value(value)
+    return "no git ref" if value is None else repr(value)
 
 
 def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> str | None:
     if isinstance(ref, str) and (ref == own_ref or ref in pins):
         return None
-    declared = f" (declared: {', '.join(shown_text(p) for p in sorted(pins))})" if pins else ""
+    declared = f" (declared: {', '.join(sorted(pins))})" if pins else ""
     return (
         f"downloads {project} at {_shown_ref(ref)}, which is neither the build's own ref "
-        f"{shown_text(own_ref)} nor a pin declared for {project}{declared}"
+        f"{own_ref} nor a pin declared for {project}{declared}"
     )
 
 
