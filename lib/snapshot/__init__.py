@@ -1,11 +1,12 @@
 """The planning half of snapshot dependencies (story sc-20192).
 
 Ordinary upload and download jobs never import this package. Its modules
-import each other and, of the rest of ``lib/``, the forms of values, the
-pointer and the library's error (``forms``, ``pointer``, ``errors``), so that
-the plan step reads a value by the form the job that wrote it checked. Only
-the modules of the gate steps (``job``, ``edge``, ``failing``, ``enter``,
-``leave``) read the job's options and variables and open the store as a job
+import each other and, of the rest of ``lib/``, the pointer, the library's
+error and its retry, and the job side's forms, checkout commit and repository
+URL (``pointer``, ``errors``, ``retry``, ``forms``, ``options``), so that the
+plan step and the jobs read and write one pointer and name one repository
+alike. Only the modules of the gate steps (``job``, ``edge``, ``failing``,
+``enter``, ``leave``) read the job's variables and open the store as a job
 opens it. ``leave`` and the modules it imports read no document, so the step
 of leave runs without PyYAML.
 
