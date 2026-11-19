@@ -522,7 +522,8 @@ def test_the_library_downloads_what_the_hooks_download(
 def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
     """post-checkout makes, with the Python that QDB_CICD_AGENT_PLUGIN_PYTHON names (the suite's
     own), the venv the step's options call for, in which the plugin's job side imports, and its
-    planning half only for a step that plans."""
+    planning half only for a step that plans. It runs no other Python the agent names, in
+    QDB_CICD_AGENT_PYTHON3 or as python3 on PATH, so without that variable it fails."""
     venv = plugin.root / (".venv-snapshot" if step_kind == "plan" else ".venv") / "bin" / "python"
 
     def imports(module):
@@ -532,6 +533,7 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
 
     job_side, planning = imports("lib.cli"), imports("lib.snapshot.enter")
     assert plugin.prepared[step_kind].code == 0, plugin.prepared[step_kind].output
+    assert plugin.unnamed[step_kind].code != 0, plugin.unnamed[step_kind].output
     assert job_side.stdout.strip() == platform.python_version(), job_side.stderr
     assert (planning.returncode == 0) == (step_kind == "plan")
 

@@ -6,7 +6,8 @@
   step outcomes, uploads and annotations as files, as Buildkite would.
 - The plugin as an agent checks it out: a copy of its hooks, library and
   command line, committed, whose ``.venv`` and ``.venv-snapshot`` the real
-  ``post-checkout`` makes once per session.
+  ``post-checkout`` makes once per session, with the Python the agent names
+  for its plugins and no other.
 - Jobs: a checkout that is a git repository, and the environment an agent
   gives a job, with the step's plugin options flattened as the agent does.
   Hooks run as the agent runs them: bash, that environment, that checkout.
@@ -292,11 +293,16 @@ def finish_hook(process: subprocess.Popen, timeout: float) -> Outcome:
     return Outcome(process.returncode, stdout, stderr)
 
 
+# The Python an agent names for the plugins, and the one it names for its other programs.
+PLUGIN_PYTHON = "QDB_CICD_AGENT_PLUGIN_PYTHON"
+OTHER_PYTHON = "QDB_CICD_AGENT_PYTHON3"
+
+
 def host_variables(home: Path, *path_dirs: Path) -> dict:
     return {
         "PATH": os.pathsep.join([*map(str, path_dirs), os.environ["PATH"]]),
         "HOME": str(home),
-        "QDB_CICD_AGENT_PLUGIN_PYTHON": sys.executable,
+        PLUGIN_PYTHON: sys.executable,
         "PYTHONDONTWRITEBYTECODE": "1",
         **GIT_IDENTITY,
         **{k: os.environ[k] for k in ("TMPDIR",) if k in os.environ},
@@ -334,12 +340,36 @@ STEP_KINDS = {"plain": {}, "plan": {"plan": GENERATED}}
 class Plugin:
     root: Path
     prepared: dict  # step kind -> Outcome of its post-checkout
+    unnamed: dict  # step kind -> Outcome of its post-checkout without PLUGIN_PYTHON
+
+
+def python3_in(directory: Path, runs: bool) -> Path:
+    """``directory/python3``: the suite's own Python when ``runs``, else a program that is no
+    Python and exits 1."""
+    python3 = directory / "python3"
+    if runs:
+        python3.symlink_to(sys.executable)
+    else:
+        python3.write_text("#!/bin/sh\nexit 1\n")
+        python3.chmod(0o755)
+    return python3
+
+
+def post_checkouts(root: Path, home: Path, env: dict) -> dict:
+    """The outcome of post-checkout for every step kind, all run at once in ``env``."""
+    started = {
+        kind: start_hook(root, "post-checkout", home, {**env, **plugin_variables(o)})
+        for kind, o in STEP_KINDS.items()
+    }
+    return {kind: finish_hook(p, POST_CHECKOUT_TIMEOUT) for kind, p in started.items()}
 
 
 @pytest.fixture(scope="session")
 def plugin(tmp_path_factory):
     """The plugin's checkout, committed, as the plan step reads the commit it runs; its two
-    venvs made by post-checkout at once."""
+    venvs made by post-checkout at once, on an agent whose other Pythons, OTHER_PYTHON and
+    python3 first on PATH, do not run. Then post-checkout once more for every step kind, on an
+    agent that names no PLUGIN_PYTHON and has the suite's own Python in those two places."""
     root = tmp_path_factory.mktemp("plugin")
     for part in ("hooks", "lib"):
         shutil.copytree(
@@ -348,14 +378,15 @@ def plugin(tmp_path_factory):
     shutil.copy2(PLUGIN_ROOT / "artifacts.py", root)
     committed(root)
     home = tmp_path_factory.mktemp("post-checkout-home")
-    started = {
-        kind: start_hook(
-            root, "post-checkout", home, {**host_variables(home), **plugin_variables(o)}
-        )
-        for kind, o in STEP_KINDS.items()
+    failing = python3_in(tmp_path_factory.mktemp("python3-failing"), runs=False)
+    working = python3_in(tmp_path_factory.mktemp("python3-working"), runs=True)
+    named = {**host_variables(home, failing.parent), OTHER_PYTHON: str(failing)}
+    unnamed = {
+        **{k: v for k, v in host_variables(home, working.parent).items() if k != PLUGIN_PYTHON},
+        OTHER_PYTHON: str(working),
     }
-    prepared = {kind: finish_hook(p, POST_CHECKOUT_TIMEOUT) for kind, p in started.items()}
-    return Plugin(root, prepared)
+    prepared = post_checkouts(root, home, named)
+    return Plugin(root, prepared, post_checkouts(root, home, unnamed))
 
 
 # ---------------------------------------------------------------------------
