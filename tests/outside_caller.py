@@ -1,68 +1,40 @@
-"""Use the library the way a caller outside the plugin does.
+"""Use the library the way a program outside Buildkite does, as the README shows.
 
-Such a caller vendors the plugin as vendor/qdb_artifacts inside its own tree (the
-layout the README shows), imports through that nested namespace path, reads the
-store configuration with an SSM client of its own, calls with keyword arguments
-only and strict ref matching, and reads only bucket, build_id, key and rel of the
-result.
+Such a caller vendors the plugin as ``vendor/qdb_artifacts`` in its own tree and
+imports through that path, reads the store's configuration from the environment
+and SSM with a client of its own, downloads one project's artifacts with keyword
+arguments and strict ref matching, and reads the manifest of the build it got.
 
-Usage: python -I -B outside_caller.py <directory holding vendor/> <request JSON>
-Prints the parts of the result the caller uses as one JSON object.
+Usage: python -I outside_caller.py <directory holding vendor/> <request JSON> <output dir>
+
+The request holds ``project_id``, ``build_id``, ``git_ref``, ``variant``,
+``patterns`` and ``extract``. Prints the build downloaded and the file count of
+its manifest, as JSON.
 """
 
 import json
 import sys
-import types
 
 
-def import_vendored_library(namespace_root):
-    """The caller's own imports, once the root of its tree is on sys.path."""
-    sys.path.insert(0, namespace_root)
+def download(tree, request, output_dir):
+    sys.path.insert(0, tree)
+    import boto3
     from vendor.qdb_artifacts.lib import (
-        ObjectAuth,
-        StoreConfig,
+        download_artifacts,
         load_store_config,
+        read_manifest,
         resolve_object_auth,
     )
-    from vendor.qdb_artifacts.lib import resolve_artifacts as resolve_project_artifacts
 
-    return types.SimpleNamespace(
-        ObjectAuth=ObjectAuth,
-        StoreConfig=StoreConfig,
-        load_store_config=load_store_config,
-        resolve_object_auth=resolve_object_auth,
-        resolve_project_artifacts=resolve_project_artifacts,
-    )
-
-
-def resolve_for_caller(namespace_root, request):
-    import boto3
-
-    lib = import_vendored_library(namespace_root)
     ssm = boto3.client("ssm")
-    cfg = lib.load_store_config(ssm)
-    auth = lib.resolve_object_auth(ssm, cfg, permission="object-read-only")
-    bucket, resolved, objects = lib.resolve_project_artifacts(
-        cfg=cfg,
-        auth=auth,
-        project_id=request["project_id"],
-        build_id=request["build_id"],
-        git_ref=request["git_ref"],
-        variant=request["variant"],
-        patterns=request["patterns"],
-        require_strict_ref_match=True,
+    cfg = load_store_config(ssm)
+    auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
+    bucket, resolved, _ = download_artifacts(
+        cfg=cfg, auth=auth, output_dir=output_dir, require_strict_ref_match=True, **request
     )
-    return {
-        "package_file": sys.modules["vendor.qdb_artifacts.lib"].__file__,
-        "bucket": bucket,
-        "build_id": resolved.build_id,
-        "artifacts": [{"key": o.key, "filename": o.rel.rsplit("/", 1)[-1]} for o in objects],
-        "cfg": {"backend": cfg.backend, "destination": cfg.destination},
-        "endpoint_url": cfg.endpoint_url,
-        "auth": [auth.access_key_id, auth.secret_access_key],
-        "types": [isinstance(cfg, lib.StoreConfig), isinstance(auth, lib.ObjectAuth)],
-    }
+    manifest = read_manifest(cfg, auth, bucket, resolved)
+    return {"build_id": resolved.build_id, "file_count": manifest["file_count"]}
 
 
 if __name__ == "__main__":
-    print(json.dumps(resolve_for_caller(sys.argv[1], json.loads(sys.argv[2]))))
+    print(json.dumps(download(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])))
