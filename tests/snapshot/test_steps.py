@@ -1003,13 +1003,16 @@ def test_leave_records_nothing_when_every_step_passed(tmp_path):
     assert gate.store.calls == []
 
 
-def test_leave_records_nothing_for_a_variant_whose_pointer_a_retried_job_wrote(tmp_path):
+@pytest.mark.parametrize(
+    "outcome", [HARD_FAILED, "soft_failed", ""], ids=["hard-failed", "soft-failed", "running-again"]
+)
+def test_leave_records_nothing_for_a_variant_whose_pointer_a_retried_job_wrote(tmp_path, outcome):
     objects = pointer_objects(
         Pointer(
             CORE, key(CORE), LINUX, MASTER, commit(CORE), BUILDS[CORE], "2025-11-17T12:00:00.000Z"
         )
     )
-    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED, "build-macos": "passed"}, objects)
+    gate = leaving(tmp_path, CORE, {"build-linux": outcome, "build-macos": "passed"}, objects)
 
     gate.run()
 

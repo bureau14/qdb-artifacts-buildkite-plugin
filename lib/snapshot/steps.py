@@ -75,7 +75,6 @@ from .plan import Node, Plan, PlanError, decode_plan, encode_plan, planned_node
 from .records import (
     GENERATOR_FAILED,
     NOT_DECLARED,
-    PASSED,
     RULE,
     Cause,
     Origin,
@@ -90,6 +89,7 @@ from .records import (
     reason_record,
     shared_failure,
     shared_record,
+    unpassed,
 )
 from .shown import short_commit, shown_text, shown_value
 
@@ -986,8 +986,7 @@ def leave_decisions(job: Job, edge: Edge) -> None:
         return
     promotes = step_promotes(edge)
     outcomes = {s: edge.agent.step_outcome(s) for s in sorted(set(promotes.values()))}
-    unpassed = [v for v, s in promotes.items() if outcomes[s] != PASSED]
-    held = pointers_at(edge, job.project, node.key, unpassed)
+    held = pointers_at(edge, job.project, node.key, unpassed(promotes, outcomes))
     present = [v for v, found in held.items() if found is not None]
     record = leave_record(origin_of(job, p, node.key), promotes, outcomes, present, edge.clock())
     if record is None:

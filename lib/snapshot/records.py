@@ -8,8 +8,9 @@ and how it is read are the store's business. Here: the record as a value
 form of every field), and the decisions of section 7 over records the caller
 has read:
 
-- ``leave_record``: the leave step's record of the variants whose step did
-  not pass and that have no pointer;
+- ``unpassed`` and ``leave_record``: the variants whose step did not pass,
+  whose pointers the leave step reads, and its record of those that have no
+  pointer;
 - ``shared_failure`` and ``shared_record``: step 8, the failure of a build of
   the same key that this build waited behind at the gate;
 - ``chain_failure`` and ``caused_record``: step 10 and resume, a dependency
@@ -336,6 +337,16 @@ def decode_record(text: str) -> Record:
 # ---------------------------------------------------------------------------
 
 
+def unpassed(promotes: Mapping[str, str], outcomes: Mapping[str, str]) -> list[str]:
+    """The variants of ``promotes`` whose step did not pass, sorted.
+
+    ``promotes`` is ``{variant: step key}`` (meta-data ``snapshot-promotes``),
+    ``outcomes`` the outcome of each step as read, a step not in it not
+    finished. Only ``passed`` passes.
+    """
+    return sorted(v for v, step in promotes.items() if outcomes.get(step, "") != PASSED)
+
+
 def leave_record(
     origin: Origin,
     promotes: Mapping[str, str],
@@ -345,17 +356,15 @@ def leave_record(
 ) -> Record | None:
     """The leave step's record; None when every variant of ``promotes`` passed or exists.
 
-    ``promotes`` is ``{variant: step key}`` (meta-data ``snapshot-promotes``),
-    ``outcomes`` the outcome of each step as read, a step not in it not
-    finished, ``present`` the variants that have a pointer at the key. A
-    variant goes into the record when its step did not pass (only ``passed``
-    passes) and it has no pointer.
+    ``promotes`` and ``outcomes`` as ``unpassed`` takes them, ``present`` the
+    variants that have a pointer at the key. A variant goes into the record
+    when its step did not pass and it has no pointer.
     """
     exists = frozenset(present)
     failed = [
-        Failed(variant, step, outcomes.get(step, ""))
-        for variant, step in promotes.items()
-        if outcomes.get(step, "") != PASSED and variant not in exists
+        Failed(v, promotes[v], outcomes.get(promotes[v], ""))
+        for v in unpassed(promotes, outcomes)
+        if v not in exists
     ]
     return compose_record(origin, now, None, failed, (), None) if failed else None
 
