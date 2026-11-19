@@ -80,8 +80,8 @@ def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
 
 
 def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, matrix):
-    """A root built again without a new commit compiles nothing and triggers nothing, and the
-    builds its plan names are the ones the first build made."""
+    """A root built again without a new commit is reused: it compiles nothing, triggers nothing
+    and uploads no pipeline, and the builds its plan names are the ones the first build made."""
     graph, root = graph_root.graph, graph_root.node
     world = worlds(graph, matrix)
     first = world.build(root)
@@ -91,7 +91,7 @@ def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, 
 
     projects = tree(graph, root)
     assert again.state == "passed"
-    assert again.children == []
+    assert (again.children, world.agents.uploads[again.id]) == ([], [])
     assert compiled_since(world, done) == set()
     assert world.objects(POINTERS) == pointers
     assert holders(world, again, projects, matrix) == holders(world, first, projects, matrix)
@@ -118,12 +118,13 @@ def test_a_new_commit_builds_exactly_its_node_and_the_nodes_above(worlds, graph_
     )
 
 
-def test_two_roots_use_one_build_of_a_dependency_they_share(worlds, graph_node):
+def test_two_roots_use_one_build_of_a_dependency_they_share(worlds, graph_node, matrix):
     """A second root that takes a node of a built tree as its snapshot dependency compiles
-    nothing of that node's tree, and downloads the build the first chain made of it."""
+    nothing of that node's tree, and downloads, on every platform, the build the first chain
+    made of it."""
     at = graph_node
     graph = {**at.graph, "other": (at.node,)}
-    world = worlds(graph)
+    world = worlds(graph, matrix)
     first = world.build(at.root)
     done = len(world.compiled)
 
@@ -131,9 +132,9 @@ def test_two_roots_use_one_build_of_a_dependency_they_share(worlds, graph_node):
 
     (shared,) = [b for b in first.chain() if b.project == at.node]
     assert other.state == "passed"
-    assert compiled_since(world, done) == {("other", "linux")}
-    assert {(d.project, d.build_id) for d in world.downloads if d.build is other} == {
-        (at.node, shared.id)
+    assert compiled_since(world, done) == {("other", v) for v in matrix}
+    assert {(d.project, d.variant, d.build_id) for d in world.downloads if d.build is other} == {
+        (at.node, v, shared.id) for v in matrix
     }
 
 
@@ -141,8 +142,8 @@ def test_a_failed_variant_fails_every_build_above_and_holds_its_project_responsi
     worlds, graph_node, matrix
 ):
     """When a variant a consumer needs fails at a node, that node's build, every build above it
-    and the root fail; nothing above it is promoted; and the failure records of the chain lead
-    from the root to that node and variant alone."""
+    and the root fail; no project is built twice in the chain; nothing above it is promoted;
+    and the failure records of the chain lead from the root to that node and variant alone."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     world = worlds(graph, matrix)
     world.broken.add((node, matrix[-1]))
@@ -150,10 +151,12 @@ def test_a_failed_variant_fails_every_build_above_and_holds_its_project_responsi
     top = world.build(root)
 
     failing = ({node} | above(graph, node)) & tree(graph, root)
+    built = [b.project for b in top.chain()]
     promoted = {k.split("/")[3] for k in world.objects(POINTERS)}
     moved = {p for p in failing for v in matrix if world.latest(p, MASTER, v) is not None}
     assert top.state == "failed"
     assert {b.project for b in top.chain() if b.state == "failed"} == failing
+    assert len(built) == len(set(built))
     assert promoted & above(graph, node) == set()
     assert moved <= {node}
     assert held_responsible(world, top) == {(node, matrix[-1])}
@@ -197,11 +200,12 @@ def test_a_snapshot_missing_a_variant_builds_only_that_variant(worlds, graph_nod
     )
 
 
-def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node):
+def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, matrix):
     """A literal git ref in one consumer's template pins a node: the chain builds it once, at
-    the head of that ref, and every download of it in the chain takes that build."""
+    the head of that ref, and every download of it in the chain, on every platform, takes that
+    build."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
-    world = worlds(graph)
+    world = worlds(graph, matrix)
     pinned = world.commit(node, branch="3.14.x")
     consumer = min(c for c in tree(graph, root) if node in graph[c])
     world.projects[consumer].pins[node] = "refs/heads/3.14.x"
@@ -330,12 +334,15 @@ def latest_refs(world, project: str) -> set[str]:
 
 
 @pytest.mark.parametrize("root_branch", ["master", "feature", "3.14.x"])
-def test_a_node_runs_under_its_own_branch_only_as_its_own_build(worlds, graph_node, root_branch):
+def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
+    worlds, graph_node, matrix, root_branch
+):
     """When a root builds a branch that a node and every node above it also have, each
-    triggered build runs, and moves LATEST_SUCCESSFUL, under the branch the label rule gives:
-    its own when it is the build its own pipeline would make, else snapshot/<root branch>."""
+    triggered build runs, and moves LATEST_SUCCESSFUL of every platform, under the branch the
+    label rule gives: its own when it is the build its own pipeline would make, else
+    snapshot/<root branch>."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
-    world = worlds(graph)
+    world = worlds(graph, matrix)
     branched = ({node} | above(graph, node)) & tree(graph, root)
     for p in sorted(branched):
         world.commit(p, branch=root_branch)
