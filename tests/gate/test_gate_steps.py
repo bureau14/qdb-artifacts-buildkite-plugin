@@ -222,6 +222,39 @@ def test_without_the_variable_the_token_is_read_from_ssm(buildkite, store):
     assert nothing_shows(everything_shown(buildkite, engine, run), "bkua_from-ssm-not-real")
 
 
+def test_a_token_read_with_a_newline_at_its_end_is_sent_without_it(buildkite, store):
+    buildkite.add_pipeline("engine", ENGINE)
+    store.put_parameter(TOKEN_PARAMETER, "bkua_from-a-file-not-real\n", secure=True)
+    del buildkite.env["ARTIFACTS_BUILDKITE_TOKEN"]
+    engine = buildkite.start("engine")
+
+    run = enter(buildkite, engine)
+
+    assert run.outcome == "passed", run.output
+    assert buildkite.api.requests == [
+        ("/v2/organizations/example/pipelines/engine", "Bearer bkua_from-a-file-not-real")
+    ]
+    assert nothing_shows(everything_shown(buildkite, engine, run), "bkua_from-a-file-not-real")
+
+
+def test_a_token_that_cannot_be_sent_fails_the_plan_naming_where_it_was_read(buildkite, store):
+    buildkite.add_pipeline("engine", ENGINE)
+    buildkite.env["ARTIFACTS_BUILDKITE_TOKEN"] = "bkua_with a-space-not-real"
+    engine = buildkite.start("engine")
+
+    run = enter(buildkite, engine)
+
+    assert run.outcome == "hard_failed"
+    named = "the Buildkite API token in ARTIFACTS_BUILDKITE_TOKEN is not printable ASCII"
+    assert named in run.output
+    assert buildkite.api.requests == []
+    assert buildkite.agent.meta_data(engine.id)["snapshot-mode"] == "failed"
+    style, body = buildkite.agent.annotations(engine.id)["snapshot"]
+    assert style == "error" and named in body
+    shown = everything_shown(buildkite, engine, run)
+    assert nothing_shows(shown, "bkua_with") and nothing_shows(shown, "a-space-not-real")
+
+
 def test_an_answer_of_the_api_that_is_an_error_fails_the_plan_and_is_no_answer(buildkite, store):
     buildkite.add_pipeline("engine", ENGINE)
     buildkite.add_pipeline("widget", WIDGET)

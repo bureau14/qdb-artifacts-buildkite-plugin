@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import functools
 import json
+import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -586,15 +588,29 @@ TOKEN_SSM_PARAM = "/services/buildkite/credentials/artifacts/buildkite-api-token
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 
+# What an HTTP header can carry of a token: printable ASCII without white space.
+_SENDABLE_TOKEN = re.compile(r"[!-~]+")
+
+
 def buildkite_token(ssm: Any) -> str:
     """The token of Buildkite's API: ``ARTIFACTS_BUILDKITE_TOKEN``, else its SSM parameter.
 
-    It goes to Buildkite's API only, never into a message.
+    The white space around it is dropped: a parameter written from a file ends
+    with a newline. A token that is then not printable ASCII without white
+    space cannot be sent, and is refused by where it was read. It goes to
+    Buildkite's API only, never into a message.
     """
-    token = env_or_ssm(ssm, TOKEN_VARIABLE, TOKEN_SSM_PARAM)
+    variable = os.environ.get(TOKEN_VARIABLE)
+    where = TOKEN_VARIABLE if variable else f"the SSM parameter {TOKEN_SSM_PARAM}"
+    token = (env_or_ssm(ssm, TOKEN_VARIABLE, TOKEN_SSM_PARAM) or "").strip()
     if not token:
         raise ArtifactsError(
             f"no Buildkite API token: set {TOKEN_VARIABLE} or the SSM parameter {TOKEN_SSM_PARAM}"
+        )
+    if not _SENDABLE_TOKEN.fullmatch(token):
+        raise ArtifactsError(
+            f"the Buildkite API token in {where} is not printable ASCII without white space, "
+            "so it cannot be sent"
         )
     return token
 

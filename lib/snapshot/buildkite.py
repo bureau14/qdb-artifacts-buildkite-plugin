@@ -207,7 +207,9 @@ def _response(status: int, headers: Any, read: Callable[[], bytes]) -> Response:
 def http_get(url: str, token: str, timeout: float = TIMEOUT) -> Response:
     """One GET of ``url`` with the token as a bearer; any HTTP status is returned.
 
-    Raises ``OSError`` or ``http.client.HTTPException`` when no answer came.
+    Raises ``OSError`` or ``http.client.HTTPException`` when no answer came,
+    and ``BuildkiteError`` when the token cannot be sent in a header: the HTTP
+    client refuses such a header with a message that holds its value.
     """
     request = urllib.request.Request(
         url,
@@ -218,6 +220,8 @@ def http_get(url: str, token: str, timeout: float = TIMEOUT) -> Response:
             return _response(r.status, r.headers, r.read)
     except urllib.error.HTTPError as e:
         return _response(e.code, e.headers, e.read)
+    except ValueError:
+        raise BuildkiteError("the token cannot be sent in an HTTP header") from None
 
 
 def pipeline_url(api: str, organisation: str, slug: str) -> str:

@@ -395,3 +395,12 @@ def test_an_empty_token_is_refused_before_any_call(api):
     with pytest.raises(BuildkiteError, match="no Buildkite API token"):
         api.fetch(token="")
     assert api.requests == []
+
+
+@pytest.mark.parametrize("bad", ["\n", "\r", chr(0x2603)], ids=["lf", "cr", "not-latin1"])
+def test_a_token_that_cannot_be_a_header_is_an_error_that_never_shows_it(api, bad):
+    # http.client refuses such a header with a message that holds its value.
+    with pytest.raises(BuildkiteError, match="cannot be sent in an HTTP header") as raised:
+        api.fetch(token=TOKEN + bad)
+    assert TOKEN not in str(raised.value) and raised.value.__cause__ is None
+    assert api.requests == [] and api.sleeps == []

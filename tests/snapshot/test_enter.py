@@ -778,6 +778,38 @@ def test_the_token_is_the_variable_else_its_ssm_parameter(monkeypatch):
     assert ssm.asked == ["/services/buildkite/credentials/artifacts/buildkite-api-token"]
 
 
+def test_a_token_is_read_without_the_white_space_around_it(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BUILDKITE_TOKEN", " bkua_from-the-variable\t\n")
+    assert enter.buildkite_token(FakeSsm(None)) == "bkua_from-the-variable"
+
+    # A parameter written from a file ends with its newline.
+    monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN")
+    assert enter.buildkite_token(FakeSsm("bkua_from-ssm\n")) == "bkua_from-ssm"
+
+
+@pytest.mark.parametrize(
+    "variable, parameter, named",
+    [
+        ("bkua_from the-variable", None, "ARTIFACTS_BUILDKITE_TOKEN"),
+        (None, "bkua_from\nthe-parameter", "the SSM parameter /services/buildkite/credentials/"),
+        (None, "bkua_from-the-" + chr(0xE9), "the SSM parameter /services/buildkite/credentials/"),
+    ],
+    ids=["space-in-the-variable", "newline-in-the-parameter", "not-ascii"],
+)
+def test_a_token_that_cannot_be_sent_is_refused_by_where_it_was_read_and_never_shown(
+    monkeypatch, variable, parameter, named
+):
+    if variable is None:
+        monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("ARTIFACTS_BUILDKITE_TOKEN", variable)
+
+    with pytest.raises(ArtifactsError, match="not printable ASCII without white space") as raised:
+        enter.buildkite_token(FakeSsm(parameter))
+
+    assert named in str(raised.value) and "bkua_from" not in str(raised.value)
+
+
 def test_without_a_token_the_message_names_where_one_is_read(monkeypatch):
     monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN", raising=False)
 
