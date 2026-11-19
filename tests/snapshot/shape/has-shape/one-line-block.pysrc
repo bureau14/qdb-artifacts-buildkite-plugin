@@ -1,9 +1,0 @@
-# A block written on one line is the same block.
-from qdb_pipeline import run
-
-
-def generate_pipeline():
-    return None
-
-
-if __name__ == "__main__": run(generate_pipeline)

@@ -105,7 +105,7 @@ from .plan import (
     PlanError,
     RootInfo,
 )
-from .shape import shape_problem
+from .shape import has_shape
 from .shown import shown_text, shown_value
 
 PIPELINE_PY = ".buildkite/pipeline.py"
@@ -338,7 +338,7 @@ def pipeline_py_problem(source: bytes | None) -> str | None:
     """Why ``.buildkite/pipeline.py`` (None when there is none) lacks the runner's shape."""
     if source is None:
         return "is not there"
-    return shape_problem(source)
+    return None if has_shape(source) else "does not contain qdb_pipeline and run(generate_pipeline)"
 
 
 def first_unmet(
