@@ -2,7 +2,8 @@ name: QuasarDB Artifacts
 description: Upload and download build artifacts to S3-compatible stores (AWS S3, Cloudflare R2)
 author: https://github.com/bureau14
 requirements:
-  - python3
+  # Run from the path the agent names in QDB_CICD_AGENT_PLUGIN_PYTHON, never from PATH.
+  - python3.13
 configuration:
   properties:
     upload:
