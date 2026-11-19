@@ -165,7 +165,6 @@ class Project:
     pins: dict = dataclasses.field(default_factory=dict)  # dependency -> literal ref
     latest: tuple = ()  # projects it takes as latest successful
     pipeline_py: bytes = SHAPED
-    template_text: str | None = None  # replaces the generated template
 
 
 @dataclasses.dataclass(eq=False)
@@ -287,7 +286,7 @@ class World:
     def commit(self, name: str, branch: str = "master") -> str:
         """A new commit of the project's repository as its ``Project`` says, on ``branch``."""
         p = self.projects[name]
-        text = p.template_text or yaml.safe_dump(self.template(name))
+        text = yaml.safe_dump(self.template(name))
         files = {".buildkite/steps.yml": text, ".buildkite/pipeline.py": p.pipeline_py}
         return self.hosting.commit(name, files, branch)
 

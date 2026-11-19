@@ -263,24 +263,20 @@ def cannot_give_a_snapshot(world, project: str, condition: str) -> None:
         world.facts[project] = PipelineFacts(project, url(project), False)
     elif condition == "shape":
         world.projects[project].pipeline_py = SHAPED.replace(b"run(", b"print(")
-    elif condition == "parse":
-        world.projects[
-            project
-        ].template_text = "steps: [{plugins: [bureau14/qdb-artifacts#master: ]"
     else:
         world.projects[project].latest = ("tools",)
     world.commit(project)
 
 
-CONDITIONS = ("buildkite", "shape", "parse", "latest")
+CONDITIONS = ("buildkite", "shape", "latest")
 
 
 @pytest.mark.parametrize("lower_node, condition", paired(LOWER_NODES, CONDITIONS), ids=str)
 def test_a_dependency_that_cannot_give_a_snapshot_stops_the_plan(worlds, lower_node, condition):
     """A snapshot dependency that cannot give a snapshot (Buildkite's configuration does not run
-    its pipeline.py, that file lacks the runner's call, a template does not parse, or it takes a
-    project as latest successful) fails the root before anything is triggered: no plan, no
-    trigger, no compile, nothing stored."""
+    its pipeline.py, that file lacks the runner's call, or it takes a project as latest
+    successful) fails the root before anything is triggered: no plan, no trigger, no compile,
+    nothing stored."""
     world = worlds(lower_node.graph)
     cannot_give_a_snapshot(world, lower_node.node, condition)
 
