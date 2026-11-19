@@ -177,7 +177,7 @@ def way_out(consumer: str, project: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The first pass's scenarios: a chain, a diamond, branches and lines, labels
+# Scenarios: a chain, a diamond, branches and lines, labels
 # ---------------------------------------------------------------------------
 
 

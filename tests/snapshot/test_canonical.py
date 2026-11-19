@@ -17,9 +17,8 @@ def test_canonical_json_is_utf8_not_escaped():
     assert canonical_json({"k": chr(0xE9)}) == b'{"k":"\xc3\xa9"}'
 
 
-# The two known keys below are the first pass's, with their expected values
-# unchanged: the formula did not change, so a key computed by the first pass
-# is the same.
+# The two keys below are known values of the formula. A key is the name its
+# pointers are stored under, so a change of the formula fails them.
 
 
 def test_snapshot_key_without_dependencies():

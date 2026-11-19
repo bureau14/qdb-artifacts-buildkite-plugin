@@ -12,9 +12,9 @@ dependencies of every node. Every node but the root has a snapshot, so has a
 key; the root's key is null when it has no snapshot (its own declaration
 holds a latest successful dependency).
 
-The document is the specification's without its ``line``: no build of the
-chain reads it, and finding it for every root would cost git work for roots
-that need no line; the ref each node is taken from says what it was::
+The document holds what the builds of the chain read. The root's release
+line is not in it: no build reads it, and a root finds it only when it places
+a dependency without a pin. The ref each node was taken from is in it::
 
     {"schema": 2, "id": "<root build uuid>", "context": "<root branch>",
      "rebuild": "none|one|all", "created_at": "<UTC ISO 8601>",

@@ -39,12 +39,13 @@ def snapshot_key(
 
     ``deps`` maps each direct snapshot dependency's project to its key. The
     dependencies enter the key as a list of ``[project, key]`` pairs sorted by
-    project; this is the first pass's formula, so its known keys still hold.
+    project. The formula never changes: a key is the name its pointers are
+    stored under, and another formula would find none of them.
 
     ``rebuild`` is the id of the plan that forces this build again
     (``SNAPSHOT_REBUILD``). It enters the hashed object as the member
     ``"rebuild"``, so a forced build gets a key no earlier build has; without
-    it the object, and so the key, is the first pass's.
+    it the object, and so the key, is that of every build of the same commits.
     """
     pairs = [[d, deps[d]] for d in sorted(deps)]
     fields: dict[str, Any] = {"project": project, "commit": commit, "deps": pairs}

@@ -8,8 +8,7 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
-  records of its causes to the builds that failed, and how to retry. This is
-  the first pass's failure annotation with variants in place of gate steps;
+  records of its causes to the builds that failed, and how to retry;
   ``caused_annotation`` is the same text for a build that dependencies left
   without variants, also one without a record of its own.
 
