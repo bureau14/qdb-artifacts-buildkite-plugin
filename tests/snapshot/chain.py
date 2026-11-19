@@ -320,13 +320,18 @@ class World:
         return build
 
     def next_step(self, build: Build) -> dict | None:
-        """The first step whose dependencies ended; leave once every other step ended."""
+        """The last step whose dependencies ended; leave once every other step ended.
+
+        Buildkite may start ready steps in any order. The last first is one of
+        them, and it runs a step that waits for less than it should before what
+        it should have waited for.
+        """
         pending = [s for s in build.steps if s["key"] not in build.outcomes]
         others = [s for s in pending if s["key"] != LEAVE["key"]]
         ready = [s for s in others if all(d in build.outcomes for d, _ in dependencies(s))]
         if others and not ready:
             raise AssertionError(f"{build.project} {build.number}: steps wait forever: {others}")
-        return (ready or pending or [None])[0]
+        return (ready[-1:] or pending or [None])[0]
 
     def blocked(self, build: Build, step: dict) -> bool:
         allowed = step.get("allow_dependency_failure")
