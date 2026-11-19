@@ -222,63 +222,63 @@ plugins:
 
 ### Top-level keys
 
-| Key          | Type    | Description                                                        |
-| ------------ | ------- | ------------------------------------------------------------------ |
-| `upload`     | object  | Upload configuration block.                                        |
-| `download`   | object  | Download configuration block.                                      |
-| `promote`    | object  | Updates the LATEST_SUCCESSFUL pointer.                             |
-| `debug`      | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`. |
-| `plan`       | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
-| `resume`     | string  | Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies). |
-| `leave`      | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that runs after every other step and records which variants did not pass. See [Snapshot dependencies](#snapshot-dependencies). |
+| Key        | Type    | Description                                                                                                                                                                                                                           |
+| ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload`   | object  | Upload configuration block.                                                                                                                                                                                                           |
+| `download` | object  | Download configuration block.                                                                                                                                                                                                         |
+| `promote`  | object  | Updates the LATEST_SUCCESSFUL pointer.                                                                                                                                                                                                |
+| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                    |
+| `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
+| `resume`   | string  | Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                 |
+| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that runs after every other step and records which variants did not pass. See [Snapshot dependencies](#snapshot-dependencies).                           |
 
 ### `upload` object keys
 
-| Key           | Type    | Required | Description                                                             |
-| ------------- | ------- | -------- | ----------------------------------------------------------------------- |
-| `variant`     | string  | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).              |
-| `git_ref`     | string  | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                         |
-| `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_SLUG`. |
-| `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
+| Key           | Type             | Required | Description                                                                                                               |
+| ------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `variant`     | string           | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).                                                                |
+| `git_ref`     | string           | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                                                                           |
+| `project_id`  | string           |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_SLUG`.             |
+| `files`       | string           | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).                                                         |
 | `exclude`     | array of strings |          | Glob patterns to skip after `files` has matched. Matched against the uploaded artifact path after `base_dir` is stripped. |
-| `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
-| `parallel`    | integer |          | Files uploaded simultaneously. Default: `4`.                            |
-| `concurrency` | integer |          | Multipart threads per upload. Default: `32`.                            |
-| `annotate`    | boolean |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`. |
-| `allow_empty` | boolean |          | Skip upload without error when no files match or all matches are excluded. Default: `false`. |
-| `snapshot`    | string  |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
+| `base_dir`    | string           |          | Optional base directory to strip from uploaded object keys (e.g. `dist`).                                                 |
+| `parallel`    | integer          |          | Files uploaded simultaneously. Default: `4`.                                                                              |
+| `concurrency` | integer          |          | Multipart threads per upload. Default: `32`.                                                                              |
+| `annotate`    | boolean          |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`.                                            |
+| `allow_empty` | boolean          |          | Skip upload without error when no files match or all matches are excluded. Default: `false`.                              |
+| `snapshot`    | string           |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots).        |
 
 ### `promote` object keys
 
-| Key          | Type   | Required | Description                                                                                   |
-| ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
-| `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_SLUG`.        |
-| `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                          |
-| `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                  |
+| Key          | Type   | Required | Description                                                                                                        |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_SLUG`.               |
+| `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                                               |
+| `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                                       |
 | `snapshot`   | string |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
 
 ### `download` object keys
 
-| Key          | Type  | Required | Description                                            |
-| ------------ | ----- | -------- | ------------------------------------------------------ |
-| `projects`   | array | ✓        | List of projects to download artifacts from.           |
-| `clean`      | boolean |        | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
-| `parallel`    | integer          |          | Files downloaded simultaneously. Default: `4`.                                                  |
-| `concurrency` | integer          |          | Multipart threads per download. Default: `32`.                                                  |
+| Key           | Type    | Required | Description                                                                                                   |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `projects`    | array   | ✓        | List of projects to download artifacts from.                                                                  |
+| `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
+| `parallel`    | integer |          | Files downloaded simultaneously. Default: `4`.                                                                |
+| `concurrency` | integer |          | Multipart threads per download. Default: `32`.                                                                |
 
 #### `projects` item keys
 
-| Key           | Type             | Required | Description                                                                                     |
-| ------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_SLUG`.                  |
-| `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
-| `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
-| `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
-| `require_strict_ref_match` | boolean | | Disable branch fallback. Default: `false`. |
-| `files`       | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)). |
-| `exclude`     | array of strings |          | Archive glob patterns to skip after `files` patterns have matched.                              |
-| `output-dir`  | string           |          | Destination directory. Default: `.` (current working directory).                                |
-| `extract`     | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.           |
+| Key                        | Type             | Required | Description                                                                                                                                                                             |
+| -------------------------- | ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project_id`               | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_SLUG`.                                                                                          |
+| `build_id`                 | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
+| `variant`                  | string           | ✓        | Variant of the artifacts to download.                                                                                                                                                   |
+| `git_ref`                  | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                                                                                                                      |
+| `require_strict_ref_match` | boolean          |          | Disable branch fallback. Default: `false`.                                                                                                                                              |
+| `files`                    | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)).                                                                                         |
+| `exclude`                  | array of strings |          | Archive glob patterns to skip after `files` patterns have matched.                                                                                                                      |
+| `output-dir`               | string           |          | Destination directory. Default: `.` (current working directory).                                                                                                                        |
+| `extract`                  | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.                                                                                                   |
 
 ### Entry filtering
 
@@ -306,11 +306,11 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 ## How it works
 
-| Hook            | Trigger                 | Action                                                                                                                                                                       |
-| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hook            | Trigger                 | Action                                                                                                                                                                                                                                                                                                   |
+| --------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `post-checkout` | After repo checkout     | Prints the path and version of the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, fails when that is not set or names nothing that runs, and makes the step's venv anew with it: `<plugin-dir>/.venv` with the dependencies from `lib/requirements.txt`, or the venv of a gate step, described below. |
-| `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                    |
-| `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty. |
+| `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                                                                                                                                               |
+| `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty.                                                          |
 
 `pre-command` and `post-command` start `artifacts.py` with the Python of the venv that `post-checkout` made, and the name of their phase; `lib/cli.py` decides what the phase runs.
 
@@ -375,7 +375,7 @@ downloads.
 - The **label** of a node is the branch name its build runs under, uploads
   under and moves `LATEST_SUCCESSFUL` of: its own branch when the build is the
   one its own pipeline would make for that branch, else `snapshot/<root
-  branch>`, a name no branch has.
+branch>`, a name no branch has.
 
 ### Two types of dependency
 
@@ -483,11 +483,11 @@ whose variants exist is replaced by one that names the build that holds them.
 
 ### Variables a person can set
 
-| Variable               | Effect                                                                                    |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `SNAPSHOT_REBUILD=1`   | The root builds again, under a key no earlier build has; its dependencies are reused.     |
+| Variable               | Effect                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| `SNAPSHOT_REBUILD=1`   | The root builds again, under a key no earlier build has; its dependencies are reused.      |
 | `SNAPSHOT_REBUILD=all` | Every node of the tree builds again. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
-| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                 |
+| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                  |
 
 The plan step of a root asks Buildkite's API (`read_pipelines`) for the
 repository and the configuration of every pipeline of its tree, with the token
@@ -498,13 +498,13 @@ nothing.
 
 ### What is stored, and where
 
-| What           | Where                                                                                | Written                                       |
-| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------- |
-| pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket                 | once, by the step that promotes the variant   |
-| failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket              | once, by a gate step of a build that has a key |
-| plan           | meta-data `snapshot-plan` of the root build                                          | by the root's enter step; a retried enter writes it again |
-| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                                    | by the enter and resume steps of each build   |
-| arrival        | meta-data `snapshot-arrived`                                                         | by the runner, when it prints the gate        |
+| What           | Where                                                                   | Written                                                   |
+| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket    | once, by the step that promotes the variant               |
+| failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket | once, by a gate step of a build that has a key            |
+| plan           | meta-data `snapshot-plan` of the root build                             | by the root's enter step; a retried enter writes it again |
+| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                       | by the enter and resume steps of each build               |
+| arrival        | meta-data `snapshot-arrived`                                            | by the runner, when it prints the gate                    |
 
 A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
 uuid, and `SNAPSHOT_NEEDS`, the variants its consumer downloads. The plan goes
@@ -680,15 +680,15 @@ library never imports `lib/snapshot/`, and needs no PyYAML.
 
 Config is resolved in order: **environment variable → SSM parameter → default**.
 
-| Setting              | Env var                          | SSM parameter                                                        | Default      |
-| -------------------- | -------------------------------- | -------------------------------------------------------------------- | ------------ |
-| Backend              | `ARTIFACTS_BACKEND`              | `/services/buildkite/config/artifacts/object-store/backend`          | `s3`         |
-| Destination          | `ARTIFACTS_DESTINATION`          | `/services/buildkite/config/artifacts/object-store/destination`      | _(required)_ |
-| Endpoint URL         | `ARTIFACTS_ENDPOINT_URL`         | `/services/buildkite/config/artifacts/object-store/endpoint-url`     | _(none)_     |
-| R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`    | _(R2 only)_  |
-| R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id` | _(R2 only)_  |
-| R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`     | _(R2 only)_  |
-| Artifacts domain     | `ARTIFACTS_DOMAIN`             | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain`| _(optional)_ |
+| Setting              | Env var                          | SSM parameter                                                           | Default      |
+| -------------------- | -------------------------------- | ----------------------------------------------------------------------- | ------------ |
+| Backend              | `ARTIFACTS_BACKEND`              | `/services/buildkite/config/artifacts/object-store/backend`             | `s3`         |
+| Destination          | `ARTIFACTS_DESTINATION`          | `/services/buildkite/config/artifacts/object-store/destination`         | _(required)_ |
+| Endpoint URL         | `ARTIFACTS_ENDPOINT_URL`         | `/services/buildkite/config/artifacts/object-store/endpoint-url`        | _(none)_     |
+| R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`       | _(R2 only)_  |
+| R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id`    | _(R2 only)_  |
+| R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`        | _(R2 only)_  |
+| Artifacts domain     | `ARTIFACTS_DOMAIN`               | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain` | _(optional)_ |
 
 For **AWS S3**, the agent's IAM role is used — no explicit credentials needed.
 
