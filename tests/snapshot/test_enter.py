@@ -1,274 +1,66 @@
-"""The gate steps over the fakes of the planning package, decision by decision.
+"""enter and resume over the fakes of the planning package, decision by decision.
 
-One chain: a root build of ``app`` on master, which depends on ``lib`` and
-``core``; ``lib`` depends on ``core``. Every step runs against an in-memory
-store, a recording agent, git and Buildkite from dictionaries, a fixed clock
-and a list for the log.
+The chain and its gate steps are those of ``gates.py``.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 from pathlib import Path
 
 import pytest
 import yaml
-from fakes import FakeCheckout, FakeGit, FakePipelines, MemoryStore, RecordingAgent
+from fakes import FakeCheckout, RecordingAgent
+from gates import (
+    ALL_HELD,
+    APP,
+    ARRIVED,
+    BUILDS,
+    CORE,
+    LIB,
+    LINUX,
+    MACOS,
+    MASTER,
+    PLAN,
+    PLUGIN_COMMIT,
+    ROOT_BUILD,
+    Gate,
+    T,
+    build_of,
+    commit,
+    entries_of,
+    fake_pipelines,
+    held,
+    key,
+    options_of,
+    origin,
+    pipeline,
+    pointer_objects,
+    record_objects,
+    tree,
+    url,
+)
 from repos import commit as commit_files
 from repos import new_repository
 
-from lib import layout, pointer
+from lib import layout
 from lib.errors import ArtifactsError
-from lib.pointer import Build, Pointer
-from lib.snapshot import steps
+from lib.pointer import Pointer
+from lib.snapshot import enter
 from lib.snapshot.agent import AgentError
 from lib.snapshot.buildkite import BuildkiteError, PipelineFacts
-from lib.snapshot.declaration import read_declaration
 from lib.snapshot.plan import decode_plan, encode_plan
-from lib.snapshot.planner import Root, make_plan
 from lib.snapshot.records import (
     GENERATOR_FAILED,
     HARD_FAILED,
     NOT_DECLARED,
     RULE,
     Failed,
-    Origin,
     Record,
     compose_record,
-    decode_record,
     encode_record,
 )
-
-APP, LIB, CORE = "app", "lib", "core"
-LINUX, MACOS = "linux", "macos"
-MASTER = "refs/heads/master"
-PLUGIN = "bureau14/qdb-artifacts#master"
-PLUGIN_COMMIT = "a" * 40
-T = 1_763_380_800
-ARRIVED = T - 60
-
-# What each step of a project's pipeline produces and downloads: (key, variant, downloads).
-STEPS = {
-    CORE: [("build-linux", LINUX, []), ("build-macos", MACOS, [])],
-    LIB: [("build-linux", LINUX, [(CORE, LINUX)]), ("build-macos", MACOS, [(CORE, MACOS)])],
-    APP: [
-        ("build-linux", LINUX, [(LIB, LINUX), (CORE, LINUX)]),
-        ("test-macos", None, [(CORE, MACOS)]),
-    ],
-}
-
-
-def build_of(project: str, number: int) -> Build:
-    return Build(
-        f"01890000-bbbb-7000-8000-{number:012d}", number, f"https://ci.example/{project}/{number}"
-    )
-
-
-ROOT_BUILD = build_of(APP, 7)
-BUILDS = {APP: ROOT_BUILD, LIB: build_of(LIB, 21), CORE: build_of(CORE, 31)}
-# What app's plan step hands down to each dependency it triggers.
-NEEDS = {LIB: [LINUX], CORE: [LINUX, MACOS]}
-
-
-def url(project: str) -> str:
-    return f"https://git.example.test/example/{project}.git"
-
-
-def commit(project: str) -> str:
-    return hashlib.sha1(project.encode()).hexdigest()
-
-
-def step(project: str, key: str, variant: str | None, downloads: list, git_ref: str) -> dict:
-    options: dict = {}
-    if downloads:
-        entries = [
-            {"project_id": p, "variant": v, "git_ref": git_ref, "files": ["*.tar.zst"]}
-            for p, v in downloads
-        ]
-        options["download"] = {"projects": entries}
-    if variant:
-        options["upload"] = {"variant": variant, "git_ref": git_ref, "files": "out/*"}
-        options["promote"] = {"variant": variant, "git_ref": git_ref}
-    return {
-        "label": f"{project} {key}",
-        "key": key,
-        "command": "make",
-        "plugins": [{PLUGIN: options}],
-    }
-
-
-def pipeline(project: str, git_ref: str = MASTER) -> dict:
-    """The pipeline the project's generator prints for a build on master."""
-    return {"steps": [step(project, *s, git_ref) for s in STEPS[project]]}
-
-
-SHAPED = (
-    b"from qdb_pipeline import run\n\n\ndef generate_pipeline():\n    return None\n\n\n"
-    b'if __name__ == "__main__":\n    run(generate_pipeline)\n'
-)
-
-
-def tree(project: str, doc: dict | None = None) -> dict:
-    """The committed files: the template the pipeline comes from, and the runner's pipeline.py."""
-    template = doc if doc is not None else pipeline(project, "{git_ref}")
-    return {".buildkite/steps.yml": yaml.safe_dump(template), ".buildkite/pipeline.py": SHAPED}
-
-
-def fake_git() -> FakeGit:
-    return FakeGit(
-        refs={(url(p), MASTER): commit(p) for p in STEPS},
-        trees={(url(p), commit(p)): tree(p) for p in STEPS},
-    )
-
-
-def fake_pipelines(**facts: PipelineFacts) -> FakePipelines:
-    return FakePipelines({p: facts.get(p, PipelineFacts(p, url(p), True)) for p in STEPS})
-
-
-def made_plan(rebuild: str = "none"):
-    """The plan of app build 7 on master, as its plan step makes it."""
-    root = Root(APP, "master", commit(APP), ROOT_BUILD.id, 7, ROOT_BUILD.url, rebuild)
-    return make_plan(root, read_declaration(tree(APP), APP), fake_git(), fake_pipelines(), T - 100)
-
-
-PLAN = made_plan()
-
-
-def key(project: str) -> str:
-    return PLAN.nodes[project].key
-
-
-def held(project: str, variant: str, number: int) -> Pointer:
-    """The pointer of a variant of the project at its key, held by build ``number``."""
-    b = build_of(project, number)
-    return Pointer(
-        project, key(project), variant, MASTER, commit(project), b, "2025-11-17T12:00:00.000Z"
-    )
-
-
-def pointer_objects(*pointers: Pointer) -> dict:
-    return {
-        layout.snapshot_pointer("", p.project, p.key, p.variant): pointer.encode(p)
-        for p in pointers
-    }
-
-
-def record_objects(*records: Record) -> dict:
-    return {
-        layout.failure_record("", r.project, r.key, r.build.id): encode_record(r).encode()
-        for r in records
-    }
-
-
-def origin(project: str, number: int, plan_id: str = ROOT_BUILD.id) -> Origin:
-    return Origin(project, key(project), plan_id, build_of(project, number))
-
-
-ALL_HELD = (
-    held(CORE, LINUX, 30),
-    held(CORE, MACOS, 30),
-    held(LIB, LINUX, 20),
-    held(LIB, MACOS, 20),
-)
-
-
-class Gate:
-    """One gate step of a build of the chain of app build 7, over the fakes.
-
-    ``project`` names the build: app is the root, lib and core chain nodes
-    triggered by it. ``doc`` is what the step's command generated; ``objects``
-    the store's content; ``job`` changes the job.
-    """
-
-    def __init__(
-        self, tmp_path: Path, project: str, kind: str = "plan", doc=None, objects=None, **job
-    ):
-        self.store = MemoryStore(objects)
-        chain = project != APP
-        meta = {"snapshot-arrived": str(ARRIVED)}
-        self.agent = RecordingAgent(
-            meta_data=meta,
-            builds={ROOT_BUILD.id: {"snapshot-plan": encode_plan(PLAN)}} if chain else {},
-        )
-        self.git = fake_git()
-        self.pipelines = fake_pipelines()
-        self.checkout = FakeCheckout(commit(project), tree(project))
-        self.lines: list[str] = []
-        generated = tmp_path / f"{project}-{kind}.yml"
-        generated.write_text(yaml.safe_dump(doc if doc is not None else pipeline(project)))
-        self.job = steps.Job(
-            kind=kind,
-            pipeline=str(generated),
-            step_key={
-                "plan": "snapshot-enter",
-                "resume": "snapshot-resume",
-                "leave": "snapshot-leave",
-            }[kind],
-            project=project,
-            build=BUILDS[project],
-            branch="master",
-            command="make pipeline",
-            exit_status=0,
-            plan_id=ROOT_BUILD.id if chain else None,
-            needs=json.dumps(NEEDS[project]) if chain else None,
-            rebuild=None,
-        )
-        self.job = dataclasses.replace(self.job, **job)
-
-    @property
-    def edge(self) -> steps.Edge:
-        return steps.Edge(
-            store=self.store,
-            prefix="",
-            agent=self.agent,
-            git=self.git,
-            checkout=self.checkout,
-            pipelines=self.pipelines,
-            plugin_commit=lambda: PLUGIN_COMMIT,
-            clock=lambda: float(T),
-            log=self.lines.append,
-        )
-
-    def run(self) -> int:
-        step = {"plan": steps.enter, "resume": steps.resume, "leave": steps.leave}[self.job.kind]
-        return step(self.job, self.edge)
-
-    def fails(self) -> str:
-        with pytest.raises(ArtifactsError) as raised:
-            self.run()
-        return str(raised.value)
-
-    @property
-    def mode(self):
-        return self.agent.meta_data.get("snapshot-mode")
-
-    def records(self) -> list[Record]:
-        found = sorted(k for k in self.store.objects if k.startswith("_snapshot/v1/failures/"))
-        return [decode_record(self.store.objects[k].decode()) for k in found]
-
-    def uploaded(self) -> list:
-        return [yaml.safe_load(u) for u in self.agent.uploads]
-
-    def annotation(self, context: str = "snapshot") -> tuple[str, str]:
-        found = [(body, style) for body, style, c in self.agent.annotations if c == context]
-        return found[-1]
-
-
-def entries_of(doc: dict, step_key: str) -> list[dict]:
-    (s,) = [s for s in doc["steps"] if s.get("key") == step_key]
-    (options,) = [
-        v for p in s["plugins"] for k, v in p.items() if k.startswith("bureau14/qdb-artifacts")
-    ]
-    return options.get("download", {}).get("projects", [])
-
-
-def options_of(doc: dict, step_key: str) -> dict:
-    (s,) = [s for s in doc["steps"] if s.get("key") == step_key]
-    ((plugin, options),) = [item for p in s.get("plugins", []) for item in p.items()]
-    return {"plugin": plugin, **options}
-
 
 # ---------------------------------------------------------------------------
 # Enter, step 1: the command failed
@@ -956,167 +748,8 @@ def test_resume_runs_the_first_steps_again(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Leave
+# On an agent: the token, Buildkite's API, the plugin's own checkout
 # ---------------------------------------------------------------------------
-
-
-def leaving(tmp_path, project: str, outcomes: dict, objects=None, mode="built") -> Gate:
-    gate = Gate(tmp_path, project, kind="leave", objects=objects)
-    gate.agent.outcomes.update(outcomes)
-    if mode is not None:
-        gate.agent.meta_data["snapshot-mode"] = mode
-    gate.agent.meta_data["snapshot-promotes"] = json.dumps(
-        {LINUX: "build-linux", MACOS: "build-macos"}
-    )
-    if project == APP:
-        gate.agent.meta_data["snapshot-plan"] = encode_plan(PLAN)
-    return gate
-
-
-def test_leave_records_the_variants_whose_step_did_not_pass_and_that_have_no_pointer(tmp_path):
-    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED, "build-macos": "passed"})
-
-    assert gate.run() == 0
-
-    (record,) = gate.records()
-    assert record.failed == (Failed(LINUX, "build-linux", HARD_FAILED),)
-    assert (record.plan, record.build) == (ROOT_BUILD.id, BUILDS[CORE])
-    body, style = gate.annotation("snapshot-leave")
-    assert style == "error" and body.startswith("Snapshot failed")
-
-
-def test_leave_records_a_step_that_did_not_finish_with_an_empty_outcome(tmp_path):
-    gate = leaving(tmp_path, CORE, {"build-macos": "passed"})
-
-    gate.run()
-
-    (record,) = gate.records()
-    assert record.failed == (Failed(LINUX, "build-linux", ""),)
-
-
-def test_leave_records_nothing_when_every_step_passed(tmp_path):
-    gate = leaving(tmp_path, CORE, {"build-linux": "passed", "build-macos": "passed"})
-
-    gate.run()
-
-    assert gate.records() == [] and gate.agent.annotations == []
-    assert gate.store.calls == []
-
-
-@pytest.mark.parametrize(
-    "outcome", [HARD_FAILED, "soft_failed", ""], ids=["hard-failed", "soft-failed", "running-again"]
-)
-def test_leave_records_nothing_for_a_variant_whose_pointer_a_retried_job_wrote(tmp_path, outcome):
-    objects = pointer_objects(
-        Pointer(
-            CORE, key(CORE), LINUX, MASTER, commit(CORE), BUILDS[CORE], "2025-11-17T12:00:00.000Z"
-        )
-    )
-    gate = leaving(tmp_path, CORE, {"build-linux": outcome, "build-macos": "passed"}, objects)
-
-    gate.run()
-
-    assert gate.records() == []
-
-
-@pytest.mark.parametrize("mode", ["reused", "failed", None])
-def test_leave_records_nothing_unless_the_build_was_built(tmp_path, mode):
-    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED}, mode=mode)
-
-    assert gate.run() == 0
-
-    assert gate.store.calls == []
-
-
-def test_leave_of_a_root_without_a_snapshot_records_nothing(tmp_path):
-    gate = leaving(tmp_path, APP, {"build-linux": HARD_FAILED})
-    no_key = dataclasses.replace(
-        PLAN, nodes={**PLAN.nodes, APP: dataclasses.replace(PLAN.nodes[APP], key=None)}
-    )
-    gate.agent.meta_data["snapshot-plan"] = encode_plan(no_key)
-
-    gate.run()
-
-    assert gate.store.calls == []
-
-
-def test_a_retried_leave_leaves_its_record_as_it_is(tmp_path):
-    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED, "build-macos": "passed"})
-    gate.run()
-    first = dict(gate.store.objects)
-    gate.agent.outcomes["build-macos"] = HARD_FAILED
-
-    gate.run()
-
-    assert gate.store.objects == first
-    assert gate.lines[-1].endswith("exists; left as it is")
-
-
-def test_an_error_of_the_store_fails_leave_and_leaves_the_mode(tmp_path):
-    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED})
-    gate.store.refused.append("_snapshot/v1/failures/")
-
-    assert "AccessDenied" in gate.fails()
-    assert gate.mode == "built"
-    assert gate.annotation("snapshot-leave")[0].startswith(
-        "The snapshot step of `core` build 31 failed"
-    )
-
-
-# ---------------------------------------------------------------------------
-# The job and the real edge
-# ---------------------------------------------------------------------------
-
-JOB_ENV = {
-    "BUILDKITE_PIPELINE_SLUG": LIB,
-    "BUILDKITE_STEP_KEY": "snapshot-enter",
-    "BUILDKITE_BUILD_ID": BUILDS[LIB].id,
-    "BUILDKITE_BUILD_NUMBER": "21",
-    "BUILDKITE_BUILD_URL": BUILDS[LIB].url,
-    "BUILDKITE_BRANCH": "snapshot/feature",
-    "BUILDKITE_COMMAND": "make pipeline",
-    "BUILDKITE_COMMAND_EXIT_STATUS": "3",
-    "SNAPSHOT_PLAN": ROOT_BUILD.id,
-    "SNAPSHOT_NEEDS": '["linux"]',
-}
-
-
-def test_the_job_is_read_from_the_variables_the_agent_sets(monkeypatch):
-    for name, value in JOB_ENV.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.delenv("SNAPSHOT_REBUILD", raising=False)
-
-    job = steps.job_of("plan", ".buildkite/snapshot-pipeline.yml")
-
-    assert job == steps.Job(
-        kind="plan",
-        pipeline=".buildkite/snapshot-pipeline.yml",
-        step_key="snapshot-enter",
-        project=LIB,
-        build=BUILDS[LIB],
-        branch="snapshot/feature",
-        command="make pipeline",
-        exit_status=3,
-        plan_id=ROOT_BUILD.id,
-        needs='["linux"]',
-        rebuild=None,
-    )
-
-
-@pytest.mark.parametrize(
-    "name, value, named",
-    [
-        ("BUILDKITE_BUILD_ID", "build-7", "BUILDKITE_BUILD_ID"),
-        ("BUILDKITE_BUILD_URL", "http://ci.example/lib/21", "BUILDKITE_BUILD_URL"),
-        ("BUILDKITE_PIPELINE_SLUG", "Lib", "BUILDKITE_PIPELINE_SLUG"),
-    ],
-)
-def test_a_job_variable_of_the_wrong_form_is_refused(monkeypatch, name, value, named):
-    for n, v in {**JOB_ENV, name: value}.items():
-        monkeypatch.setenv(n, v)
-
-    with pytest.raises(ArtifactsError, match=named):
-        steps.job_of("plan", "p.yml")
 
 
 class FakeSsm:
@@ -1137,11 +770,11 @@ class FakeSsm:
 
 def test_the_token_is_the_variable_else_its_ssm_parameter(monkeypatch):
     monkeypatch.setenv("ARTIFACTS_BUILDKITE_TOKEN", "bkua_from-the-variable")
-    assert steps.buildkite_token(FakeSsm("bkua_from-ssm")) == "bkua_from-the-variable"
+    assert enter.buildkite_token(FakeSsm("bkua_from-ssm")) == "bkua_from-the-variable"
 
     monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN")
     ssm = FakeSsm("bkua_from-ssm")
-    assert steps.buildkite_token(ssm) == "bkua_from-ssm"
+    assert enter.buildkite_token(ssm) == "bkua_from-ssm"
     assert ssm.asked == ["/services/buildkite/credentials/artifacts/buildkite-api-token"]
 
 
@@ -1149,7 +782,7 @@ def test_without_a_token_the_message_names_where_one_is_read(monkeypatch):
     monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN", raising=False)
 
     with pytest.raises(ArtifactsError, match="set ARTIFACTS_BUILDKITE_TOKEN or the SSM parameter"):
-        steps.buildkite_token(FakeSsm(None))
+        enter.buildkite_token(FakeSsm(None))
 
 
 def test_the_api_is_asked_with_the_organisation_and_the_token_read_once(monkeypatch):
@@ -1157,11 +790,12 @@ def test_the_api_is_asked_with_the_organisation_and_the_token_read_once(monkeypa
     monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN", raising=False)
     asked = []
     monkeypatch.setattr(
-        "lib.snapshot.buildkite.fetch_pipeline",
+        enter,
+        "fetch_pipeline",
         lambda slug, organisation, token: asked.append((slug, organisation, token)) or slug,
     )
     ssm = FakeSsm("bkua_test-token-not-real")
-    pipelines = steps.buildkite_pipelines(ssm)
+    pipelines = enter.buildkite_pipelines(ssm)
     assert ssm.asked == []
 
     assert [pipelines(LIB), pipelines(CORE)] == [LIB, CORE]
@@ -1174,8 +808,8 @@ def test_the_api_is_asked_with_the_organisation_and_the_token_read_once(monkeypa
 
 
 def test_the_plugins_own_checkout_is_the_directory_of_its_hooks_and_library():
-    assert steps.PLUGIN_ROOT == Path(steps.__file__).resolve().parents[2]
-    assert (steps.PLUGIN_ROOT / "hooks" / "post-command").is_file()
+    assert enter.PLUGIN_ROOT == Path(enter.__file__).resolve().parents[2]
+    assert (enter.PLUGIN_ROOT / "hooks" / "post-command").is_file()
 
 
 def test_the_plugin_commit_is_the_head_of_the_plugins_own_checkout(
@@ -1183,6 +817,6 @@ def test_the_plugin_commit_is_the_head_of_the_plugins_own_checkout(
 ):
     checkout = new_repository(tmp_path / "plugin")
     head = commit_files(checkout, {"hooks/post-command": "#!/usr/bin/env bash\n"}, "the plugin")
-    monkeypatch.setattr(steps, "PLUGIN_ROOT", checkout)
+    monkeypatch.setattr(enter, "PLUGIN_ROOT", checkout)
 
-    assert steps.plugin_checkout_commit() == head
+    assert enter.plugin_checkout_commit() == head

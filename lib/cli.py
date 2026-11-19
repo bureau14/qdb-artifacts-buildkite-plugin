@@ -44,15 +44,19 @@ def pre_command():
 def run_gate_step(step):
     """Run the gate command of a gate step: plan (enter), resume or leave.
 
-    It runs also after a failed command, whose failure it records. The import
-    is here and not at the top: the planning half needs PyYAML, which only
-    the gate steps that read documents install, and no other job loads it.
+    It runs also after a failed command, whose failure it records. The imports
+    are here and not at the top: the planning half needs PyYAML, which only the
+    steps of plan and resume install, and no other job loads it. Leave imports
+    its own module only, which reads no document.
     """
-    from .snapshot import steps
-
     section(f":camera_with_flash: Snapshot {step.kind}")
-    command = {"plan": steps.enter, "resume": steps.resume, "leave": steps.leave}[step.kind]
-    return command(steps.job_of(step.kind, step.pipeline), steps.real_edge())
+    if step.kind == "leave":
+        from .snapshot import leave
+
+        return leave.run()
+    from .snapshot import enter
+
+    return enter.run(step.kind, step.pipeline)
 
 
 def post_command():

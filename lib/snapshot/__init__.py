@@ -4,8 +4,10 @@ Ordinary upload and download jobs never import this package. Its modules
 import each other and, of the rest of ``lib/``, the forms of values, the
 pointer and the library's error (``forms``, ``pointer``, ``errors``), so that
 the plan step reads a value by the form the job that wrote it checked. Only
-``steps``, the edge of the gate steps, opens the store as a job opens it and
-reads the job's options and variables.
+the modules of the gate steps (``job``, ``edge``, ``failing``, ``enter``,
+``leave``) read the job's options and variables and open the store as a job
+opens it. ``leave`` and the modules it imports read no document, so the step
+of leave runs without PyYAML.
 
 - ``canonical``: canonical JSON and the key of a snapshot.
 - ``configuration``: the artifacts plugin's configuration as written in a
@@ -37,7 +39,12 @@ reads the job's options and variables.
   it, the one resolution it writes into it, and the trigger and resume steps.
 - ``annotation``: the texts a gate step shows on the build page: the plan, a
   refusal, a failure and how to retry it.
-- ``steps``: enter, resume and leave, the decisions of the gate steps in the
-  specification's order, over the store, the agent, git, Buildkite's API,
-  the clock and the log.
+- ``job``: the job of a gate step, read once from the variables the agent sets.
+- ``edge``: what every gate step reads and changes (the store, the agent, the
+  checkout, the clock, the log), and the reads they share through it.
+- ``failing``: how a gate step fails: its record, its annotation, its mode.
+- ``enter``: enter and resume, the decisions of the plan step in the
+  specification's order, over the edge and what only the plan step reaches
+  (git, Buildkite's API, the plugin's own commit).
+- ``leave``: leave, which records the variants whose step did not pass.
 """
