@@ -57,10 +57,13 @@ def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
     worlds, graph_root, matrix
 ):
     """A root's first build compiles every project of its tree in one build, each after its
-    dependencies; every download of every node takes the build the plan names for that project
-    and variant; every project and variant has its pointer."""
+    dependencies, at the commit the root planned, although every dependency gets a new commit
+    while the chain runs; every download of every node takes the build the plan names for that
+    project and variant; every project and variant has its pointer."""
     graph, root = graph_root.graph, graph_root.node
     world = worlds(graph, matrix)
+    heads = {p: world.hosting.head(p) for p in graph}
+    world.at_gate = lambda build: world.commit(build.project)
 
     top = world.build(root)
 
@@ -73,6 +76,7 @@ def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
     downloads = {(d.build.project, d.project, d.variant): d.build_id for d in world.downloads}
     assert top.state == "passed"
     assert sorted(b.project for b in top.chain()) == sorted(projects)
+    assert {b.project: b.commit for b in top.chain()} == {p: heads[p] for p in projects}
     assert compiled_since(world, 0) == {(p, v) for p in projects for v in matrix}
     assert all(last[d] < first[c] for c in projects for d in graph[c])
     assert all(held[(p, v)].build.id == built[p] for p, v in held)

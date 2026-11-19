@@ -84,7 +84,7 @@ from .edge import (
 from .failing import Refusal, gated
 from .git import Git, RealGit, branch_ref
 from .job import Job, is_chain_node, job_of
-from .plan import Node, Plan, PlanError, encode_plan, short_commit
+from .plan import Plan, PlanError, encode_plan, short_commit
 from .planner import Pipelines, Root, make_plan, rebuild_setting
 from .records import (
     GENERATOR_FAILED,
@@ -214,10 +214,19 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
     return p
 
 
-def plan_of(job: Job, edge: PlanEdge, generated: Generated) -> tuple[Plan, Node]:
-    """3. A chain node loads the plan and checks its commit; a root makes it."""
-    p = chain_plan(job, edge) if is_chain_node(job) else root_plan(job, edge, generated)
-    return p, own_node(job, edge, p)
+# How step 3 comes to the plan: in enter (``entered_plan``) or in resume (``resumed_plan``).
+PlanOf = Callable[[Job, PlanEdge, Generated], Plan]
+
+
+def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
+    """3, enter. A chain node loads the plan of its chain; a root makes it."""
+    return chain_plan(job, edge) if is_chain_node(job) else root_plan(job, edge, generated)
+
+
+def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
+    """3, resume. Every build loads the plan of its chain, a root its own: the plan its enter
+    made, which names the commits the triggered builds build."""
+    return chain_plan(job, edge)
 
 
 def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[str]:
@@ -436,11 +445,15 @@ class Prepared:
     n: frozenset[str]
 
 
-def first_steps(job: Job, edge: PlanEdge) -> Prepared:
-    """Steps 1 to 5, the same in enter and resume."""
+def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
+    """Steps 1 to 5, the same in enter and resume but for how step 3 comes to the plan.
+
+    Step 3 also checks that the plan plans this build at the commit it checked out.
+    """
     check_command(job, edge)
     generated = generated_pipeline(job, edge)
-    p, node = plan_of(job, edge, generated)
+    p = plan_of(job, edge, generated)
+    node = own_node(job, edge, p)
     if node.key is None:
         # 4. Only a root can be here: its declaration holds a latest successful dependency.
         edge.log(f"{job.project} has no snapshot: it is built, and never reused")
@@ -460,7 +473,7 @@ def own_pointers(job: Job, edge: Edge, prepared: Prepared) -> dict[str, Pointer 
 
 
 def enter_decisions(job: Job, edge: PlanEdge) -> None:
-    prepared = first_steps(job, edge)
+    prepared = first_steps(job, edge, entered_plan)
     held = own_pointers(job, edge, prepared)
     if prepared.origin is not None:
         m = frozenset(held) - frozenset(held_only(held))
@@ -480,7 +493,7 @@ def enter_decisions(job: Job, edge: PlanEdge) -> None:
 
 
 def resume_decisions(job: Job, edge: PlanEdge) -> None:
-    prepared = first_steps(job, edge)
+    prepared = first_steps(job, edge, resumed_plan)
     existing = held_only(own_pointers(job, edge, prepared))
     needs = needed_variants(prepared.generated.doc, job.project, existing)
     dependencies = dependency_pointers(edge, prepared.plan, needs)
@@ -525,8 +538,9 @@ def enter(job: Job, edge: PlanEdge) -> int:
 def resume(job: Job, edge: PlanEdge) -> int:
     """After the triggered builds: build, or fail with the cause.
 
-    Steps 1 to 5 of enter; then, for each dependency variant still missing, a
-    failure record of its key that carries this plan is its cause, and
+    Steps 1 to 5 of enter, except that in step 3 a root, too, loads the plan:
+    the one its enter made. Then, for each dependency variant still missing,
+    a failure record of its key that carries this plan is its cause, and
     without one the build of that dependency left no record. Resume never
     triggers. With nothing missing it goes on at step 11.
     """
