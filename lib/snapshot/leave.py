@@ -26,7 +26,7 @@ from .edge import (
     own_node,
     pointers_at,
 )
-from .failing import EDGE_ERRORS, gated
+from .failing import gated
 from .git import RealGit
 from .job import Job, job_of
 from .records import leave_record, unpassed
@@ -86,7 +86,7 @@ def leave(job: Job, edge: Edge) -> int:
     itself; the pointer decides, never the record. Leave sets no mode: its
     command failed the step already when no plan step set one.
     """
-    return gated(job, edge, leave_decisions, EDGE_ERRORS, LEAVE_CONTEXT, mark=False)
+    return gated(job, edge, leave_decisions, LEAVE_CONTEXT, mark=False)
 
 
 # ---------------------------------------------------------------------------

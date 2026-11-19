@@ -41,7 +41,7 @@ from .annotation import (
     refusal_annotation,
     reused_annotation,
 )
-from .buildkite import BuildkiteError, PipelineFacts, fetch_pipeline
+from .buildkite import PipelineFacts, fetch_pipeline
 from .canonical import canonical_json
 from .declaration import (
     Reading,
@@ -80,7 +80,7 @@ from .edge import (
     pointers_at,
     stored_records,
 )
-from .failing import EDGE_ERRORS, Refusal, gated, survive
+from .failing import Refusal, gated
 from .git import Git, RealGit
 from .job import Job, is_chain_node, job_of, own_ref
 from .plan import Node, Plan, PlanError, encode_plan
@@ -200,9 +200,7 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
     """3, a root: make the plan (sections 3 and 4), write it, annotate the build with it.
 
-    A plan that cannot be made fails the build with its message. An annotation
-    the agent refuses is logged: the plan is written, and the build is sound
-    without its picture.
+    A plan that cannot be made fails the build with its message.
     """
     try:
         root = Root(
@@ -220,10 +218,7 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
     edge.agent.meta_data_set(PLAN, text)
-    annotation = plan_annotation(p, job.project)
-    survive(
-        edge, lambda: edge.agent.annotate(annotation, "info", PLAN_CONTEXT), "annotate the plan"
-    )
+    edge.agent.annotate(plan_annotation(p, job.project), "info", PLAN_CONTEXT)
     return p
 
 
@@ -276,18 +271,10 @@ def is_reused(d: frozenset[str], n: frozenset[str], m: frozenset[str]) -> bool:
 def reuse(
     job: Job, edge: Edge, p: Plan, held: Mapping[str, Pointer | None], n: frozenset[str]
 ) -> None:
-    """6. Mode ``reused``, and the builds that hold the variants asked for on the build page.
-
-    An annotation the agent refuses is logged: the build is reused all the same.
-    """
+    """6. Mode ``reused``, and the builds that hold the variants asked for on the build page."""
     builds = {v: held[v].build for v in n if held[v] is not None}
     edge.agent.meta_data_set(MODE, REUSED)
-    annotation = reused_annotation(p, job.project, builds)
-    survive(
-        edge,
-        lambda: edge.agent.annotate(annotation, "success", STEP_CONTEXT),
-        "annotate the builds that hold the variants",
-    )
+    edge.agent.annotate(reused_annotation(p, job.project, builds), "success", STEP_CONTEXT)
     edge.log(f"{job.project} is reused: every variant asked for is held")
 
 
@@ -510,10 +497,6 @@ def resume_decisions(job: Job, edge: PlanEdge) -> None:
     build_pipeline(job, edge, prepared.generated, prepared.key, dependencies, existing)
 
 
-# The errors of enter and resume: the edge's, and those of the modules that read documents.
-ENTER_ERRORS = (*EDGE_ERRORS, DocumentError, BuildkiteError)
-
-
 def enter(job: Job, edge: PlanEdge) -> int:
     """The plan step: decide what this build does.
 
@@ -539,7 +522,7 @@ def enter(job: Job, edge: PlanEdge) -> int:
         resume step; done.
     11. Else mode built, and upload the rewritten pipeline; done.
     """
-    return gated(job, edge, enter_decisions, ENTER_ERRORS, STEP_CONTEXT, mark=True)
+    return gated(job, edge, enter_decisions, STEP_CONTEXT, mark=True)
 
 
 def resume(job: Job, edge: PlanEdge) -> int:
@@ -550,7 +533,7 @@ def resume(job: Job, edge: PlanEdge) -> int:
     without one the build of that dependency left no record. Resume never
     triggers. With nothing missing it goes on at step 11.
     """
-    return gated(job, edge, resume_decisions, ENTER_ERRORS, STEP_CONTEXT, mark=True)
+    return gated(job, edge, resume_decisions, STEP_CONTEXT, mark=True)
 
 
 # ---------------------------------------------------------------------------

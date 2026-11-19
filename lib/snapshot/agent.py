@@ -25,16 +25,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from ..errors import ArtifactsError
+
 # ``buildkite-agent meta-data exists`` exits with this status when the key is
 # not set; it exits 1 when the build cannot be read.
 META_DATA_ABSENT = 100
 
 
-class AgentError(RuntimeError):
-    """A ``buildkite-agent`` call failed."""
-
-
-class MetaDataAbsent(AgentError):
+class MetaDataAbsent(ArtifactsError):
     """``meta_data_get`` was asked for a key that is not set."""
 
 
@@ -91,12 +89,12 @@ def run_process(args: Sequence[str], stdin: str | None) -> Outcome:
     return Outcome(p.returncode, p.stdout, p.stderr)
 
 
-def failure(o: Outcome, args: Sequence[str]) -> AgentError:
-    return AgentError(f"{' '.join(args)} failed ({o.returncode}): {o.stderr.strip()}")
+def failure(o: Outcome, args: Sequence[str]) -> ArtifactsError:
+    return ArtifactsError(f"{' '.join(args)} failed ({o.returncode}): {o.stderr.strip()}")
 
 
 def checked(o: Outcome, args: Sequence[str]) -> str:
-    """The standard output of a command that exited 0; ``AgentError`` otherwise."""
+    """The standard output of a command that exited 0; ``ArtifactsError`` otherwise."""
     if o.returncode != 0:
         raise failure(o, args)
     return o.stdout
