@@ -30,7 +30,6 @@ class Job:
 
     kind: str
     pipeline: str | None
-    step_key: str
     project: str
     build: Build
     branch: str
@@ -63,7 +62,6 @@ def job_of(kind: str, pipeline: str | None) -> Job:
     return Job(
         kind=kind,
         pipeline=pipeline,
-        step_key=job_variable("BUILDKITE_STEP_KEY", kind),
         project=project,
         build=checked_build(job_build(kind)),
         branch=os.environ.get("BUILDKITE_BRANCH", ""),

@@ -11,11 +11,11 @@ has read:
 - ``unpassed`` and ``leave_record``: the variants whose step did not pass,
   whose pointers the leave step reads, and its record of those that have no
   pointer;
-- ``shared_failure`` and ``shared_record``: step 8, the failure of a build of
+- ``shared_failure`` and ``shared_record``: step 7, the failure of a build of
   the same key that this build waited behind at the gate;
-- ``chain_failure`` and ``caused_record``: step 10 and resume, a dependency
+- ``chain_failure`` and ``caused_record``: step 9 and resume, a dependency
   that failed earlier in this chain;
-- ``reason_record``: steps 1, 3 and 6, a build that failed before it built.
+- ``reason_record``: steps 1, 2 and 5, a build that failed before it built.
 
 A record never says whether a variant exists: the pointer does. A record only
 saves a waiting build from compiling in vain, and lets a consumer name the
@@ -60,7 +60,7 @@ NOT_DECLARED = "not_declared"
 REASONS = (GENERATOR_FAILED, RULE, NOT_DECLARED)
 
 # The outcome of a step that failed the build; the only one another build
-# shares (step 8). ``buildkite-agent step get outcome`` gives it.
+# shares (step 7). ``buildkite-agent step get outcome`` gives it.
 HARD_FAILED = "hard_failed"
 PASSED = "passed"
 
@@ -370,7 +370,7 @@ def leave_record(
 
 
 # ---------------------------------------------------------------------------
-# Step 8: the failure of a build this build waited behind
+# Step 7: the failure of a build this build waited behind
 # ---------------------------------------------------------------------------
 
 
@@ -378,7 +378,7 @@ def recorded_time(r: Record) -> float:
     """When ``r`` was recorded, in epoch seconds to the millisecond: its ``recorded_at``.
 
     ``recorded_at_epoch`` is the same time to the second, too coarse for the
-    five seconds of step 8.
+    five seconds of step 7.
     """
     return datetime.datetime.strptime(r.recorded_at, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
@@ -423,7 +423,7 @@ def shared_record(origin: Origin, source: Record, wanted: Iterable[str], now: fl
 
 
 # ---------------------------------------------------------------------------
-# Step 10 and resume: a dependency that failed in this chain
+# Step 9 and resume: a dependency that failed in this chain
 # ---------------------------------------------------------------------------
 
 

@@ -72,17 +72,14 @@ from .edge import (
     PLAN,
     PROMOTES,
     REUSED,
-    UPLOADED,
     Edge,
     arrival,
     chain_plan,
     chain_records,
     held_only,
-    meta_data,
     opened_store,
     origin_of,
     own_node,
-    own_plan,
     pointers_at,
     stored_records,
 )
@@ -143,7 +140,7 @@ def reason_refusal(
 def chain_origin(job: Job, edge: Edge) -> Origin | None:
     """What a record of this build says of it, for a chain node with a key; None for a root.
 
-    A root knows no key before it made its plan (step 4).
+    A root knows no key before it made its plan (step 3).
     """
     if not is_chain_node(job):
         return None
@@ -153,17 +150,12 @@ def chain_origin(job: Job, edge: Edge) -> Origin | None:
 
 
 # ---------------------------------------------------------------------------
-# Steps 1 to 6, of enter and of resume
+# Steps 1 to 5, of enter and of resume
 # ---------------------------------------------------------------------------
 
 
-def uploaded_before(job: Job, edge: Edge) -> bool:
-    """1. The step's marker holds this build's id: a retry after the upload."""
-    return meta_data(edge, UPLOADED + job.step_key) == job.build.id
-
-
 def check_command(job: Job, edge: Edge) -> None:
-    """2. The command failed: record ``generator_failed`` when a chain node; fail."""
+    """1. The command failed: record ``generator_failed`` when a chain node; fail."""
     if job.exit_status != 0:
         message = (
             f"the command exited {job.exit_status}: it generates the pipeline into "
@@ -182,7 +174,7 @@ class Generated:
 
 
 def generated_pipeline(job: Job, edge: Edge) -> Generated:
-    """3. Check the rule of section 2; failing, record ``rule`` when a chain node; fail.
+    """2. Check the rule of section 2; failing, record ``rule`` when a chain node; fail.
 
     A file the command did not leave, or one that does not load, is the
     generator's failure. A template of the build's own commit that does not
@@ -209,30 +201,28 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
 
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
-    """4, a root: make the plan (sections 3 and 4), write it, annotate the build with it.
+    """3, a root: make the plan (sections 3 and 4), write it, annotate the build with it.
 
-    A retried step loads the plan it wrote. A plan that cannot be made fails
-    the build with its message. An annotation the agent refuses is logged: the
-    plan is written, and the build is sound without its picture.
+    A plan that cannot be made fails the build with its message. An annotation
+    the agent refuses is logged: the plan is written, and the build is sound
+    without its picture.
     """
-    p = own_plan(job, edge)
-    if p is None:
-        try:
-            root = Root(
-                project=job.project,
-                branch=job.branch,
-                commit=edge.checkout.head_commit(),
-                build_id=job.build.id,
-                build_number=job.build.number,
-                build_url=job.build.url,
-                rebuild=rebuild_setting(job.rebuild),
-            )
-            p = make_plan(root, generated.reading, edge.git, edge.pipelines, edge.clock())
-            text = encode_plan(p)
-        except PlanError as exc:
-            annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
-            raise Refusal(str(exc), annotation) from exc
-        edge.agent.meta_data_set(PLAN, text)
+    try:
+        root = Root(
+            project=job.project,
+            branch=job.branch,
+            commit=edge.checkout.head_commit(),
+            build_id=job.build.id,
+            build_number=job.build.number,
+            build_url=job.build.url,
+            rebuild=rebuild_setting(job.rebuild),
+        )
+        p = make_plan(root, generated.reading, edge.git, edge.pipelines, edge.clock())
+        text = encode_plan(p)
+    except PlanError as exc:
+        annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
+        raise Refusal(str(exc), annotation) from exc
+    edge.agent.meta_data_set(PLAN, text)
     annotation = plan_annotation(p, job.project)
     survive(
         edge, lambda: edge.agent.annotate(annotation, "info", PLAN_CONTEXT), "annotate the plan"
@@ -241,13 +231,13 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
 
 
 def plan_of(job: Job, edge: PlanEdge, generated: Generated) -> tuple[Plan, Node]:
-    """4. A chain node loads the plan and checks its commit; a root makes it."""
+    """3. A chain node loads the plan and checks its commit; a root makes it."""
     p = chain_plan(job, edge) if is_chain_node(job) else root_plan(job, edge, generated)
     return p, own_node(job, edge, p)
 
 
 def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[str]:
-    """6. ``D``, the variants this pipeline promotes; a variant promoted twice fails, as the rule.
+    """5. ``D``, the variants this pipeline promotes; a variant promoted twice fails, as the rule.
 
     Two steps that promote one variant break a rule the plan step holds a
     pipeline that has a snapshot to, so the record's reason is ``rule``.
@@ -259,7 +249,7 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
 
 
 def asked(job: Job, d: frozenset[str]) -> frozenset[str]:
-    """6. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
+    """5. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
     if not is_chain_node(job):
         return d
     try:
@@ -277,7 +267,7 @@ def asked(job: Job, d: frozenset[str]) -> frozenset[str]:
 def check_declared(
     job: Job, edge: Edge, n: frozenset[str], d: frozenset[str], origin: Origin
 ) -> None:
-    """6. A variant of ``N`` that is not in ``D``: record ``not_declared``; fail. Nothing compiles."""
+    """5. A variant of ``N`` that is not in ``D``: record ``not_declared``; fail. Nothing compiles."""
     undeclared = sorted(n - d)
     if undeclared:
         message = (
@@ -288,19 +278,19 @@ def check_declared(
 
 
 # ---------------------------------------------------------------------------
-# Steps 7 and 8, of enter
+# Steps 6 and 7, of enter
 # ---------------------------------------------------------------------------
 
 
 def is_reused(d: frozenset[str], n: frozenset[str], m: frozenset[str]) -> bool:
-    """7. ``D`` is not empty and no variant of ``N`` is in ``M``, the variants without a pointer."""
+    """6. ``D`` is not empty and no variant of ``N`` is in ``M``, the variants without a pointer."""
     return bool(d) and not (n & m)
 
 
 def reuse(
     job: Job, edge: Edge, p: Plan, held: Mapping[str, Pointer | None], n: frozenset[str]
 ) -> None:
-    """7. Mode ``reused``, and the builds that hold the variants asked for on the build page.
+    """6. Mode ``reused``, and the builds that hold the variants asked for on the build page.
 
     An annotation the agent refuses is logged: the build is reused all the same.
     """
@@ -316,7 +306,7 @@ def reuse(
 
 
 def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozenset[str]) -> None:
-    """8. A build of ``K`` failed on every wanted variant while this one waited behind it: fail.
+    """7. A build of ``K`` failed on every wanted variant while this one waited behind it: fail.
 
     The own record copies those entries and names that build under
     ``shared_with``. An empty outcome or any other state is not a failure.
@@ -336,7 +326,7 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
 
 
 # ---------------------------------------------------------------------------
-# Steps 9 to 12
+# Steps 8 to 11
 # ---------------------------------------------------------------------------
 
 
@@ -351,7 +341,7 @@ def dependency_key(p: Plan, project: str) -> str:
 def dependency_pointers(
     edge: Edge, p: Plan, needs: Mapping[str, frozenset[str]]
 ) -> dict[tuple[str, str], Pointer | None]:
-    """9. The pointer of each variant of each dependency at its key; None for a missing one."""
+    """8. The pointer of each variant of each dependency at its key; None for a missing one."""
     return {
         (project, v): found
         for project, variants in sorted(needs.items())
@@ -362,7 +352,7 @@ def dependency_pointers(
 def missing_variants(
     held: Mapping[tuple[str, str], Pointer | None],
 ) -> dict[str, tuple[str, ...]]:
-    """9. The variants of each dependency that have no pointer at its key, sorted."""
+    """8. The variants of each dependency that have no pointer at its key, sorted."""
     missing: dict[str, list[str]] = {}
     for (project, v), found in sorted(held.items()):
         if found is None:
@@ -399,7 +389,7 @@ def failed_in_chain(
     missing: Mapping[str, tuple[str, ...]],
     origin: Origin | None,
 ) -> None:
-    """10. A dependency with a missing variant failed earlier in this chain: fail, triggering nothing.
+    """9. A dependency with a missing variant failed earlier in this chain: fail, triggering nothing.
 
     Its failure record of ``key(P)`` carries this plan. The own record names it
     under ``caused_by``. Within one chain a key is built at most once.
@@ -410,10 +400,6 @@ def failed_in_chain(
         fail_with_causes(job, edge, p, causes, origin)
 
 
-def mark_uploaded(job: Job, edge: Edge) -> None:
-    edge.agent.meta_data_set(UPLOADED + job.step_key, job.build.id)
-
-
 def trigger(
     job: Job,
     edge: PlanEdge,
@@ -421,7 +407,7 @@ def trigger(
     needs: Mapping[str, frozenset[str]],
     missing: Mapping[str, tuple[str, ...]],
 ) -> None:
-    """11. One trigger step per dependency with a missing variant, and the resume step.
+    """10. One trigger step per dependency with a missing variant, and the resume step.
 
     Each trigger step hands down every variant this pipeline's entries name
     for its dependency. The resume step runs this step's command again.
@@ -431,7 +417,6 @@ def trigger(
     wanted = {project: needs[project] for project in missing}
     document = resume_pipeline(p, wanted, job.command, edge.plugin_commit(), job.pipeline or "")
     edge.agent.pipeline_upload(dump_written(document))
-    mark_uploaded(job, edge)
     edge.log(f"triggered {', '.join(sorted(missing))}; the resume step goes on when they end")
 
 
@@ -443,13 +428,13 @@ def build_pipeline(
     held: Mapping[tuple[str, str], Pointer | None],
     existing: Mapping[str, Pointer],
 ) -> None:
-    """12. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
+    """11. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
 
     With a key, ``snapshot-promotes`` names the step of each variant that is
     built: a replaced step promotes nothing, so leave asks for no outcome of it.
     The marks leave reads are set before the upload, so that no uploaded step
     runs in a build without them; an upload the agent refuses then fails the
-    step, which sets the mode ``failed``. The marker of step 1 comes last.
+    step, which sets the mode ``failed``.
     """
     dependencies = held_only(held)
     rewrite = Rewrite(job.project, key, edge.plugin_commit(), dependencies, existing)
@@ -460,7 +445,6 @@ def build_pipeline(
         edge.agent.meta_data_set(PROMOTES, promotes)
     edge.agent.meta_data_set(MODE, BUILT)
     edge.agent.pipeline_upload(document)
-    mark_uploaded(job, edge)
     edge.log(f"{job.project} builds: uploaded the pipeline with {len(dependencies)} builds in it")
 
 
@@ -471,9 +455,9 @@ def build_pipeline(
 
 @dataclass(frozen=True)
 class Prepared:
-    """What steps 1 to 6 found: the pipeline, the plan, the own key and origin, ``D`` and ``N``.
+    """What steps 1 to 5 found: the pipeline, the plan, the own key and origin, ``D`` and ``N``.
 
-    Without a key (step 5) there is no origin, and ``D`` and ``N`` are empty.
+    Without a key (step 4) there is no origin, and ``D`` and ``N`` are empty.
     """
 
     generated: Generated
@@ -484,25 +468,13 @@ class Prepared:
     n: frozenset[str]
 
 
-def first_steps(job: Job, edge: PlanEdge) -> Prepared | None:
-    """Steps 1 to 6, the same in enter and resume; None when the step uploaded before (1).
-
-    Once the step uploaded, the build goes as it uploaded, also when a retry
-    of the step's command fails.
-    """
-    if uploaded_before(job, edge):
-        edge.log(f"{job.step_key} uploaded in this build before; nothing more to do")
-        if job.exit_status != 0:
-            edge.log(
-                f"the command exited {job.exit_status} this time; "
-                "the build goes on as this step uploaded"
-            )
-        return None
+def first_steps(job: Job, edge: PlanEdge) -> Prepared:
+    """Steps 1 to 5, the same in enter and resume."""
     check_command(job, edge)
     generated = generated_pipeline(job, edge)
     p, node = plan_of(job, edge, generated)
     if node.key is None:
-        # 5. Only a root can be here: its declaration holds a latest successful dependency.
+        # 4. Only a root can be here: its declaration holds a latest successful dependency.
         edge.log(f"{job.project} has no snapshot: it is built, and never reused")
         return Prepared(generated, p, None, None, frozenset(), frozenset())
     origin = origin_of(job, p, node.key)
@@ -521,8 +493,6 @@ def own_pointers(job: Job, edge: Edge, prepared: Prepared) -> dict[str, Pointer 
 
 def enter_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge)
-    if prepared is None:
-        return
     held = own_pointers(job, edge, prepared)
     if prepared.origin is not None:
         m = frozenset(held) - frozenset(held_only(held))
@@ -543,8 +513,6 @@ def enter_decisions(job: Job, edge: PlanEdge) -> None:
 
 def resume_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge)
-    if prepared is None:
-        return
     existing = held_only(own_pointers(job, edge, prepared))
     needs = needed_variants(prepared.generated.doc, job.project, existing)
     dependencies = dependency_pointers(edge, prepared.plan, needs)
@@ -565,30 +533,27 @@ ENTER_ERRORS = (*EDGE_ERRORS, DocumentError, BuildkiteError)
 def enter(job: Job, edge: PlanEdge) -> int:
     """The plan step: decide what this build does.
 
-    1. The step's marker holds this build's id (a retry after the upload):
-       done. Once the step uploaded, the build goes as it uploaded, also when
-       the command of a retry fails.
-    2. The command failed: record ``generator_failed`` when a chain node; fail.
-    3. The generated pipeline breaks the rule of section 2: record ``rule``
+    1. The command failed: record ``generator_failed`` when a chain node; fail.
+    2. The generated pipeline breaks the rule of section 2: record ``rule``
        when a chain node; fail.
-    4. A chain node loads the plan and checks its commit; a root makes the
+    3. A chain node loads the plan and checks its commit; a root makes the
        plan, writes it and annotates the build with it. A plan that cannot be
        made fails the build with its message.
-    5. The own project has no snapshot: go to 9 with no key.
-    6. ``D`` is what this pipeline promotes, a variant promoted twice failing;
+    4. The own project has no snapshot: go to 8 with no key.
+    5. ``D`` is what this pipeline promotes, a variant promoted twice failing;
        ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A variant of
        ``N`` not in ``D``: record ``not_declared``; fail.
-    7. ``D`` is not empty and every variant of ``N`` has a pointer at ``K``:
+    6. ``D`` is not empty and every variant of ``N`` has a pointer at ``K``:
        mode reused; done.
-    8. A build of ``K`` failed on the wanted variants while this one waited:
+    7. A build of ``K`` failed on the wanted variants while this one waited:
        record its failure as shared; fail.
-    9. For each direct snapshot dependency, the variants the kept steps name,
+    8. For each direct snapshot dependency, the variants the kept steps name,
        and which of them have no pointer at its key.
-    10. A dependency with a missing variant failed earlier in this chain:
-        record the cause; fail. Nothing is triggered.
-    11. Some are missing: upload a trigger step per such dependency and the
+    9. A dependency with a missing variant failed earlier in this chain:
+       record the cause; fail. Nothing is triggered.
+    10. Some are missing: upload a trigger step per such dependency and the
         resume step; done.
-    12. Else mode built, and upload the rewritten pipeline; done.
+    11. Else mode built, and upload the rewritten pipeline; done.
     """
     return gated(job, edge, enter_decisions, ENTER_ERRORS, STEP_CONTEXT, mark=True)
 
@@ -596,10 +561,10 @@ def enter(job: Job, edge: PlanEdge) -> int:
 def resume(job: Job, edge: PlanEdge) -> int:
     """After the triggered builds: build, or fail with the cause.
 
-    Steps 1 to 6 of enter, with its own marker; then, for each dependency
-    variant still missing, a failure record of its key that carries this plan
-    is its cause, and without one the build of that dependency left no record.
-    Resume never triggers. With nothing missing it goes on at step 12.
+    Steps 1 to 5 of enter; then, for each dependency variant still missing, a
+    failure record of its key that carries this plan is its cause, and
+    without one the build of that dependency left no record. Resume never
+    triggers. With nothing missing it goes on at step 11.
     """
     return gated(job, edge, resume_decisions, ENTER_ERRORS, STEP_CONTEXT, mark=True)
 

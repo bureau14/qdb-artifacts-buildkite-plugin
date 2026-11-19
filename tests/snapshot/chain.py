@@ -365,11 +365,10 @@ class World:
             plugin_commit=lambda: PLUGIN_COMMIT,
         )
 
-    def gate_job(self, build: Build, kind: str, step_key: str, path) -> Job:
+    def gate_job(self, build: Build, kind: str, path) -> Job:
         return Job(
             kind=kind,
             pipeline=path,
-            step_key=step_key,
             project=build.project,
             build=build.info,
             branch=build.branch,
@@ -394,7 +393,7 @@ class World:
         path = self.directory / f"{build.project}-{build.number}-{kind}.yml"
         text = self.hosting.trees[build.commit][".buildkite/steps.yml"].decode()
         path.write_text(generated(text, "refs/heads/" + build.branch))
-        job = self.gate_job(build, kind, step["key"], str(path))
+        job = self.gate_job(build, kind, str(path))
         uploads = self.agents.uploads[build.id]
         before = len(uploads)
         outcome = self.outcome(build, lambda: decide(job, self.edge(build)))
@@ -405,7 +404,7 @@ class World:
 
     def leave(self, build: Build) -> str:
         """The leave step: its command fails when no plan step set a mode; its plugin records."""
-        job = self.gate_job(build, "leave", "snapshot-leave", None)
+        job = self.gate_job(build, "leave", None)
         outcome = self.outcome(build, lambda: leave(job, self.edge(build)))
         return outcome if "snapshot-mode" in self.agents.meta_data[build.id] else "hard_failed"
 

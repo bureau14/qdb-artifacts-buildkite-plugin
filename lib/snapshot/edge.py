@@ -6,12 +6,11 @@ decisions of the gate steps are plain functions of what these return, and a
 test hands them fakes. The plan step reaches further; ``enter.PlanEdge`` adds
 its parts.
 
-The steps keep no state but these marks on their own build, which a retried
-step and leave read back:
+The steps keep no state but these marks on their own build, which leave reads
+back:
 
     snapshot-mode                  reused, built or failed
     snapshot-promotes              {variant: step key} of the steps that promote
-    snapshot-uploaded-<step key>   this build's id, once the step has uploaded
 
 The reads here are those of more than one step: meta-data of this build or of
 another, the pointers at a key, the failure records of a key, the arrival at
@@ -42,7 +41,6 @@ from .shown import shown_text, shown_value
 MODE = "snapshot-mode"
 REUSED, BUILT, FAILED = "reused", "built", "failed"
 PROMOTES = "snapshot-promotes"
-UPLOADED = "snapshot-uploaded-"
 PLAN = "snapshot-plan"
 ARRIVED = "snapshot-arrived"
 
@@ -177,12 +175,7 @@ def chain_plan(job: Job, edge: Edge) -> Plan:
 def own_plan(job: Job, edge: Edge) -> Plan | None:
     """The plan a root wrote on its own build; None before it wrote one."""
     text = meta_data(edge, PLAN)
-    if text is None:
-        return None
-    p = decode_plan(text)
-    if p.id != job.build.id or p.root.project != job.project:
-        raise PlanError(f"this build holds the plan {p.id} of {p.root.project}")
-    return p
+    return None if text is None else decode_plan(text)
 
 
 def own_node(job: Job, edge: Edge, p: Plan) -> Node:
