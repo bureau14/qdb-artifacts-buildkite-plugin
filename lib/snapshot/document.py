@@ -12,9 +12,7 @@ downloads an explicit build with the code path it already has.
 Values in, values out: nothing here talks to the bucket, to git, to Buildkite
 or to the agent. The caller hands in the facts as plain values (``Pointer``,
 ``Rewrite``, the plan). A function that writes takes a document and returns a
-new one; the document handed in is never changed. Within one rewrite the copy
-keeps the sharing of the original, so an object the document shares through
-aliases is rewritten once and stays shared.
+new one; the document handed in is never changed.
 
 Download entries, plugin configurations and option keys are those of the
 ``configuration`` module, so the reader of templates, the rule and the rewrite
@@ -44,7 +42,6 @@ from .configuration import (
     STRICT_REF_MATCH,
     UPLOAD,
     VARIANT,
-    EntryError,
     download_entries,
     is_plugin_key,
     mappings,
@@ -55,7 +52,6 @@ from .configuration import (
 )
 from .declaration import (
     SNAPSHOT,
-    STEP_KEY_FIELDS,
     entry_type,
     leaf_steps,
     other_project,
@@ -153,22 +149,6 @@ def escaped(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def option(options: Mapping[Any, Any], name: str, where: str) -> Any:
-    """``configuration.option_value``, an option given twice with different values an error."""
-    try:
-        return option_value(options, name)
-    except EntryError as exc:
-        raise DocumentError(f"{where}: {exc}") from exc
-
-
-def project_of(options: Mapping[Any, Any], own: str, where: str) -> str | None:
-    """The other project a download entry or a block names; None for the own project."""
-    try:
-        return other_project(options, own)
-    except EntryError as exc:
-        raise DocumentError(f"{where}: {exc}") from exc
-
-
 def named_variant(options: Mapping[Any, Any], where: str) -> str | None:
     """The variant an entry or a block names, as the plugin receives it; None when it names none.
 
@@ -176,7 +156,7 @@ def named_variant(options: Mapping[Any, Any], where: str) -> str | None:
     or a mapping as variables of other names, so the plugin reads no variant
     from one. The text is as written: it may hold what the upload interpolates.
     """
-    v = option(options, VARIANT, where)
+    v = option_value(options, VARIANT)
     if v is None or v == "" or isinstance(v, (dict, list)):
         return None
     if isinstance(v, bool):
@@ -200,15 +180,12 @@ def variant_of(options: Mapping[Any, Any], where: str) -> str | None:
 def without_options(options: Mapping[Any, Any], names: Iterable[str]) -> dict[Any, Any]:
     """``options`` without every key the agent reads as one of ``names``."""
     dropped = tuple(names)
-    return {k: v for k, v in options.items() if not any(reads_as(k, v, n) for n in dropped)}
+    return {k: v for k, v in options.items() if not any(reads_as(k, n) for n in dropped)}
 
 
 def replace_content(target: dict[Any, Any], content: Mapping[Any, Any]) -> None:
-    """Give the mapping ``target`` the items of ``content``, keeping it the same object.
-
-    Every place of the document that shares ``target`` then sees the change:
-    a shared object is rewritten once and stays shared.
-    """
+    """Give the mapping ``target`` the items of ``content``, keeping it the same object, so
+    the document that holds it holds the change."""
     items = list(content.items())
     target.clear()
     target.update(items)
@@ -219,31 +196,23 @@ def replace_content(target: dict[Any, Any], content: Mapping[Any, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def entries_of(doc: Any) -> list[dict[str, Any]]:
-    """``configuration.download_entries``, a block given twice with different values an error."""
-    try:
-        return download_entries(doc)
-    except EntryError as exc:
-        raise DocumentError(f"a download block: {exc}") from exc
-
-
 def snapshot_dependencies(doc: Any, own: str) -> list[tuple[str, dict[str, Any]]]:
-    """``(project, entry)`` of every snapshot dependency entry of ``doc``, each once, in order.
+    """``(project, entry)`` of every snapshot dependency entry of ``doc``, in order.
 
     ``own`` is the pipeline's own project. An entry of another project that
     names no build is one; a latest successful entry names its build.
     """
     found = []
-    for e in entries_of(doc):
-        project = project_of(e, own, "a download entry")
+    for e in download_entries(doc):
+        project = other_project(e, own)
         if project is not None and entry_type(e) == SNAPSHOT:
             found.append((project, e))
     return found
 
 
 def own_downloads(doc: Any, own: str) -> list[dict[str, Any]]:
-    """The download entries of ``doc`` from the pipeline's own project, each once."""
-    return [e for e in entries_of(doc) if project_of(e, own, "a download entry") is None]
+    """The download entries of ``doc`` from the pipeline's own project."""
+    return [e for e in download_entries(doc) if other_project(e, own) is None]
 
 
 def entry_variant(entry: Mapping[Any, Any], project: str) -> str:
@@ -259,26 +228,10 @@ def entry_variant(entry: Mapping[Any, Any], project: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def unique_steps(doc: Any) -> list[Any]:
-    """The steps of ``doc`` that are not groups, in order, a step shared by two places once."""
-    found: dict[int, Any] = {}
-    for s in leaf_steps(pipeline_steps(doc)):
-        found.setdefault(id(s), s)
-    return list(found.values())
-
-
 def own_blocks(step: Any, own: str, block: str) -> list[dict[str, Any]]:
     """The ``upload`` or ``promote`` blocks of ``step`` that are of the own project."""
-    where = f"the {block} block of a step"
-    found = []
-    for config in plugin_configurations(step):
-        try:
-            b = plugin_block(config, block)
-        except EntryError as exc:
-            raise DocumentError(f"{where}: {exc}") from exc
-        if b is not None and project_of(b, own, where) is None:
-            found.append(b)
-    return found
+    blocks = (plugin_block(config, block) for config in plugin_configurations(step))
+    return [b for b in blocks if b is not None and other_project(b, own) is None]
 
 
 def block_variants(step: Any, own: str, block: str) -> list[str]:
@@ -300,10 +253,7 @@ def produced_variants(step: Any, own: str) -> frozenset[str]:
 
 
 def step_places(doc: Any) -> list[Any]:
-    """The steps of ``doc`` that are not groups, at every place: Buildkite runs each place.
-
-    A step that aliases put at two places is there twice.
-    """
+    """The steps of ``doc`` that are not groups, in order: Buildkite runs each place."""
     return list(leaf_steps(pipeline_steps(doc)))
 
 
@@ -348,7 +298,7 @@ def with_promote_keys(doc: Any, own: str) -> Any:
     """
     promotions(doc, own)
     out = copy.deepcopy(doc)
-    promoting = (s for s in unique_steps(out) if block_variants(s, own, PROMOTE))
+    promoting = (s for s in step_places(out) if block_variants(s, own, PROMOTE))
     keyless = [s for s in promoting if step_key(s) is None]
     for n, step in enumerate(keyless, start=1):
         step["key"] = f"{PROMOTE_KEY_PREFIX}{n}"
@@ -408,7 +358,7 @@ def is_replaced(step: Any, own: str, existing: Mapping[str, Pointer]) -> bool:
 
 
 def replaced_steps(doc: Any, own: str, existing: Mapping[str, Pointer]) -> list[Any]:
-    """The steps of ``doc`` that completion replaces, each once, in order.
+    """The steps of ``doc`` that completion replaces, in order.
 
     ``existing`` is the pointer of each own variant at the build's key. A step
     is replaced when it produces at least one variant and every one is in
@@ -417,12 +367,12 @@ def replaced_steps(doc: Any, own: str, existing: Mapping[str, Pointer]) -> list[
     """
     in_d = promotions(doc, own) if existing else {}
     done = {v: p for v, p in existing.items() if v in in_d}
-    return [s for s in unique_steps(doc) if is_replaced(s, own, done)]
+    return [s for s in step_places(doc) if is_replaced(s, own, done)]
 
 
 # What decides whether and when a step runs; a replacement keeps them, so the
 # build flows as generated.
-FLOW_FIELDS = (*STEP_KEY_FIELDS, "depends_on", "allow_dependency_failure", "if", "branches")
+FLOW_FIELDS = ("key", "depends_on", "allow_dependency_failure", "if", "branches")
 
 
 def replacement(step: Any, own: str, existing: Mapping[str, Pointer]) -> dict[str, Any]:
@@ -547,7 +497,7 @@ def planned(doc: Any, r: Rewrite) -> Any:
     """
     out = copy.deepcopy(doc) if r.key is None else with_promote_keys(doc, r.own)
     replaced = replaced_steps(out, r.own, r.existing)
-    rewired = rewired_variants(unique_steps(out), r.own, replaced)
+    rewired = rewired_variants(step_places(out), r.own, replaced)
     for s in replaced:
         replace_content(s, replacement(s, r.own, r.existing))
     for e in own_downloads(out, r.own):
@@ -557,7 +507,7 @@ def planned(doc: Any, r: Rewrite) -> Any:
     for project, e in snapshot_dependencies(out, r.own):
         replace_content(e, resolved_entry(e, dependency_pointer(project, e, r)))
     if r.key is not None:
-        for s in unique_steps(out):
+        for s in step_places(out):
             for block in (*own_blocks(s, r.own, UPLOAD), *own_blocks(s, r.own, PROMOTE)):
                 replace_content(block, with_snapshot(block, r.key))
     for m in mappings(out):

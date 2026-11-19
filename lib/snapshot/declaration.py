@@ -15,12 +15,12 @@ the rule checks are one notion.
 A snapshot tree never contains a latest successful dependency: a declaration
 that holds one has no snapshot (``has_snapshot``).
 
-Nothing here raises on foreign input: a file that does not parse and an entry
-that cannot be read are values (``UnparsableFile``, ``InvalidEntry``) that the
-caller decides about. Beyond what the specification's reading rule says, so
-that a template of another repository costs no more than its size: a template
-larger than ``FILE_LIMIT`` or holding a YAML anchor or alias does not parse,
-and a project id that is not a pipeline slug (``is_slug``) is an invalid entry.
+Nothing here raises on foreign input: a file that does not parse and a part
+of a template that names the plugin another way are values
+(``UnparsableFile``, ``InvalidEntry``) that the caller decides about. Beyond
+what the specification's reading rule says, so that a template of another
+repository costs no more than its size: a template larger than ``FILE_LIMIT``
+or holding a YAML anchor or alias does not parse.
 """
 
 from __future__ import annotations
@@ -31,23 +31,16 @@ from typing import Any, Union
 
 import yaml
 
-from ..forms import is_slug
 from .configuration import (
     BUILD_ID,
     GIT_REF,
     PLUGIN,
     PROJECT_ID,
-    PROMOTE,
-    SNAPSHOT_OPTION,
-    UPLOAD,
-    EntryError,
     download_entries,
     holds_plugin_name,
     misnamed_plugins,
     option_items,
     option_value,
-    plugin_block,
-    plugin_configurations,
 )
 from .shown import shown_text, shown_value
 
@@ -105,12 +98,8 @@ class UnparsableFile:
 
 @dataclass(frozen=True)
 class InvalidEntry:
-    """A part of a template that names the plugin and that the reading rule cannot read.
-
-    A download entry whose project is not a literal pipeline slug, an option
-    given twice with different values, or a key that names the plugin another
-    way (``misnamed_plugins``).
-    """
+    """A part of a template that names the plugin and that the reading rule cannot read: a key
+    that names the plugin another way (``misnamed_plugins``)."""
 
     path: str
     detail: str
@@ -131,7 +120,7 @@ class Reading:
 class StepDownloads:
     """The download entries of one step of a pipeline, and how messages name the step.
 
-    ``problems`` say where the step's plugin configurations cannot be read
+    ``problems`` are the keys of the step that name the plugin another way
     (``step_downloads``).
     """
 
@@ -187,20 +176,10 @@ def other_project(entry: Mapping[str, Any], own: str) -> str | None:
     """The project of another pipeline that ``entry`` downloads from; None for ``own``.
 
     An entry without a project id, or with a null or empty one, downloads from
-    the pipeline's own project, as the artifacts plugin reads it. Raises
-    ``EntryError`` for a project id that is not a string or not a slug (so
-    also for one with a ``{placeholder}`` or a ``$``).
+    the pipeline's own project, as the artifacts plugin reads it.
     """
     v = option_value(entry, PROJECT_ID)
-    if v is None or v == "" or v == own:
-        return None
-    if not isinstance(v, str):
-        raise EntryError(f"project id {shown_value(v)} is not a string")
-    if not is_slug(v):
-        raise EntryError(
-            f"project id {shown_value(v)} is not a pipeline slug (lowercase letters, digits and -)"
-        )
-    return v
+    return None if v is None or v == "" or v == own else v
 
 
 def names_build(entry: Mapping[str, Any]) -> bool:
@@ -233,16 +212,10 @@ def literal_pin(value: Any) -> str | None:
 # The steps of a generated pipeline
 # ---------------------------------------------------------------------------
 
-# The fields that give a step its key (``id`` and ``identifier`` are Buildkite's
-# older names of it), and those that give it its label.
-STEP_KEY_FIELDS = ("key", "id", "identifier")
-STEP_LABEL_FIELDS = ("label", "name")
-
 
 def pipeline_steps(doc: Any) -> list[Any]:
-    """The top-level steps of a pipeline document: its ``steps``, or the document as a list."""
-    steps = doc.get("steps") if isinstance(doc, dict) else doc
-    return steps if isinstance(steps, list) else []
+    """The top-level steps of a pipeline document: its ``steps``."""
+    return doc["steps"]
 
 
 def is_group(step: Any) -> bool:
@@ -258,22 +231,14 @@ def leaf_steps(steps: Sequence[Any]) -> Iterator[Any]:
             yield s
 
 
-def _first_text(step: Any, fields: Sequence[str]) -> str | None:
-    if isinstance(step, dict):
-        for name in fields:
-            if isinstance(step.get(name), str) and step[name]:
-                return step[name]
-    return None
-
-
 def step_key(step: Any) -> str | None:
-    """The key of a step, under any of ``STEP_KEY_FIELDS``; None when it has none."""
-    return _first_text(step, STEP_KEY_FIELDS)
+    """The key of a step; None when it has none (a ``wait`` step is text)."""
+    return step.get("key") if isinstance(step, dict) else None
 
 
 def step_label(step: Any) -> str | None:
-    """The label of a step, under any of ``STEP_LABEL_FIELDS``; None when it has none."""
-    return _first_text(step, STEP_LABEL_FIELDS)
+    """The label of a step; None when it has none."""
+    return step.get("label") if isinstance(step, dict) else None
 
 
 def step_name(step: Any, position: int) -> str:
@@ -281,37 +246,10 @@ def step_name(step: Any, position: int) -> str:
     return step_key(step) or step_label(step) or f"step {position}"
 
 
-def plan_step_options(step: Any) -> list[str]:
-    """The ``snapshot`` options of the upload and promote blocks of ``step``, of any project.
-
-    Only the plan step writes one, with the build's key: a promote writes a
-    pointer at the key it is given, so a key the generator wrote would put a
-    pointer where no plan placed it. Raises ``EntryError`` when a block is
-    given twice with different values.
-    """
-    return [
-        f"{block}.{shown_text(str(k))} is given in the generated pipeline "
-        f"({shown_value(v)}): only the plan step writes it, with the build's key"
-        for config in plugin_configurations(step)
-        for block in (UPLOAD, PROMOTE)
-        for k, v in option_items(plugin_block(config, block) or {}, SNAPSHOT_OPTION)
-    ]
-
-
 def step_downloads(step: Any, name: str) -> StepDownloads:
-    """The download entries of ``step``, which messages name ``name``, and its plugin problems.
-
-    The problems are a key that names the plugin another way
-    (``misnamed_plugins``), the options only the plan step writes
-    (``plan_step_options``), and a block given twice with different values,
-    which leaves the step without entries.
-    """
-    misnamed = misnamed_plugins(step)
-    try:
-        entries, problems = download_entries(step), plan_step_options(step)
-    except EntryError as exc:
-        entries, problems = [], [str(exc)]
-    return StepDownloads(name, tuple(entries), tuple(misnamed + problems))
+    """The download entries of ``step``, which messages name ``name``, and its plugin problems:
+    the keys that name the plugin another way (``misnamed_plugins``)."""
+    return StepDownloads(name, tuple(download_entries(step)), tuple(misnamed_plugins(step)))
 
 
 def pipeline_downloads(doc: Any) -> list[StepDownloads]:
@@ -427,31 +365,21 @@ def read_entry(path: str, entry: Mapping[str, Any], own: str) -> Entry | Invalid
     An entry that names its build is a latest successful dependency, without
     a pin.
     """
-    try:
-        project = other_project(entry, own)
-        if project is None:
-            return None
-        if names_build(entry):
-            return Entry(project, LATEST_SUCCESSFUL, None, path)
-        return Entry(project, SNAPSHOT, literal_pin(option_value(entry, GIT_REF)), path)
-    except EntryError as exc:
-        return InvalidEntry(path, str(exc))
+    project = other_project(entry, own)
+    if project is None:
+        return None
+    if names_build(entry):
+        return Entry(project, LATEST_SUCCESSFUL, None, path)
+    return Entry(project, SNAPSHOT, literal_pin(option_value(entry, GIT_REF)), path)
 
 
 def read_template(path: str, content: str | bytes, own: str) -> list[Entry | ReadError]:
-    """The entries and errors of one template that mentions the plugin.
-
-    A ``download`` or ``projects`` given twice with different values leaves
-    the template without entries.
-    """
+    """The entries and errors of one template that mentions the plugin."""
     doc = parse_template(path, content)
     if isinstance(doc, UnparsableFile):
         return [doc]
     misnamed = [InvalidEntry(path, p) for p in misnamed_plugins(doc)]
-    try:
-        found = [read_entry(path, e, own) for e in download_entries(doc)]
-    except EntryError as exc:
-        found = [InvalidEntry(path, str(exc))]
+    found = [read_entry(path, e, own) for e in download_entries(doc)]
     return [*misnamed, *(x for x in found if x is not None)]
 
 
@@ -493,10 +421,6 @@ def _shown_ref(value: Any) -> str:
     return "no git ref" if value is None else shown_value(value)
 
 
-def _raw_project(entry: Mapping[str, Any]) -> str:
-    return " / ".join(shown_value(v) for _, v in option_items(entry, PROJECT_ID))
-
-
 def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> str | None:
     if isinstance(ref, str) and (ref == own_ref or ref in pins):
         return None
@@ -515,10 +439,7 @@ def entry_problem(
     The entry's type must be the type a template declares the project with.
     A latest successful entry is left as generated, so its ref is not looked at.
     """
-    try:
-        project = other_project(entry, own)
-    except EntryError as exc:
-        return _raw_project(entry), str(exc)
+    project = other_project(entry, own)
     if project is None:
         return None
     t = entry_type(entry)
@@ -527,10 +448,7 @@ def entry_problem(
         return project, f"downloads from {project} as a {t} dependency, {why}"
     if t == LATEST_SUCCESSFUL:
         return None
-    try:
-        ref = option_value(entry, GIT_REF)
-    except EntryError as exc:
-        return project, f"downloads from {project}, but its {exc}"
+    ref = option_value(entry, GIT_REF)
     problem = _ref_problem(project, ref, declared_pins(declaration, project), own_ref)
     return None if problem is None else (project, problem)
 

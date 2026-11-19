@@ -10,22 +10,20 @@ A configuration is read by its structure: the blocks ``download``, ``upload``
 and ``promote``, the entries of ``download.projects`` (a list of mappings), and
 their options. The agent names a variable by the whole path to a value, so a
 configuration could reach the plugin's variables by another path; those are
-not read, as no template writes one. Each key is read as the agent reads one
-key (``key_names``), so ``project_id``, ``project-id`` and ``Project-Id`` are
-one option, and one option written two ways with different values is an error
-(``option_value``). A key that names the plugin another way than ``PLUGIN`` is
-an error too: the agent runs the plugin for it, and the reader would not see
-its downloads (``misnamed_plugins``).
+not read, as no template writes one. A key is read as the agent reads it, in
+any case and with ``-`` as ``_`` (``option_name``), so ``project_id``,
+``project-id`` and ``Project-Id`` are one option; of one option written two
+ways, the first is read. A key that names the plugin another way than
+``PLUGIN`` is an error: the agent runs the plugin for it, and the reader would
+not see its downloads (``misnamed_plugins``).
 
 A download entry is a mapping in the ``download.projects`` list of the value
 under a key that names the plugin (``download_entries``), wherever that key
-sits in a document. A document parsed with aliases shares its values; every
-walk here visits each shared value once.
+sits in a document.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -50,70 +48,27 @@ SNAPSHOT_OPTION = "snapshot"
 # Option keys, as the agent reads them
 # ---------------------------------------------------------------------------
 
-# formatEnvKey in agent/plugin/plugin.go of buildkite/agent, measured on agent
-# 3.118.1: every "-" and every white space character of Go's regexp class \s
-# (ASCII only, without \v) becomes "_".
-_KEY_SEPARATORS = re.compile(r"[-\t\n\f\r ]")
-_UNDERSCORES = re.compile(r"_+")
+
+def option_name(key: Any) -> str | None:
+    """The option a key names as the agent reads it: in lower case, ``-`` as ``_``; None for a
+    key that is not text."""
+    return key.lower().replace("-", "_") if isinstance(key, str) else None
 
 
-def agent_key(key: str) -> str:
-    """The name the agent gives a plugin option key: upper case, ``-`` and white space as ``_``.
-
-    Keys are compared as ASCII names: every option name is ASCII, and
-    ``str.upper`` agrees with the agent's upper case on ASCII.
-    """
-    return _KEY_SEPARATORS.sub("_", key.upper())
-
-
-def key_names(key: Any, value: Any) -> frozenset[str]:
-    """Every name under which the plugin can read ``key`` holding ``value``; none for a non-string.
-
-    The agent names a variable by the names of the keys on the way, joined
-    with ``_``. When that name holds a run of ``_``, it also sets the name
-    with every run made one. So a key is read under its ``agent_key`` and
-    under that with every run of ``_`` made one, without ``_`` at its start
-    (it joins the one before it) and, when ``value`` holds further options (a
-    mapping or a list), without ``_`` at its end (it joins the one after it).
-    """
-    if not isinstance(key, str):
-        return frozenset()
-    plain = agent_key(key)
-    squeezed = _UNDERSCORES.sub("_", plain).lstrip("_")
-    if isinstance(value, (dict, list)):
-        squeezed = squeezed.rstrip("_")
-    return frozenset((plain, squeezed))
-
-
-def reads_as(key: Any, value: Any, option: str) -> bool:
-    """True when the plugin reads ``key`` holding ``value`` as ``option``."""
-    return agent_key(option) in key_names(key, value)
-
-
-class EntryError(ValueError):
-    """An option that cannot be read; turned into a value by the callers."""
+def reads_as(key: Any, option: str) -> bool:
+    """True when the plugin reads ``key`` as ``option``."""
+    return option_name(key) == option
 
 
 def option_items(options: Mapping[Any, Any], option: str) -> list[tuple[Any, Any]]:
     """The keys and values of ``options`` that the plugin reads as ``option``, in order."""
-    return [(k, v) for k, v in options.items() if reads_as(k, v, option)]
+    return [(k, v) for k, v in options.items() if reads_as(k, option)]
 
 
 def option_value(options: Mapping[Any, Any], option: str) -> Any:
-    """The value of ``option`` in ``options`` under any key the plugin reads as it; None if absent.
-
-    Raises ``EntryError`` when two such keys hold different values: which one
-    the plugin would see is not decided by the document.
-    """
-    items = option_items(options, option)
-    differing = [(k, v) for k, v in items if v != items[0][1]]
-    if differing:
-        (k1, v1), (k2, v2) = items[0], differing[0]
-        raise EntryError(
-            f"{option} is given twice with different values: {shown_value(v1)} as "
-            f"{shown_value(k1)} and {shown_value(v2)} as {shown_value(k2)}"
-        )
-    return items[0][1] if items else None
+    """The value of ``option`` in ``options`` under the first key the plugin reads as it; None
+    if absent."""
+    return next((v for k, v in options.items() if reads_as(k, option)), None)
 
 
 # ---------------------------------------------------------------------------
@@ -151,24 +106,15 @@ def names_plugin_another_way(k: Any) -> bool:
 
 
 def mappings(value: Any) -> list[dict[Any, Any]]:
-    """Every mapping in ``value``, at any depth, in document order.
-
-    Each mapping and list is visited once, however many ways lead to it: a
-    document parsed with aliases shares its values, and the walk neither
-    loops nor repeats.
-    """
+    """Every mapping in ``value``, at any depth, in document order."""
     found: list[dict[Any, Any]] = []
-    seen: set[int] = set()
     pending = [value]
     while pending:
         v = pending.pop()
-        if not isinstance(v, (dict, list)) or id(v) in seen:
-            continue
-        seen.add(id(v))
         if isinstance(v, dict):
             found.append(v)
             pending.extend(reversed(list(v.values())))
-        else:
+        elif isinstance(v, list):
             pending.extend(reversed(v))
     return found
 
@@ -179,12 +125,8 @@ def mapping_items(value: Any) -> list[tuple[Any, Any]]:
 
 
 def plugin_configurations(value: Any) -> list[Any]:
-    """The value under every key naming the artifacts plugin in ``value``, each once, in order."""
-    found: dict[int, Any] = {}
-    for k, v in mapping_items(value):
-        if is_plugin_key(k):
-            found.setdefault(id(v), v)
-    return list(found.values())
+    """The value under every key naming the artifacts plugin in ``value``, in order."""
+    return [v for k, v in mapping_items(value) if is_plugin_key(k)]
 
 
 # ---------------------------------------------------------------------------
@@ -195,19 +137,14 @@ def plugin_configurations(value: Any) -> list[Any]:
 def plugin_block(config: Any, block: str) -> dict[str, Any] | None:
     """The mapping a plugin configuration holds as option ``block``; None when it holds none.
 
-    ``block`` is ``download``, ``upload`` or ``promote``. Raises ``EntryError``
-    when the block is given twice with different values.
+    ``block`` is ``download``, ``upload`` or ``promote``.
     """
     found = option_value(config, block) if isinstance(config, dict) else None
     return found if isinstance(found, dict) else None
 
 
 def plugin_download_entries(config: Any) -> list[dict[str, Any]]:
-    """The mappings in ``download.projects`` of one artifacts plugin configuration.
-
-    Raises ``EntryError`` when ``download`` or ``projects`` is given twice
-    with different values.
-    """
+    """The mappings in ``download.projects`` of one artifacts plugin configuration."""
     download = plugin_block(config, DOWNLOAD)
     projects = option_value(download, PROJECTS) if download is not None else None
     if not isinstance(projects, list):
@@ -216,19 +153,13 @@ def plugin_download_entries(config: Any) -> list[dict[str, Any]]:
 
 
 def download_entries(value: Any) -> list[dict[str, Any]]:
-    """Every download entry in ``value``, at any depth, in document order, each once.
+    """Every download entry in ``value``, at any depth, in document order.
 
     A download entry is a mapping in the ``download.projects`` list of the
     value under a key that names the artifacts plugin (``is_plugin_key``),
-    wherever that key sits. One mapping reached in several ways is one entry.
-    Raises ``EntryError`` when a configuration gives ``download`` or
-    ``projects`` twice with different values.
+    wherever that key sits.
     """
-    found: dict[int, dict[str, Any]] = {}
-    for config in plugin_configurations(value):
-        for e in plugin_download_entries(config):
-            found.setdefault(id(e), e)
-    return list(found.values())
+    return [e for config in plugin_configurations(value) for e in plugin_download_entries(config)]
 
 
 # ---------------------------------------------------------------------------
