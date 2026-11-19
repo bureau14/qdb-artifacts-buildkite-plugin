@@ -170,9 +170,13 @@ SOURCES = [
 
 @dataclasses.dataclass(frozen=True)
 class Transfer:
+    """Options of both transfers, and what an earlier attempt of the downloading job left in
+    its checkout, which ``clean`` removes."""
+
     name: str
     upload: dict
     download: dict
+    left_over: dict = dataclasses.field(default_factory=dict)
 
     def __str__(self) -> str:
         return self.name
@@ -181,9 +185,10 @@ class Transfer:
 TRANSFERS = [
     Transfer("defaults", {}, {}),
     Transfer(
-        "one-at-a-time-clean",
-        {"parallel": 1, "concurrency": 1},
+        "retried-one-at-a-time-clean",
+        {"parallel": 1, "concurrency": 1, "annotate": False},
         {"parallel": 1, "concurrency": 1, "clean": True},
+        {"in/stale.bin": b"from an earlier attempt"},
     ),
     Transfer("wide", {"parallel": 8, "concurrency": 2}, {"parallel": 8, "concurrency": 2}),
 ]
@@ -193,11 +198,12 @@ TRANSFERS = [
 @pytest.mark.parametrize("payload, source, transfer", paired(PAYLOADS, SOURCES, TRANSFERS), ids=str)
 def test_a_later_step_downloads_the_bytes_a_build_step_uploaded(jobs, payload, source, transfer):
     """Files a build step uploads and promotes arrive with the same bytes, at the paths the
-    options name, in a step that downloads them by its own build, a build id, the project,
-    another ref or LATEST_SUCCESSFUL, on either store."""
+    options name and nothing else there, in a step that downloads them by its own build, a
+    build id, the project, another ref or LATEST_SUCCESSFUL, on either store."""
     producer = jobs("widget", 1)
     producer.write(payload.workspace)
     consumer = jobs(source.pipeline, 1 if source.same_build else 2, source.branch)
+    consumer.write(transfer.left_over)
     project = {"variant": "linux", "output-dir": "in", **source.options(), **payload.download}
 
     built = producer.with_plugin(upload_and_promote(**payload.upload, **transfer.upload)).run(
@@ -213,15 +219,18 @@ def test_a_later_step_downloads_the_bytes_a_build_step_uploaded(jobs, payload, s
 
 @pytest.mark.parametrize("exit_status", [0, 1])
 @pytest.mark.parametrize("has_files", [True, False])
+@pytest.mark.parametrize("promotes", [True, False])
 def test_post_command_promotes_only_a_passed_command_with_files(
-    jobs, store, exit_status, has_files
+    jobs, store, exit_status, has_files, promotes
 ):
     """post-command uploads the step's files whatever its command did, and moves
-    LATEST_SUCCESSFUL only after a passed command and an upload that was not empty."""
+    LATEST_SUCCESSFUL only for a step that promotes, after a passed command and an upload
+    that was not empty."""
     job = jobs()
     if has_files:
         job.write({"out/a.bin": b"a"})
-    options = upload_and_promote(files="out/*", allow_empty=True)
+    both = upload_and_promote(files="out/*", allow_empty=True)
+    options = both if promotes else {"upload": both["upload"]}
 
     outcome = (
         job.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(exit_status))
@@ -232,7 +241,8 @@ def test_post_command_promotes_only_a_passed_command_with_files(
     variant = f"widget/{MASTER}/variants/linux"
     assert outcome.code == 0, outcome.output
     assert (f"{variant}/builds/{build_id(1)}/manifest.json" in store.stored()) == has_files
-    assert (f"{variant}/LATEST_SUCCESSFUL" in store.stored()) == (has_files and exit_status == 0)
+    moved = promotes and has_files and exit_status == 0
+    assert (f"{variant}/LATEST_SUCCESSFUL" in store.stored()) == moved
 
 
 # The fields every manifest has had since before snapshots.
