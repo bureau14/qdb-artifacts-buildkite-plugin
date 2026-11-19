@@ -420,8 +420,10 @@ can take it as a snapshot dependency.
 ### What a repository changes to adopt
 
 - Its `.buildkite/pipeline.py` hands its pipeline to the runner of
-  `qdb_pipeline` (qdb-cicd-tools): it imports `run` at module level without
-  an alias, and ends with exactly one main block that holds exactly this call:
+  `qdb_pipeline` (qdb-cicd-tools). The runner, on its own caller, and the plan
+  step, on every dependency, apply one rule: a pipeline.py has the shape when
+  its bytes contain qdb_pipeline and run(generate_pipeline). The file ends as
+  the runner's README shows:
 
   ```python
   from qdb_pipeline import run
@@ -432,8 +434,9 @@ can take it as a snapshot dependency.
       run(generate_pipeline)
   ```
 
-- The first step of its Buildkite configuration runs
-  `.buildkite/pipeline.py | buildkite-agent pipeline upload`.
+- Its configuration in Buildkite runs
+  `.buildkite/pipeline.py | buildkite-agent pipeline upload`: the plan step
+  looks for that text in it.
 - Every download of another project that its generated pipeline makes is in a
   committed template, with the same type. The plan step fails a build whose
   pipeline breaks this rule, and names the step and the project.
@@ -443,7 +446,8 @@ can take it as a snapshot dependency.
 A dependency that cannot give a snapshot fails the plan of the root before
 anything is triggered. The message names who needs it, which condition failed
 and the way out, which always includes this one: the consumer takes it as a
-latest successful dependency.
+latest successful dependency. A template of a dependency that does not parse
+fails the plan too, and the message names the project and the file.
 
 ### How a build runs
 
@@ -476,10 +480,11 @@ whose variants exist is replaced by one that names the build that holds them.
 | `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                 |
 
 The plan step of a root asks Buildkite's API (`read_pipelines`) for the
-repository and the first step of every pipeline of its tree, with the token in
-`ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter
-`/services/buildkite/credentials/artifacts/buildkite-api-token`. A chain node
-asks nothing.
+repository and the configuration of every pipeline of its tree, with the token
+in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter
+`/services/buildkite/credentials/artifacts/buildkite-api-token`, and tries a
+call again on no answer, 429 and 5xx, five times in all. A chain node asks
+nothing.
 
 ### What is stored, and where
 
@@ -488,7 +493,7 @@ asks nothing.
 | pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket                 | once, by the step that promotes the variant   |
 | failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket              | once, by a gate step of a build that has a key |
 | plan           | meta-data `snapshot-plan` of the root build                                          | once, by the root's enter step                |
-| marks          | meta-data `snapshot-mode`, `snapshot-promotes` and `snapshot-uploaded-<step key>`    | by the gate steps of each build               |
+| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                                    | by the gate steps of each build               |
 | arrival        | meta-data `snapshot-arrived`                                                         | by the runner, when it prints the gate        |
 
 A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
@@ -502,18 +507,21 @@ its own names the steps that did not pass; a dependency that failed is
 followed down its failure records to the builds that failed. The annotation
 ends: "To retry: retry the failed job in `<pipeline>` `<number>`. When it
 passes, start a new build of `<root pipeline>`. Everything that passed is
-reused." A build that waited at the gate behind a build of the same key that
-failed shares that failure instead of compiling it again, and within one chain
-a key is built at most once.
+reused."
+
+If a snapshot fails, it fails everywhere: a variant whose step hard failed
+fails, without compiling it again, every build of that key in a chain whose
+root build started before the failure was recorded, also one that waited at
+the gate meanwhile and one that reaches the dependency later. Only a root
+build started after the failure builds the key again. Within one chain a key
+is built at most once.
 
 ### Limits
 
 - The gate steps run on the Linux agents of the default queue; the steps that
   upload, download and promote run on every platform, as before.
-- A plan is at most 102400 bytes, the size of one meta-data value; a larger
-  plan fails the root and says how large it is.
-- A template larger than 1 MiB, or one that holds a YAML anchor or alias, does
-  not parse; a project id is a pipeline slug.
+- A plan is one meta-data value, which the agent takes up to 102400 bytes; a
+  larger plan fails the root with the agent's message.
 - A root whose pipeline is a selection (`QDB_PIPELINE_FILTER`, or a build
   message that selects), one with `SNAPSHOT_DISABLE=1`, and one on a branch its
   repository does not have (a release build on a tag) run their plain pipeline.
