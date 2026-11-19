@@ -13,8 +13,8 @@ back:
     snapshot-promotes              {variant: step key} of the steps that promote
 
 The reads here are those of more than one step: the pointers at a key, the
-failure records of a key, the arrival at the gate, and the plan of the build's
-chain. Each meta-data read here is of a value that is set before it is read,
+failure records of a key, the arrival of the chain's root at the gate, and the
+plan of the build's chain. Each meta-data read here is of a value that is set before it is read,
 so an absent value fails the step as any failed call does.
 """
 
@@ -117,9 +117,14 @@ def chain_records(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str, 
     return found
 
 
-def arrival(edge: Edge) -> int:
-    """When this build arrived at the gate: ``snapshot-arrived``, epoch seconds the runner set."""
-    return int(edge.agent.meta_data_get(ARRIVED))
+def root_arrival(job: Job, edge: Edge) -> int:
+    """When the root build of this build's chain arrived at the gate, in epoch seconds.
+
+    The runner sets ``snapshot-arrived`` in the first step of every gated
+    build. A chain node reads it on its root build (``SNAPSHOT_PLAN``), as it
+    reads the plan; a root is its own root.
+    """
+    return int(edge.agent.meta_data_get(ARRIVED, job.plan_id))
 
 
 # ---------------------------------------------------------------------------

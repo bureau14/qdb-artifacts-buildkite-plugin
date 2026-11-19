@@ -200,7 +200,8 @@ def content_part(
     if r.shared_with is not None:
         s = r.shared_with
         lines.append(
-            f"{pad}build {s.number} of the same snapshot failed while this build waited behind it."
+            f"{pad}build {s.number} of the same snapshot failed after the root build of this "
+            "chain started."
         )
         lines.append(f"{pad}{INDENT}FAILED in {r.project} build {s.number}: {s.url}")
         lines.extend(entry_lines(r, depth + 2))
@@ -256,7 +257,7 @@ def failure_title(r: Record) -> str:
     if r.caused_by:
         return DEPENDENCY_FAILED
     if r.shared_with is not None:
-        return "Snapshot failed in the build this one waited behind"
+        return "Snapshot failed in another build of it during this chain"
     return "Snapshot failed"
 
 

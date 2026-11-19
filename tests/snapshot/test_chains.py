@@ -224,6 +224,50 @@ def test_a_snapshot_missing_a_variant_builds_only_that_variant(worlds, graph_nod
     )
 
 
+WHEN = ("waits-at-the-gate", "reaches-it-later", "starts-after")
+
+
+@pytest.mark.parametrize("when", WHEN)
+def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_started_before_it(
+    worlds, lower_node, matrix, when
+):
+    """When a node's build hard fails a variant, a build of the same snapshot fails without
+    compiling it in every chain whose root started before the failure, whether that build
+    waited at its gate meanwhile or reached the node later; a chain whose root started after
+    the failure compiles that variant again, and nothing else of the node."""
+    graph, node, root = lower_node.graph, lower_node.node, lower_node.root
+    world = worlds({**graph, "other": (node,)}, matrix)
+    first = {"ran": False, "compiled": 0}
+
+    def a_chain_fails_at_the_node() -> None:
+        first["ran"] = True
+        world.now += 10
+        world.broken.add((node, matrix[-1]))
+        world.build(root)
+        world.broken.clear()
+        world.now += 10
+        first["compiled"] = len(world.compiled)
+
+    def at_gate(build) -> None:
+        if build.project == node and not first["ran"]:
+            a_chain_fails_at_the_node()
+
+    if when == "starts-after":
+        a_chain_fails_at_the_node()
+        other = world.build("other")
+    else:
+        other = world.start("other", "master", None, {})
+        if when == "reaches-it-later":
+            a_chain_fails_at_the_node()
+        else:
+            world.at_gate = at_gate
+        world.play(other)
+
+    again = {v for p, v in compiled_since(world, first["compiled"]) if p == node}
+    assert other.state == ("passed" if when == "starts-after" else "failed")
+    assert again == ({matrix[-1]} if when == "starts-after" else set())
+
+
 def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, matrix):
     """A literal git ref in one consumer's template pins a node: the chain builds it once, at
     the head of that ref, and every download of it in the chain, on every platform, takes that

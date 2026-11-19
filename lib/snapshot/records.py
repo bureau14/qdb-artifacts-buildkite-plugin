@@ -10,8 +10,8 @@ decisions of section 7 over records the caller has read:
 - ``unpassed`` and ``leave_record``: the variants whose step did not pass,
   whose pointers the leave step reads, and its record of those that have no
   pointer;
-- ``shared_failure`` and ``shared_record``: step 7, the failure of a build of
-  the same key that this build waited behind at the gate;
+- ``shared_failure`` and ``shared_record``: step 7, the failure of another
+  build of the same key since the root build of this chain started;
 - ``chain_failure`` and ``caused_record``: step 9 and resume, a dependency
   that failed earlier in this chain;
 - ``reason_record``: steps 1, 2 and 5, a build that failed before it built.
@@ -59,9 +59,10 @@ NOT_DECLARED = "not_declared"
 HARD_FAILED = "hard_failed"
 PASSED = "passed"
 
-# A record counts as a failure this build waited behind only when it was
-# recorded this many seconds after the build arrived at the gate: one recorded
-# before belongs to a build that ended before this one could wait for it.
+# A record counts as a failure this build shares only when it was recorded this
+# many seconds after the root build of this build's chain arrived at the gate:
+# one recorded before belongs to a build that ended before this chain began,
+# and a new root build tries the key again.
 SHARED_AFTER = 5
 
 
@@ -244,7 +245,7 @@ def leave_record(
 
 
 # ---------------------------------------------------------------------------
-# Step 7: the failure of a build this build waited behind
+# Step 7: the failure of another build of the key since this chain began
 # ---------------------------------------------------------------------------
 
 
@@ -268,13 +269,14 @@ def _hard_failed(r: Record) -> frozenset[str]:
 def shared_failure(
     records: Iterable[Record], own_build: str, arrived: float, wanted: Iterable[str]
 ) -> Record | None:
-    """The record of a build of this key that failed on ``wanted`` while this build waited.
+    """The record of another build of this key that failed on ``wanted`` since this chain began.
 
     ``records`` are the failure records of the key, ``own_build`` this build's
-    uuid, ``arrived`` its ``snapshot-arrived`` (epoch seconds), ``wanted`` the
-    variants it needs that have no pointer. A record counts when another build
-    recorded it more than ``SHARED_AFTER`` seconds after ``arrived``, to the
-    millisecond (``recorded_time``), and every wanted variant has the outcome
+    uuid, ``arrived`` the ``snapshot-arrived`` of the root build of this
+    build's chain (epoch seconds), ``wanted`` the variants it needs that have
+    no pointer. A record counts when another build recorded it more than
+    ``SHARED_AFTER`` seconds after ``arrived``, to the millisecond
+    (``recorded_time``), and every wanted variant has the outcome
     ``hard_failed`` in it. With nothing wanted nothing is shared. Of several,
     the most recent.
     """

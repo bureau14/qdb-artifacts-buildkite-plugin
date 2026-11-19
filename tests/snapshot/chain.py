@@ -244,7 +244,11 @@ FAILED = ("hard_failed", "broken")
 
 
 class World:
-    """Repositories of the projects of ``graph``, the store, and Buildkite playing builds."""
+    """Repositories of the projects of ``graph``, the store, and Buildkite playing builds.
+
+    ``at_gate`` is what happens while a triggered build waits at its gate, after it
+    arrived and before it plays: nothing, unless a test plays another chain there.
+    """
 
     def __init__(self, directory, graph: dict, matrix: tuple) -> None:
         self.directory = directory
@@ -262,6 +266,7 @@ class World:
         self.now = T0
         self.ids = itertools.count(1)
         self.numbers = collections.defaultdict(lambda: itertools.count(1))
+        self.at_gate = lambda build: None
         for p in graph:
             self.commit(p)
 
@@ -411,6 +416,7 @@ class World:
         asked = step["build"]
         child = self.start(step["trigger"], asked["branch"], asked["commit"], asked.get("env", {}))
         build.children.append(child)
+        self.at_gate(child)
         if self.play(child).state == "passed":
             return "passed"
         return "soft_failed" if step.get("soft_fail") else "hard_failed"

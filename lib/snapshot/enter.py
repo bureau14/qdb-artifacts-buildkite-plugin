@@ -71,7 +71,6 @@ from .edge import (
     PROMOTES,
     REUSED,
     Edge,
-    arrival,
     chain_plan,
     chain_records,
     held_only,
@@ -79,6 +78,7 @@ from .edge import (
     origin_of,
     own_node,
     pointers_at,
+    root_arrival,
     stored_records,
 )
 from .failing import Refusal, gated
@@ -270,21 +270,28 @@ def reuse(
 
 
 def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozenset[str]) -> None:
-    """7. A build of ``K`` failed on every wanted variant while this one waited behind it: fail.
+    """7. Another build of ``K`` hard failed on every wanted variant after the root build of
+    this chain arrived at the gate: fail, compiling nothing.
 
-    The own record copies those entries and names that build under
-    ``shared_with``. An empty outcome or any other state is not a failure.
+    If it fails, it fails everywhere: the failure counts for every build of a
+    chain whose root started before it was recorded, also one that reaches
+    ``K`` later. A new root build builds ``K`` again. The own record copies
+    those entries and names that build under ``shared_with``. An empty
+    outcome or any other state is not a failure.
     """
     if not wanted:
         return
     records = stored_records(edge, origin.project, origin.key)
-    source = shared_failure(records, job.build.id, arrival(edge), wanted) if records else None
+    if not records:
+        return
+    source = shared_failure(records, job.build.id, root_arrival(job, edge), wanted)
     if source is None:
         return
     own = shared_record(origin, source, wanted, edge.clock())
     message = (
         f"build {source.build.number} of the same snapshot failed on "
-        f"{', '.join(sorted(wanted))} while this build waited behind it: {source.build.url}"
+        f"{', '.join(sorted(wanted))} after the root build of this chain started: "
+        f"{source.build.url}"
     )
     raise Refusal(message, failure_annotation(p, own, {}), own)
 
@@ -500,8 +507,8 @@ def enter(job: Job, edge: PlanEdge) -> int:
        ``N`` not in ``D``: record ``not_declared``; fail.
     6. ``D`` is not empty and every variant of ``N`` has a pointer at ``K``:
        mode reused; done.
-    7. A build of ``K`` failed on the wanted variants while this one waited:
-       record its failure as shared; fail.
+    7. Another build of ``K`` failed on the wanted variants after the chain's
+       root arrived at the gate: record its failure as shared; fail.
     8. For each direct snapshot dependency, the variants the kept steps name,
        and which of them have no pointer at its key.
     9. A dependency with a missing variant failed earlier in this chain:
