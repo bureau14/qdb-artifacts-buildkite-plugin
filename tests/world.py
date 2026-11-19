@@ -45,6 +45,7 @@ R2 = {
 }
 OPTION_PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
 GENERATED = ".buildkite/snapshot-pipeline.yml"
+MASTER = "refs/heads/master"
 TOKEN = "bkua_" + "0f1e2d3c4b5a6978" * 2
 # A hook of a test takes about a second; one that retries a store it cannot reach is stopped.
 HOOK_TIMEOUT = 60
@@ -127,6 +128,10 @@ class Store:
     def put(self, key: str, body: bytes) -> None:
         self.s3.put_object(Bucket=BUCKET, Key=key, Body=body)
 
+    def put_all(self, objects: dict) -> None:
+        for key, body in objects.items():
+            self.put(key, body)
+
     def get(self, key: str) -> bytes | None:
         try:
             return self.s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
@@ -137,6 +142,10 @@ class Store:
         """The keys of every object under ``prefix``."""
         pages = self.s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix)
         return {o["Key"] for page in pages for o in page.get("Contents", [])}
+
+    def objects(self, prefix: str = "") -> dict[str, bytes]:
+        """Every object under ``prefix``, by key."""
+        return {k: self.get(k) for k in self.stored(prefix)}
 
 
 @pytest.fixture
@@ -419,6 +428,12 @@ def store_variables(store: Store, backend: str, destination: str = f"s3://{BUCKE
     }
 
 
+def ref_variables(ref: str) -> dict:
+    """The variables the agent sets for a build of ``ref``: its branch, and for a tag the tag."""
+    name = ref.split("/", 2)[2]
+    return {"BUILDKITE_BRANCH": name, **({"BUILDKITE_TAG": name} if "/tags/" in ref else {})}
+
+
 @pytest.fixture
 def backend():
     """The store backend of every job; a test generates both by parametrizing it."""
@@ -427,7 +442,7 @@ def backend():
 
 @pytest.fixture
 def jobs(tmp_path, store, agent, plugin, backend):
-    """Make the job of a step of a build: ``jobs(pipeline, number, branch, step)``.
+    """Make the job of a step of a build: ``jobs(pipeline, number, ref, step)``.
 
     Its checkout is a git repository of one commit; ``destination`` names the
     bucket and an optional prefix.
@@ -436,13 +451,14 @@ def jobs(tmp_path, store, agent, plugin, backend):
     home = tmp_path / "home"
     home.mkdir()
 
-    def job(pipeline="widget", number=1, branch="master", step="build", destination=None) -> Job:
+    def job(pipeline="widget", number=1, ref=MASTER, step="build", destination=None) -> Job:
         workspace = tmp_path / f"job-{next(count)}"
         workspace.mkdir()
         commit = committed(workspace)
         env = {
             **host_variables(home, agent.bin),
             **store_variables(store, backend, destination or f"s3://{BUCKET}"),
+            **ref_variables(ref),
             "ARTIFACTS_BUILDKITE_TOKEN": TOKEN,
             "BUILDKITE": "true",
             "BUILDKITE_ORGANIZATION_SLUG": ORGANISATION,
@@ -451,7 +467,6 @@ def jobs(tmp_path, store, agent, plugin, backend):
             "BUILDKITE_BUILD_ID": build_id(number),
             "BUILDKITE_BUILD_NUMBER": str(number),
             "BUILDKITE_BUILD_URL": build_url(pipeline, number),
-            "BUILDKITE_BRANCH": branch,
             "BUILDKITE_COMMIT": "HEAD",
             "BUILDKITE_JOB_ID": f"01900000-0000-7000-9000-{number:012d}",
             "BUILDKITE_STEP_KEY": step,

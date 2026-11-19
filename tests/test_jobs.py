@@ -1,7 +1,8 @@
 """What a step of a pipeline relies on when the plugin works, through the real hooks as an
-agent runs them, against the object store of ``world.py``: files travel, LATEST_SUCCESSFUL
-moves, storage stays readable by the plugin's master, pointers are written once, the
-library gives what the hooks give, and a chain node passes its gate.
+agent runs them, against the object store of ``world.py``: a download gets the build it names
+among builds that compete for it, LATEST_SUCCESSFUL moves, storage stays what the plugin's
+master writes, pointers are written once, the library gives what the hooks give, and a chain
+node passes its gate.
 """
 
 from __future__ import annotations
@@ -16,30 +17,44 @@ import sys
 import tarfile
 import time
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import yaml
 import zstandard
 from chain import MATRICES, PLUGIN, SHAPED, build_step, entry, generated
-from world import BUCKET, GENERATED, STEP_KINDS, build_id, build_url, paired, store_variables
+from world import (
+    BUCKET,
+    GENERATED,
+    MASTER,
+    STEP_KINDS,
+    build_id,
+    build_url,
+    paired,
+    store_variables,
+)
 
 from lib.pointer import Build, Pointer, decode, encode
 from lib.snapshot.plan import Node, Plan, RootInfo, encode_plan
 
-MASTER = "refs/heads/master"
+FEATURE = "refs/heads/feature"
+TAG = "refs/tags/v1.0.0"
+REFS = (TAG, FEATURE, MASTER)
 BACKENDS = ("s3", "r2")
 KEY = "v1-" + "5" * 32
 
 
-def upload_and_promote(variant="linux", **upload) -> dict:
-    """The options of a build step that uploads and promotes ``variant`` of master; an
-    option given as None is left out."""
+def upload_and_promote(variant="linux", ref=MASTER, names=None, **upload) -> dict:
+    """The options of a build step that uploads and promotes ``variant`` of ``ref``, under the
+    project and build that ``names`` gives (the job's own when None); an option given as None
+    is left out."""
     upload = {k: v for k, v in upload.items() if v is not None}
     snapshot = {"snapshot": upload["snapshot"]} if "snapshot" in upload else {}
+    named = names or {}
     return {
-        "upload": {"variant": variant, "git_ref": MASTER, **upload},
-        "promote": {"variant": variant, "git_ref": MASTER, **snapshot},
+        "upload": {"variant": variant, "git_ref": ref, **named, **upload},
+        "promote": {"variant": variant, "git_ref": ref, **named, **snapshot},
     }
 
 
@@ -47,8 +62,26 @@ def case_id(value) -> str:
     return "+".join(map(case_id, value)) if isinstance(value, tuple) else str(value)
 
 
+def master_wrote(ref, variant, build, files, promoted, project="widget", under="") -> dict:
+    """The objects the plugin's master writes for a build step of ``project`` in ``build`` that
+    uploads ``files`` (paths below its base_dir) as ``variant`` of ``ref``, and promotes them when
+    ``promoted``: the files and the manifest under the build's prefix, and LATEST_SUCCESSFUL."""
+    variant_at = f"{under}{project}/{ref}/variants/{variant}"
+    at = f"{variant_at}/builds/{build}"
+    manifest = {
+        "file_count": len(files),
+        "files": sorted(files),
+        "uploaded_at": "2026-11-19T00:00:00+00:00",
+        "total_size_bytes": sum(map(len, files.values())),
+        "base_dir": "dist",
+    }
+    objects = {f"{at}/{rel}": data for rel, data in files.items()}
+    objects[f"{at}/manifest.json"] = json.dumps(manifest).encode()
+    return {**objects, **({f"{variant_at}/LATEST_SUCCESSFUL": build.encode()} if promoted else {})}
+
+
 # ---------------------------------------------------------------------------
-# What travels: payloads, how a step names the build, transfer settings
+# What travels: payloads, builds that compete, how a step names one
 # ---------------------------------------------------------------------------
 
 
@@ -70,151 +103,247 @@ def zipped(members: dict) -> bytes:
     return raw.getvalue()
 
 
-MEMBERS = {"bin/tool": b"tool\x00\x01", "lib/libw.so": b"\x7fELF lib", "share/notes.txt": b"notes"}
+def zstd(data: bytes) -> bytes:
+    return zstandard.ZstdCompressor().compress(data)
+
+
+def made_by(stamp: str, *names: str) -> dict:
+    """Files of ``names`` whose bytes say which build made them."""
+    return {n: f"{n} of {stamp}\n".encode() for n in names}
+
+
+MEMBERS = ("bin/tool", "lib/libw.so", "share/notes.txt")
+DIST = {"files": "dist/**/*", "base_dir": "dist"}
 
 
 @dataclasses.dataclass(frozen=True)
 class Payload:
-    """What a build step leaves in its checkout, the upload and download options of it,
-    and the files that must arrive under the downloading step's output directory."""
+    """What the upload of a build step stores (by path below dist/), the upload's options, what
+    its exclude leaves out of dist/, the download options of it, and the files that arrive under
+    the output directory. ``stored`` and ``arrives`` take the stamp of the build that made the
+    files, which their bytes carry."""
 
     name: str
-    workspace: dict
-    upload: dict
+    stored: Callable[[str], dict]
     download: dict
-    arrives: dict
+    arrives: Callable[[str], dict]
+    upload: dict = dataclasses.field(default_factory=lambda: DIST)
+    left_out: dict = dataclasses.field(default_factory=dict)
 
     def __str__(self) -> str:
         return self.name
 
+    def made(self, stamp: str) -> dict:
+        """What the build step leaves in its checkout."""
+        return {
+            f"dist/{rel}": data for rel, data in {**self.stored(stamp), **self.left_out}.items()
+        }
 
-DIST = {"files": "dist/*", "base_dir": "dist"}
+
 PAYLOADS = [
     Payload(
         "plain",
-        {"out/a.bin": b"\x00a" * 700, "out/sub/b.txt": b"b", "out/debug.log": b"log"},
-        {"files": "out/**/*", "base_dir": "out", "exclude": ["*.log"]},
-        {"files": ["*"]},
-        {"a.bin": b"\x00a" * 700, "sub/b.txt": b"b"},
+        lambda s: made_by(s, "a.bin", "sub/b.txt", "sub/c.tmp"),
+        {"files": ["*"], "exclude": ["*.tmp"]},
+        lambda s: made_by(s, "a.bin", "sub/b.txt"),
+        {**DIST, "exclude": ["*.log"]},
+        {"debug.log": b"log"},
     ),
     Payload(
         "tar.gz",
-        {"dist/w.tar.gz": gzip.compress(tar(MEMBERS))},
-        DIST,
+        lambda s: {"w.tar.gz": gzip.compress(tar(made_by(s, *MEMBERS)))},
         {"files": ["*.tar.gz"], "extract": True},
-        MEMBERS,
+        lambda s: made_by(s, *MEMBERS),
     ),
     Payload(
         "tar.zst",
-        {"dist/w.tar.zst": zstandard.ZstdCompressor().compress(tar(MEMBERS))},
-        DIST,
+        lambda s: {"w.tar.zst": zstd(tar(made_by(s, *MEMBERS)))},
         {"files": ["*.tar.zst"], "extract": True},
-        MEMBERS,
+        lambda s: made_by(s, *MEMBERS),
     ),
     Payload(
         "zip-and-jar",
-        {"dist/w.zip": zipped({"bin/tool": b"tool"}), "dist/w.jar": zipped({"META-INF/a": b"jar"})},
-        DIST,
+        lambda s: {
+            "w.zip": zipped(made_by(s, "bin/tool")),
+            "w.jar": zipped(made_by(s, "META-INF/a")),
+        },
         {"files": ["*.zip", "*.jar"], "extract": True},
-        {"bin/tool": b"tool", "META-INF/a": b"jar"},
+        lambda s: made_by(s, "bin/tool", "META-INF/a"),
     ),
     Payload(
         "entry-filters",
-        {"dist/w.tar.zst": zstandard.ZstdCompressor().compress(tar(MEMBERS))},
-        DIST,
+        lambda s: {"w.tar.zst": zstd(tar(made_by(s, *MEMBERS)))},
         {"files": ["*.tar.zst!bin/*", "*.tar.zst!lib/*"], "extract": True},
-        {"tool": MEMBERS["bin/tool"], "libw.so": MEMBERS["lib/libw.so"]},
+        lambda s: {Path(n).name: d for n, d in made_by(s, "bin/tool", "lib/libw.so").items()},
     ),
 ]
 
+# Builds of widget, numbered in the order they ran; the build under test is SUBJECT.
+EARLIER, NEWER, SUBJECT, LATER = 1, 2, 3, 4
+NEXT = "refs/heads/next"
+NEW_BRANCH = "refs/heads/new"  # a branch that has no build yet
+
+
+def stamp(number: int, ref: str, variant: str) -> str:
+    return f"build {number} of {ref} {variant}"
+
+
+def master_made(payload: Payload, number: int, ref: str, variant: str, promoted: bool) -> dict:
+    """The objects of widget's build ``number`` of ``payload``, as the plugin's master writes."""
+    files = payload.stored(stamp(number, ref, variant))
+    return master_wrote(ref, variant, build_id(number), files, promoted)
+
+
+def history(payload: Payload, ref: str) -> dict:
+    """The builds of widget before the build under test: on its ref and on master, for linux
+    and macos, an earlier build that was promoted and a newer one that was not."""
+    return {
+        k: body
+        for r in dict.fromkeys((ref, MASTER))
+        for v in ("linux", "macos")
+        for number, promoted in ((EARLIER, True), (NEWER, False))
+        for k, body in master_made(payload, number, r, v, promoted).items()
+    }
+
 
 @dataclasses.dataclass(frozen=True)
-class Source:
-    """How a downloading step names the build: its pipeline and branch, whether it is a job
-    of the uploading build, and the options of its download entry (``{build}`` is the
-    uploading build's id)."""
+class Naming:
+    """How a downloading step names the build of widget that a build step of a ref uploaded and
+    promoted: its pipeline, whether it is a job of that build (else of build 9 on ``own_ref``),
+    its entry for that ref and build, and whether a later build of the ref was promoted before
+    it downloads, so that LATEST_SUCCESSFUL names another build than the one it names."""
 
     name: str
     pipeline: str
-    branch: str
     same_build: bool
-    entry: dict
+    entry: Callable[[str, str], dict]
+    later_promoted: bool
+    own_ref: str = MASTER
 
     def __str__(self) -> str:
         return self.name
 
-    def options(self) -> dict:
-        return {k: v.replace("{build}", build_id(1)) for k, v in self.entry.items()}
+
+def by_id(ref: str, build: str, **more) -> dict:
+    return {"project_id": "widget", "build_id": build, "git_ref": ref, **more}
 
 
-SOURCES = [
-    Source("same-build", "widget", "master", True, {"git_ref": MASTER}),
-    Source(
-        "named-build",
+NAMINGS = [
+    Naming("own-build", "widget", True, lambda ref, build: {"git_ref": ref}, True),
+    Naming("build-id", "app", False, by_id, True),
+    Naming(
+        "build-id-strictly",
         "app",
-        "master",
         False,
-        {"project_id": "widget", "build_id": "{build}", "git_ref": MASTER},
+        lambda ref, build: by_id(ref, build, require_strict_ref_match=True),
+        True,
     ),
-    Source("other-project", "app", "master", False, {"project_id": "widget", "git_ref": MASTER}),
-    Source("other-ref", "widget", "feature", False, {"git_ref": MASTER}),
-    Source(
-        "latest-with-fallback",
+    Naming(
+        "latest-of-the-project",
         "app",
-        "feature",
         False,
-        {"project_id": "widget", "build_id": "LATEST_SUCCESSFUL", "git_ref": "refs/heads/feature"},
+        lambda ref, build: {"project_id": "widget", "git_ref": ref},
+        False,
+    ),
+    Naming(
+        "latest-of-another-ref", "widget", False, lambda ref, build: {"git_ref": ref}, False, NEXT
     ),
 ]
 
 
 @dataclasses.dataclass(frozen=True)
 class Transfer:
-    """Options of both transfers, and what an earlier attempt of the downloading job left in
-    its checkout, which ``clean`` removes."""
+    """Options of both transfers and of the plugin, and what an earlier attempt of the
+    downloading job left in its output directory, which ``clean`` removes."""
 
     name: str
     upload: dict
     download: dict
+    plugin: dict = dataclasses.field(default_factory=dict)
     left_over: dict = dataclasses.field(default_factory=dict)
 
     def __str__(self) -> str:
         return self.name
 
+    @property
+    def annotates(self) -> bool:
+        return self.upload.get("annotate", True)
+
 
 TRANSFERS = [
     Transfer("defaults", {}, {}),
     Transfer(
-        "retried-one-at-a-time-clean",
+        "retried-one-at-a-time-clean-unannotated",
         {"parallel": 1, "concurrency": 1, "annotate": False},
         {"parallel": 1, "concurrency": 1, "clean": True},
-        {"in/stale.bin": b"from an earlier attempt"},
+        left_over={"in/stale.bin": b"from an earlier attempt"},
     ),
-    Transfer("wide", {"parallel": 8, "concurrency": 2}, {"parallel": 8, "concurrency": 2}),
+    Transfer(
+        "wide-debug",
+        {"parallel": 8, "concurrency": 2},
+        {"parallel": 8, "concurrency": 2},
+        {"debug": True},
+    ),
 ]
 
+# Who uploads the build under test: a job of it, or a job of another pipeline that names
+# widget and the build in its upload and promote options.
+PRODUCERS = {
+    "its-own-job": ("widget", SUBJECT, None),
+    "named-in-the-options": (
+        "widget-release",
+        70,
+        {"project_id": "widget", "build_id": build_id(SUBJECT)},
+    ),
+}
 
-@pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.parametrize("payload, source, transfer", paired(PAYLOADS, SOURCES, TRANSFERS), ids=str)
-def test_a_later_step_downloads_the_bytes_a_build_step_uploaded(jobs, payload, source, transfer):
-    """Files a build step uploads and promotes arrive with the same bytes, at the paths the
-    options name and nothing else there, in a step that downloads them by its own build, a
-    build id, the project, another ref or LATEST_SUCCESSFUL, on either store."""
-    producer = jobs("widget", 1)
-    producer.write(payload.workspace)
-    consumer = jobs(source.pipeline, 1 if source.same_build else 2, source.branch)
+
+@pytest.mark.parametrize(
+    "payload, naming, transfer, ref, producer, backend",
+    paired(PAYLOADS, NAMINGS, TRANSFERS, REFS, sorted(PRODUCERS), BACKENDS),
+    ids=case_id,
+)
+def test_a_download_gets_the_bytes_of_the_build_it_names(
+    jobs, store, agent, payload, naming, transfer, ref, producer
+):
+    """Among builds of other refs and variants, earlier and later, promoted and not, a step that
+    names a build that a build step uploaded and promoted (as its own build, by its id, or as the
+    latest successful of its ref) gets that build's bytes, at the paths the options name and
+    nothing else there; a download from a branch without builds gets master's latest successful;
+    the upload annotates its build unless told not to."""
+    pipeline, number, names = PRODUCERS[producer]
+    made = stamp(SUBJECT, ref, "linux")
+    store.put_all(history(payload, ref))
+    maker = jobs(pipeline, number, ref)
+    maker.write(payload.made(made))
+    options = upload_and_promote("linux", ref, names, **payload.upload, **transfer.upload)
+
+    built = maker.with_plugin({**options, **transfer.plugin}).run("post-command")
+    store.put_all(master_made(payload, LATER, ref, "linux", naming.later_promoted))
+    consumer = (
+        jobs(naming.pipeline, SUBJECT, ref)
+        if naming.same_build
+        else jobs(naming.pipeline, 9, naming.own_ref)
+    )
     consumer.write(transfer.left_over)
-    project = {"variant": "linux", "output-dir": "in", **source.options(), **payload.download}
+    entries = [
+        {"variant": "linux", "output-dir": "in", **naming.entry(ref, build_id(SUBJECT))},
+        {
+            "project_id": "widget",
+            "variant": "macos",
+            "git_ref": NEW_BRANCH,
+            "output-dir": "in-macos",
+        },
+    ]
+    projects = [{**e, **payload.download} for e in entries]
+    download = {"download": {"projects": projects, **transfer.download}, **transfer.plugin}
+    fetched = consumer.with_plugin(download).run("pre-command")
 
-    built = producer.with_plugin(upload_and_promote(**payload.upload, **transfer.upload)).run(
-        "post-command"
-    )
-    fetched = consumer.with_plugin({"download": {"projects": [project], **transfer.download}}).run(
-        "pre-command"
-    )
-
+    annotations = agent.files(maker.env["BUILDKITE_BUILD_ID"], "annotations")
     assert (built.code, fetched.code) == (0, 0), built.output + fetched.output
-    assert consumer.files("in") == payload.arrives
+    assert consumer.files("in") == payload.arrives(made)
+    assert consumer.files("in-macos") == payload.arrives(stamp(EARLIER, MASTER, "macos"))
+    assert bool(annotations) == transfer.annotates
 
 
 @pytest.mark.parametrize("exit_status", [0, 1])
@@ -249,37 +378,40 @@ def test_post_command_promotes_only_a_passed_command_with_files(
 MANIFEST = {"file_count", "files", "uploaded_at", "total_size_bytes", "base_dir"}
 
 
-@pytest.mark.parametrize("prefix", ["", "ci/artifacts"])
 @pytest.mark.parametrize("snapshot", [None, KEY])
-def test_storage_is_additive(jobs, store, prefix, snapshot):
-    """Without a snapshot key, upload and promote write exactly the objects, manifest fields
-    and pointer body the plugin's master writes; with a key they add objects under
-    _snapshot/v1/ and manifest fields, and change none of those."""
-    job = jobs(destination=f"s3://{BUCKET}/{prefix}".rstrip("/"))
-    job.write({"out/a.bin": b"a", "out/sub/b.bin": b"bb"})
-    options = upload_and_promote(files="out/**/*", base_dir="out", snapshot=snapshot)
+@pytest.mark.parametrize("prefix, ref", paired(["", "ci/artifacts"], REFS), ids=case_id)
+def test_storage_is_additive(jobs, store, prefix, ref, snapshot):
+    """Without a snapshot key, upload and promote on a ref add exactly the objects, manifest
+    fields and pointer body the plugin's master writes, and leave what master wrote on the other
+    refs as it was; with a key they add objects under _snapshot/v1/ and manifest fields only."""
+    under = f"{prefix}/" if prefix else ""
+    files = {"a.bin": b"a", "sub/b.bin": b"bb"}
+    others = {
+        k: body
+        for r in REFS
+        if r != ref
+        for k, body in master_wrote(r, "linux", build_id(7), files, True, under=under).items()
+    }
+    store.put_all(others)
+    job = jobs("widget", 1, ref, destination=f"s3://{BUCKET}/{prefix}".rstrip("/"))
+    job.write({f"dist/{rel}": data for rel, data in files.items()})
+    options = upload_and_promote(ref=ref, files="dist/**/*", base_dir="dist", snapshot=snapshot)
 
     outcome = job.with_plugin(options).run("post-command")
 
-    under = f"{prefix}/" if prefix else ""
-    variant = f"{under}widget/{MASTER}/variants/linux"
-    build = f"{variant}/builds/{build_id(1)}"
-    masters = {
-        f"{build}/a.bin",
-        f"{build}/sub/b.bin",
-        f"{build}/manifest.json",
-        f"{variant}/LATEST_SUCCESSFUL",
-    }
-    added = store.stored() - masters
-    manifest = json.loads(store.get(f"{build}/manifest.json"))
+    masters = master_wrote(ref, "linux", build_id(1), files, True, under=under)
+    (manifest_key,) = [k for k in masters if k.endswith("/manifest.json")]
+    expected = {**{k: b for k, b in masters.items() if k != manifest_key}, **others}
+    objects = store.objects()
+    added = objects.keys() - masters.keys() - others.keys()
+    manifest = json.loads(objects[manifest_key])
     assert outcome.code == 0, outcome.output
-    assert masters <= store.stored()
+    assert {k: objects.get(k) for k in expected} == expected
     assert bool(added) == bool(snapshot) and all(
         k.startswith(f"{under}_snapshot/v1/") for k in added
     )
     assert set(manifest) - MANIFEST == ({"source", "downloads"} if snapshot else set())
-    assert (manifest["files"], manifest["file_count"]) == (["a.bin", "sub/b.bin"], 2)
-    assert store.get(f"{variant}/LATEST_SUCCESSFUL") == build_id(1).encode()
+    assert (manifest["files"], manifest["file_count"]) == (sorted(files), 2)
 
 
 ENGINE_BUILD = "01900000-0000-7000-8000-0000000000e7"
@@ -334,9 +466,10 @@ def test_the_library_downloads_what_the_hooks_download(
     jobs, store, plugin, tmp_path, payload, backend
 ):
     """A program outside Buildkite that vendors the library, as the README shows, downloads
-    the same files from the same build as the download hook."""
-    producer, consumer = jobs("widget", 1), jobs("app", 2)
-    producer.write(payload.workspace)
+    the same files from the same build as the download hook, among builds that compete."""
+    store.put_all(history(payload, MASTER))
+    producer, consumer = jobs("widget", SUBJECT), jobs("app", 9)
+    producer.write(payload.made(stamp(SUBJECT, MASTER, "linux")))
     request = {
         "project_id": "widget",
         "build_id": "LATEST_SUCCESSFUL",
@@ -353,6 +486,7 @@ def test_the_library_downloads_what_the_hooks_download(
     arguments = {
         **request,
         "patterns": payload.download["files"],
+        "exclude_patterns": payload.download.get("exclude"),
         "extract": payload.download.get("extract", False),
     }
     caller = subprocess.run(
@@ -374,7 +508,7 @@ def test_the_library_downloads_what_the_hooks_download(
     assert (built.code, fetched.code, caller.returncode) == (0, 0, 0), (
         built.output + fetched.output + caller.stderr
     )
-    assert json.loads(caller.stdout)["build_id"] == build_id(1)
+    assert json.loads(caller.stdout)["build_id"] == build_id(SUBJECT)
     files = {
         p.relative_to(tmp_path / "library").as_posix(): p.read_bytes()
         for p in (tmp_path / "library").rglob("*")

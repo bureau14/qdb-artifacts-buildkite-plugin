@@ -8,8 +8,8 @@ arguments and strict ref matching, and reads the manifest of the build it got.
 Usage: python -I outside_caller.py <directory holding vendor/> <request JSON> <output dir>
 
 The request holds ``project_id``, ``build_id``, ``git_ref``, ``variant``,
-``patterns`` and ``extract``. Prints the build downloaded and the file count of
-its manifest, as JSON.
+``patterns``, ``exclude_patterns`` and ``extract``. Prints the build downloaded
+and the file count of its manifest, as JSON.
 """
 
 import json
