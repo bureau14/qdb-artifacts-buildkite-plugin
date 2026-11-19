@@ -3,6 +3,4 @@
 moto[s3,ssm]>=5.1,<6
 flask
 flask-cors
-# The test authority of the stand-in for Buildkite's API (tests/gate/standin.py).
-cryptography
 pytest>=8
