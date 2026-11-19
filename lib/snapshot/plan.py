@@ -43,6 +43,7 @@ from ..forms import (
 )
 from .agent import META_DATA_LIMIT
 from .canonical import canonical_json
+from .members import member
 from .shown import short_commit, shown_text, shown_value
 
 SCHEMA = 2
@@ -151,13 +152,7 @@ def encode_plan(p: Plan) -> str:
 
 def _member(d: Any, name: str, kind: type | tuple[type, ...], where: str) -> Any:
     """``d[name]``, which must be of ``kind``; ``PlanError`` naming ``where`` otherwise."""
-    if not isinstance(d, dict) or name not in d:
-        raise PlanError(f"{where}: no {name}")
-    v = d[name]
-    if not isinstance(v, kind) or (kind is int and isinstance(v, bool)):
-        names = " or ".join(k.__name__ for k in (kind if isinstance(kind, tuple) else (kind,)))
-        raise PlanError(f"{where}.{name}: expected {names}, got {type(v).__name__}")
-    return v
+    return member(d, name, kind, where, PlanError)
 
 
 # What each text of a plan must be. The plan is read from meta-data, which any

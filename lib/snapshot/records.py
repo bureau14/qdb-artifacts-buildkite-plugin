@@ -46,6 +46,7 @@ from typing import Any, Callable
 from ..forms import is_build_id, is_https_url, is_iso_utc, is_key, is_slug, is_variant, iso_utc
 from ..pointer import Build
 from .canonical import canonical_json
+from .members import member
 from .shown import shown_text, shown_value
 
 SCHEMA = 1
@@ -218,12 +219,7 @@ def is_outcome(text: str) -> bool:
 
 def _member(d: Any, name: str, kind: type, where: str) -> Any:
     """``d[name]``, which must be of ``kind``; ``RecordError`` naming ``where`` otherwise."""
-    if not isinstance(d, dict) or name not in d:
-        raise RecordError(f"{where}: no {name}")
-    v = d[name]
-    if not isinstance(v, kind) or (kind is int and isinstance(v, bool)):
-        raise RecordError(f"{where}.{name}: expected {kind.__name__}, got {type(v).__name__}")
-    return v
+    return member(d, name, kind, where, RecordError)
 
 
 def _text(d: Any, name: str, form: Callable[[str], bool], what: str, where: str) -> str:
