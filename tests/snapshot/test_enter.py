@@ -115,11 +115,16 @@ def test_2_a_marker_of_another_build_is_not_this_steps(tmp_path):
     assert len(gate.agent.uploads) == 1 and gate.mode == "built"
 
 
-def test_2_a_failed_command_fails_also_a_step_that_uploaded(tmp_path):
+def test_2_a_step_that_uploaded_keeps_what_it_decided_when_a_retry_of_its_command_fails(tmp_path):
     gate = Gate(tmp_path, LIB, exit_status=1)
     gate.agent.meta_data["snapshot-uploaded-snapshot-enter"] = BUILDS[LIB].id
+    gate.agent.meta_data["snapshot-mode"] = "built"
 
-    assert "the command exited 1" in gate.fails()
+    assert gate.run() == 0
+
+    assert gate.mode == "built" and gate.records() == [] and gate.agent.uploads == []
+    assert gate.agent.annotations == []
+    assert "the command exited 1 this time; the build goes on as this step uploaded" in gate.lines
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +596,51 @@ def test_12_with_every_variant_there_the_rewritten_pipeline_is_uploaded(tmp_path
     assert gate.agent.meta_data["snapshot-uploaded-snapshot-enter"] == ROOT_BUILD.id
     assert gate.mode == "built"
     assert gate.agent.uploads[0] == yaml.safe_dump(uploaded)
+
+
+class Ordered(RecordingAgent):
+    """An agent that records the order of the marks it sets and the uploads it takes."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.events: list[str] = []
+
+    def meta_data_set(self, key: str, value: str) -> None:
+        super().meta_data_set(key, value)
+        self.events.append(key)
+
+    def pipeline_upload(self, document: str) -> None:
+        super().pipeline_upload(document)
+        self.events.append("upload")
+
+
+def test_12_leave_reads_marks_set_before_the_upload_and_the_marker_comes_after_it(tmp_path):
+    gate = Gate(tmp_path, CORE)
+    gate.agent = Ordered(meta_data=gate.agent.meta_data, builds=gate.agent.builds)
+
+    gate.run()
+
+    marker = "snapshot-uploaded-snapshot-enter"
+    assert gate.agent.events == ["snapshot-promotes", "snapshot-mode", "upload", marker]
+
+
+class NoPromotes(RecordingAgent):
+    """An agent that refuses to set ``snapshot-promotes``."""
+
+    def meta_data_set(self, key: str, value: str) -> None:
+        if key == "snapshot-promotes":
+            raise AgentError("buildkite-agent meta-data set failed (1): refused")
+        super().meta_data_set(key, value)
+
+
+def test_12_a_mark_the_agent_refuses_fails_the_step_before_anything_is_uploaded(tmp_path):
+    gate = Gate(tmp_path, CORE)
+    gate.agent = NoPromotes(meta_data=gate.agent.meta_data, builds=gate.agent.builds)
+
+    assert "meta-data set failed (1): refused" in gate.fails()
+
+    assert gate.agent.uploads == [] and gate.mode == "failed"
+    assert "snapshot-uploaded-snapshot-enter" not in gate.agent.meta_data
 
 
 def test_12_a_step_that_promotes_without_a_key_gets_one_for_leave(tmp_path):

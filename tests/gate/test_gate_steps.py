@@ -207,6 +207,30 @@ def test_a_retried_plan_step_after_its_upload_uploads_nothing_again(buildkite, s
     assert "snapshot-enter uploaded in this build before" in run.output
 
 
+def test_a_retried_plan_step_whose_command_fails_leaves_the_build_as_it_uploaded(buildkite, store):
+    buildkite.add_pipeline("engine", ENGINE)
+    engine = buildkite.start("engine")
+    assert enter(buildkite, engine).outcome == "passed"
+    (engine.checkout / ".buildkite" / "steps.yml").write_text("steps: [\n")
+    (buildkite.breaks / "engine-linux").write_text("")
+
+    retried = enter(buildkite, engine)
+    buildkite.play(engine)
+
+    assert retried.outcome == "hard_failed"
+    assert "the command exited 1 this time; the build goes on as this step uploaded" in (
+        retried.output
+    )
+    assert buildkite.agent.meta_data(engine.id)["snapshot-mode"] == "built"
+    assert engine.outcomes["build-linux"] == "hard_failed"
+    (where,) = failure_records(store)
+    record = json.loads(store.get(where))
+    assert (record["reason"], record["failed"]) == (
+        None,
+        [{"variant": "linux", "step": "build-linux", "outcome": "hard_failed"}],
+    )
+
+
 def test_without_the_variable_the_token_is_read_from_ssm(buildkite, store):
     buildkite.add_pipeline("engine", ENGINE)
     store.put_parameter(TOKEN_PARAMETER, "bkua_from-ssm-not-real", secure=True)

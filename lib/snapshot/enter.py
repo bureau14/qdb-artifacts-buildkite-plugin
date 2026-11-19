@@ -443,20 +443,24 @@ def build_pipeline(
     held: Mapping[tuple[str, str], Pointer | None],
     existing: Mapping[str, Pointer],
 ) -> None:
-    """12. Rewrite the generated pipeline (section 8), upload it, mark the build ``built``.
+    """12. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
 
     With a key, ``snapshot-promotes`` names the step of each variant that is
     built: a replaced step promotes nothing, so leave asks for no outcome of it.
+    The marks leave reads are set before the upload, so that no uploaded step
+    runs in a build without them; an upload the agent refuses then fails the
+    step, which sets the mode ``failed``. The marker of step 2 comes last.
     """
     dependencies = held_only(held)
     rewrite = Rewrite(job.project, key, edge.plugin_commit(), dependencies, existing)
     out = planned(generated.doc, rewrite)
-    edge.agent.pipeline_upload(dump_document(out))
+    document = dump_document(out)
     if key is not None:
         promotes = canonical_json(promote_keys(out, job.project)).decode("utf-8")
         edge.agent.meta_data_set(PROMOTES, promotes)
-    mark_uploaded(job, edge)
     edge.agent.meta_data_set(MODE, BUILT)
+    edge.agent.pipeline_upload(document)
+    mark_uploaded(job, edge)
     edge.log(f"{job.project} builds: uploaded the pipeline with {len(dependencies)} builds in it")
 
 
@@ -481,11 +485,20 @@ class Prepared:
 
 
 def first_steps(job: Job, edge: PlanEdge) -> Prepared | None:
-    """Steps 1 to 6, the same in enter and resume; None when the step uploaded before (2)."""
-    check_command(job, edge)
+    """Steps 1 to 6, the same in enter and resume; None when the step uploaded before (2).
+
+    Step 2 comes before step 1: once the step uploaded, the build goes as it
+    uploaded, also when a retry of the step's command fails.
+    """
     if uploaded_before(job, edge):
         edge.log(f"{job.step_key} uploaded in this build before; nothing more to do")
+        if job.exit_status != 0:
+            edge.log(
+                f"the command exited {job.exit_status} this time; "
+                "the build goes on as this step uploaded"
+            )
         return None
+    check_command(job, edge)
     generated = generated_pipeline(job, edge)
     p, node = plan_of(job, edge, generated)
     if node.key is None:
@@ -552,8 +565,10 @@ ENTER_ERRORS = (*EDGE_ERRORS, DocumentError, BuildkiteError)
 def enter(job: Job, edge: PlanEdge) -> int:
     """The plan step: decide what this build does.
 
+    2. The step's marker holds this build's id (a retry after the upload):
+       done. This comes before 1: once the step uploaded, the build goes as
+       it uploaded, also when the command of a retry fails.
     1. The command failed: record ``generator_failed`` when a chain node; fail.
-    2. The step's marker holds this build's id (a retry after the upload): done.
     3. The generated pipeline breaks the rule of section 2: record ``rule``
        when a chain node; fail.
     4. A chain node loads the plan and checks its commit; a root makes the
@@ -573,7 +588,7 @@ def enter(job: Job, edge: PlanEdge) -> int:
         record the cause; fail. Nothing is triggered.
     11. Some are missing: upload a trigger step per such dependency and the
         resume step; done.
-    12. Else upload the rewritten pipeline; mode built; done.
+    12. Else mode built, and upload the rewritten pipeline; done.
     """
     return gated(job, edge, enter_decisions, ENTER_ERRORS, STEP_CONTEXT, mark=True)
 
