@@ -174,19 +174,10 @@ class Generated:
 def generated_pipeline(job: Job, edge: Edge) -> Generated:
     """2. Check the rule of section 2; failing, record ``rule`` when a chain node; fail.
 
-    A file the command did not leave, or one that does not load, is the
-    generator's failure. A template of the build's own commit that does not
-    parse fails the build that reads it for itself, as the rule does
-    (``TemplateError``).
+    A template of the build's own commit that does not parse fails the build
+    that reads it for itself, as the rule does (``TemplateError``).
     """
-    path = Path(job.pipeline or "")
-    try:
-        doc = load_document(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, DocumentError) as exc:
-        message = f"the command passed, and {shown_text(str(path))}: {shown_text(str(exc))}"
-        raise reason_refusal(
-            job, GENERATOR_FAILED, message, chain_origin(job, edge), edge.clock()
-        ) from exc
+    doc = load_document(Path(job.pipeline or "").read_text(encoding="utf-8"))
     files = edge.checkout.checkout_files(TEMPLATE_DIRECTORY, is_template_path)
     try:
         declaration = read_declaration(files, job.project)

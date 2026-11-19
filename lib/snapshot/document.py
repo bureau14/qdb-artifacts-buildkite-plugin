@@ -16,9 +16,7 @@ new one; the document handed in is never changed.
 
 Download entries, plugin configurations and option keys are those of the
 ``configuration`` module, so the reader of templates, the rule and the rewrite
-have one notion of each. The upload interpolates ``$``, so every value this
-module writes into a document has ``$`` as ``$$`` (``escaped``); text it
-copies from the document stays as it is.
+have one notion of each.
 """
 
 from __future__ import annotations
@@ -31,7 +29,6 @@ from typing import Any
 
 import yaml
 
-from ..forms import is_object_id, is_slug, is_variant
 from ..pointer import Pointer
 from .configuration import (
     BUILD_ID,
@@ -61,11 +58,10 @@ from .declaration import (
     step_name,
 )
 from .plan import Plan, dependencies_first, trigger_label
-from .shown import shown_text, shown_value
+from .shown import shown_text
 
 RESUME_OPTION = "resume"
 
-PROMOTE_KEY_PREFIX = "snapshot-promote-"
 TRIGGER_KEY_PREFIX = "snapshot-dep-"
 RESUME_KEY = "snapshot-resume"
 RESUME_LABEL = ":camera_with_flash: snapshot resume"
@@ -75,7 +71,8 @@ GATE_TIMEOUT_MINUTES = 15
 
 
 class DocumentError(ValueError):
-    """The generated pipeline cannot be read or written as the specification says."""
+    """The generated pipeline promotes a variant at two places (``promotions``), or from a
+    step without a key (``promote_keys``)."""
 
 
 # ---------------------------------------------------------------------------
@@ -84,63 +81,29 @@ class DocumentError(ValueError):
 
 
 def load_document(text: str) -> Any:
-    """The generated pipeline in ``text``, parsed with PyYAML's safe loader.
-
-    Objects the text shares through anchors and aliases are shared in the
-    value. A text the safe loader refuses is a ``DocumentError`` with the
-    parser's message.
-    """
-    try:
-        return yaml.safe_load(text)
-    except (yaml.YAMLError, ValueError, RecursionError) as exc:
-        raise DocumentError(f"the generated pipeline does not load: {exc}") from exc
+    """The generated pipeline in ``text``, parsed with PyYAML's safe loader."""
+    return yaml.safe_load(text)
 
 
 def dump_document(doc: Any) -> str:
     """``doc`` as the runner's ``generate`` prints a pipeline: PyYAML's dump, keys sorted.
 
     For the values the safe loader gives, ``yaml.safe_dump`` writes what
-    ``yaml.dump`` writes; a shared object is written once with an anchor.
+    ``yaml.dump`` writes.
     """
-    try:
-        return yaml.safe_dump(doc)
-    except (yaml.YAMLError, TypeError) as exc:
-        raise DocumentError(f"the pipeline does not dump: {shown_value(str(exc))}") from exc
-
-
-class QuotedDumper(yaml.SafeDumper):
-    """PyYAML's safe dumper, writing every string between double quotes."""
-
-
-QuotedDumper.add_representer(
-    str, lambda dumper, text: dumper.represent_scalar("tag:yaml.org,2002:str", text, style='"')
-)
+    return yaml.safe_dump(doc)
 
 
 def dump_written(doc: Any) -> str:
-    """A document this module writes from nothing, the trigger and resume steps, keys sorted.
+    """A document this module writes from nothing, the trigger and resume steps, as JSON.
 
-    Every string is quoted. The agent reads YAML 1.2, which reads as numbers
-    some strings PyYAML writes plain: a commit of digits with a leading 0, or
-    of digits, an ``e`` and digits, and a branch named ``1e3``. The generated
-    pipeline is dumped as the runner printed it instead (``dump_document``).
+    JSON quotes every string: the agent reads YAML 1.2, which reads as
+    numbers some strings YAML writes plain, such as a commit of digits with a
+    leading 0, or of digits, an ``e`` and digits, and a branch named ``1e3``.
+    The generated pipeline is dumped as the runner printed it instead
+    (``dump_document``).
     """
-    return yaml.dump(doc, Dumper=QuotedDumper)
-
-
-def escaped(text: str) -> str:
-    """``text`` as a value of an uploaded document: the upload turns ``$$`` into ``$``.
-
-    A backslash right before a ``$`` is a ``DocumentError``: the upload also
-    reads ``\\$`` as an escaped ``$`` (buildkite-agent 3.118.1), so the ``$$``
-    written after it would not arrive as the ``$`` of the text.
-    """
-    if "\\$" in text:
-        raise DocumentError(
-            f"{shown_value(text)} holds a backslash before a $, which the upload reads as an "
-            "escaped $: it cannot be written as it is"
-        )
-    return text.replace("$", "$$")
+    return json.dumps(doc, sort_keys=True)
 
 
 # ---------------------------------------------------------------------------
@@ -148,32 +111,16 @@ def escaped(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def named_variant(options: Mapping[Any, Any], where: str) -> str | None:
-    """The variant an entry or a block names, as the plugin receives it; None when it names none.
+def named_variant(options: Mapping[Any, Any]) -> str | None:
+    """The variant an entry or a block names, as text; None when it names none.
 
-    The agent hands a scalar over as its text (``true`` for true), and a list
-    or a mapping as variables of other names, so the plugin reads no variant
-    from one. The text is as written: it may hold what the upload interpolates.
+    The agent hands a list or a mapping over as variables of other names, so
+    the plugin reads no variant from one.
     """
     v = option_value(options, VARIANT)
     if v is None or v == "" or isinstance(v, (dict, list)):
         return None
-    if isinstance(v, bool):
-        return "true" if v else "false"
     return str(v)
-
-
-def variant_of(options: Mapping[Any, Any], where: str) -> str | None:
-    """``named_variant``, which must have the form of a variant (``forms.is_variant``).
-
-    Wherever the plan step names a pointer or a build by a variant: the
-    pointer is named after the variant the upload interpolated, which is the
-    text as written only when nothing in it is interpolated.
-    """
-    v = named_variant(options, where)
-    if v is not None and not is_variant(v):
-        raise DocumentError(f"{where}: the variant {shown_value(v)} is not a variant")
-    return v
 
 
 def without_options(options: Mapping[Any, Any], names: Iterable[str]) -> dict[Any, Any]:
@@ -214,14 +161,6 @@ def own_downloads(doc: Any, own: str) -> list[dict[str, Any]]:
     return [e for e in download_entries(doc) if other_project(e, own) is None]
 
 
-def entry_variant(entry: Mapping[Any, Any], project: str) -> str:
-    """The variant a download entry of ``project`` names; an entry that names none is an error."""
-    v = variant_of(entry, f"a download entry of {project}")
-    if v is None:
-        raise DocumentError(f"a download entry of {project} names no variant")
-    return v
-
-
 # ---------------------------------------------------------------------------
 # The steps that promote and produce
 # ---------------------------------------------------------------------------
@@ -235,14 +174,7 @@ def own_blocks(step: Any, own: str, block: str) -> list[dict[str, Any]]:
 
 def block_variants(step: Any, own: str, block: str) -> list[str]:
     """The variants the own ``block`` blocks of ``step`` name (``named_variant``), in order."""
-    where = f"the {block} block of a step"
-    named = (named_variant(b, where) for b in own_blocks(step, own, block))
-    return [v for v in named if v is not None]
-
-
-def promoted_variants(step: Any, own: str) -> list[str]:
-    """The variants the own promote blocks of ``step`` name, of the form of a variant, in order."""
-    named = (variant_of(b, "a promote block") for b in own_blocks(step, own, PROMOTE))
+    named = (named_variant(b) for b in own_blocks(step, own, block))
     return [v for v in named if v is not None]
 
 
@@ -272,40 +204,24 @@ def promoted_twice(v: str, first: tuple[int, Any], second: tuple[int, Any]) -> D
 def promotions(doc: Any, own: str) -> dict[str, Any]:
     """``{variant: the step that promotes it}``; its keys are ``D``, what the pipeline can give.
 
-    Each is of the form of a variant, as it names a pointer. A variant
-    promoted at two places is an error, also by one step that aliases put at
-    two places: the first to pass would write its pointer while the other
-    still uploads.
+    A variant promoted at two places is an error: the first to pass would
+    write its pointer while the other still uploads.
     """
     found: dict[str, tuple[int, Any]] = {}
     for position, step in enumerate(step_places(doc), start=1):
-        for v in promoted_variants(step, own):
+        for v in block_variants(step, own, PROMOTE):
             first = found.setdefault(v, (position, step))
             if first[0] != position:
                 raise promoted_twice(v, first, (position, step))
     return {v: step for v, (_, step) in found.items()}
 
 
-def with_promote_keys(doc: Any, own: str) -> Any:
-    """``doc`` with a key for every step that promotes and has none.
-
-    The leave step asks for a step's outcome by its key. The keys are
-    ``snapshot-promote-<n>``, ``n`` counting such steps from 1 in the order of
-    the document, whichever variants exist. A variant promoted at two places
-    is an error (``promotions``): the key of a step at two places would be
-    one key of two steps.
-    """
-    promotions(doc, own)
-    out = copy.deepcopy(doc)
-    promoting = (s for s in step_places(out) if block_variants(s, own, PROMOTE))
-    keyless = [s for s in promoting if step_key(s) is None]
-    for n, step in enumerate(keyless, start=1):
-        step["key"] = f"{PROMOTE_KEY_PREFIX}{n}"
-    return out
-
-
 def promote_keys(doc: Any, own: str) -> dict[str, str]:
-    """``{variant: step key}`` of the steps that promote: meta-data ``snapshot-promotes``."""
+    """``{variant: step key}`` of the steps that promote: meta-data ``snapshot-promotes``.
+
+    The leave step asks for a step's outcome by its key, so a step that
+    promotes and has none is an error.
+    """
     keys = {v: step_key(s) for v, s in promotions(doc, own).items()}
     keyless = sorted(v for v, k in keys.items() if k is None)
     if keyless:
@@ -335,14 +251,6 @@ class Rewrite:
     plugin_commit: str
     dependencies: Mapping[tuple[str, str], Pointer]
     existing: Mapping[str, Pointer]
-
-    def __post_init__(self) -> None:
-        if not is_slug(self.own):
-            raise ValueError(f"project {shown_value(self.own)} is not a pipeline slug")
-        if self.key is None and self.existing:
-            raise ValueError("own variants exist only at a key, and this rewrite has none")
-        if not is_object_id(self.plugin_commit):
-            raise ValueError(f"plugin commit {shown_value(self.plugin_commit)} is not a commit")
 
 
 # ---------------------------------------------------------------------------
@@ -387,13 +295,13 @@ def replacement(step: Any, own: str, existing: Mapping[str, Pointer]) -> dict[st
     numbers = sorted({b.number for b in builds.values()})
     where = f"build {numbers[0]}" if len(numbers) == 1 else f"builds {', '.join(map(str, numbers))}"
     label = step_label(step)
-    exists = escaped(f"(exists in {where})")
+    exists = f"(exists in {where})"
     kept = {f: step[f] for f in FLOW_FIELDS if f in step}
     echoes = (f'echo "{v} of {own} exists in build {b.number} {b.url}"' for v, b in builds.items())
     return {
         "label": f"{label} {exists}" if label else exists,
         **kept,
-        "command": escaped("\n".join(echoes)),
+        "command": "\n".join(echoes),
     }
 
 
@@ -424,7 +332,7 @@ def needed_variants(
         replace_content(s, {})
     needs: dict[str, set[str]] = {}
     for project, e in snapshot_dependencies(kept, own):
-        needs.setdefault(project, set()).add(entry_variant(e, project))
+        needs.setdefault(project, set()).add(named_variant(e))
     return {p: frozenset(v) for p, v in needs.items()}
 
 
@@ -436,75 +344,52 @@ def needed_variants(
 def resolved_entry(entry: Mapping[Any, Any], p: Pointer) -> dict[Any, Any]:
     """``entry`` downloading exactly the build of ``p``: its build id, its ref, strict matching."""
     kept = without_options(entry, (GIT_REF, STRICT_REF_MATCH, BUILD_ID))
-    return {
-        **kept,
-        BUILD_ID: escaped(p.build.id),
-        GIT_REF: escaped(p.git_ref),
-        STRICT_REF_MATCH: True,
-    }
+    return {**kept, BUILD_ID: p.build.id, GIT_REF: p.git_ref, STRICT_REF_MATCH: True}
 
 
 def with_snapshot(block: Mapping[Any, Any], key: str) -> dict[Any, Any]:
     """An upload or promote block that carries the key ``key``."""
-    return {**without_options(block, (SNAPSHOT_OPTION,)), SNAPSHOT_OPTION: escaped(key)}
+    return {**without_options(block, (SNAPSHOT_OPTION,)), SNAPSHOT_OPTION: key}
 
 
 def plugin_key(commit: str) -> str:
     """The key that names the plugin at ``commit``."""
-    return f"{PLUGIN}#{escaped(commit)}"
+    return f"{PLUGIN}#{commit}"
 
 
 def with_plugin_commit(m: Mapping[Any, Any], commit: str) -> dict[Any, Any]:
     """The mapping ``m`` with every key that names the plugin naming it at ``commit``."""
-    named = [k for k in m if is_plugin_key(k)]
-    if len(named) > 1:
-        shown = " and ".join(shown_value(k) for k in named)
-        raise DocumentError(f"two keys of one mapping name the plugin, {shown}")
     return {plugin_key(commit) if is_plugin_key(k) else k: v for k, v in m.items()}
-
-
-def dependency_pointer(project: str, entry: Mapping[Any, Any], r: Rewrite) -> Pointer:
-    """The pointer a snapshot entry of ``project`` downloads by: the one of its variant."""
-    variant = entry_variant(entry, project)
-    p = r.dependencies.get((project, variant))
-    if p is None:
-        raise DocumentError(f"no build of {project} {variant} was handed in for its entry")
-    return p
 
 
 def planned(doc: Any, r: Rewrite) -> Any:
     """The document to upload: one resolution for every job (section 8).
 
     ``doc`` is a generated pipeline that keeps the rule
-    (``declaration.rule_violations``), so it writes no ``snapshot`` option
-    itself and every plugin configuration in it can be read.
+    (``declaration.rule_violations``) and promotes no variant at two places
+    (``promotions``).
 
-    - With a key, a variant promoted at two places is an error
-      (``promotions``); a step that promotes and has no key gets one
-      (``with_promote_keys``); a step that completion replaces
-      (``replaced_steps``) is replaced in its place (``replacement``), and an
-      own download entry of a variant whose uploading steps were all replaced
-      gets that variant's build, ref and strict matching.
+    - A step that completion replaces (``replaced_steps``) is replaced in its
+      place (``replacement``), and an own download entry of a variant whose
+      uploading steps were all replaced gets that variant's build, ref and
+      strict matching.
     - Every snapshot entry that remains gets the build, ref and strict
       matching handed in for its project and variant (``needed_variants``
       names them). A latest successful entry is left as generated.
     - With a key, every own upload and promote block gets ``snapshot: <key>``.
     - Every key that names the plugin names it at the plugin commit.
-
-    Without a key no step gets a key: only the leave step of a build with a
-    key asks for outcomes.
     """
-    out = copy.deepcopy(doc) if r.key is None else with_promote_keys(doc, r.own)
+    out = copy.deepcopy(doc)
     replaced = replaced_steps(out, r.own, r.existing)
     rewired = rewired_variants(step_places(out), r.own, replaced)
     for s in replaced:
         replace_content(s, replacement(s, r.own, r.existing))
     for e in own_downloads(out, r.own):
-        v = named_variant(e, "an own download entry")
+        v = named_variant(e)
         if v in rewired:
             replace_content(e, resolved_entry(e, r.existing[v]))
     for project, e in snapshot_dependencies(out, r.own):
-        replace_content(e, resolved_entry(e, dependency_pointer(project, e, r)))
+        replace_content(e, resolved_entry(e, r.dependencies[(project, named_variant(e))]))
     if r.key is not None:
         for s in step_places(out):
             for block in (*own_blocks(s, r.own, UPLOAD), *own_blocks(s, r.own, PROMOTE)):
@@ -532,12 +417,9 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[str], after: Sequence
     of its build.
     """
     node = plan.nodes[project]
-    wanted = sorted(frozenset(needs))
-    if not all(is_variant(v) for v in wanted):
-        raise DocumentError(f"{project}: the variants {shown_value(wanted)} are not all variants")
     message = f"snapshot dependency of {plan.root.project} build {plan.root.build_number}"
     step: dict[str, Any] = {
-        "label": escaped(trigger_label(plan, project)),
+        "label": trigger_label(plan, project),
         "key": trigger_key(project),
         "trigger": project,
         "soft_fail": True,
@@ -545,18 +427,16 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[str], after: Sequence
     if after:
         step["depends_on"] = list(after)
     step["build"] = {
-        "branch": escaped(node.label),
+        "branch": node.label,
         "commit": node.commit,
-        "message": escaped(message),
-        "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": escaped(json.dumps(wanted))},
+        "message": message,
+        "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": json.dumps(sorted(frozenset(needs)))},
     }
     return step
 
 
 def below_in(plan: Plan, project: str) -> frozenset[str]:
     """The nodes below ``project`` in ``plan``: all that it reaches through its dependencies."""
-    if project not in plan.nodes:
-        raise DocumentError(f"{project} is not a node of plan {plan.id}")
     return frozenset(dependencies_first(plan, project)) - {project}
 
 
@@ -587,8 +467,8 @@ def resume_step(
         "priority": GATE_PRIORITY,
         "timeout_in_minutes": GATE_TIMEOUT_MINUTES,
         "depends_on": [{"step": t, "allow_failure": True} for t in triggers],
-        "command": escaped(command),
-        "plugins": [{plugin_key(plugin_commit): {RESUME_OPTION: escaped(pipeline_path)}}],
+        "command": command,
+        "plugins": [{plugin_key(plugin_commit): {RESUME_OPTION: pipeline_path}}],
     }
 
 
