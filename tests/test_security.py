@@ -15,6 +15,7 @@ import pytest
 import zstandard
 from chain import GRAPHS
 from fakes import url
+from world import TOKEN
 
 from lib.extract import extract_local_archive
 from lib.snapshot import buildkite
@@ -103,7 +104,6 @@ def test_no_tar_member_is_written_outside_the_output_directory(tmp_path, suffix,
 # The Buildkite API token
 # ---------------------------------------------------------------------------
 
-TOKEN = "bkua_" + "0f1e2d3c4b5a6978" * 2
 RUNS_PIPELINE_PY = (
     "steps:\n  - command: python3 .buildkite/pipeline.py | buildkite-agent pipeline upload\n"
 )
@@ -139,7 +139,8 @@ def api(answer: int, received: list):
 def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_source, answer):
     """The plan step of a root sends the Buildkite API token to the API and puts it in nothing
     the chain prints, logs, annotates, raises, sets as meta-data, uploads or stores, whatever
-    the API answers and wherever the token was read."""
+    the API answers and wherever the token was read. (Every job of ``world.py`` holds the token
+    too, and its ``Job.run`` fails a hook that prints it.)"""
     received: list[str] = []
     monkeypatch.setenv("BUILDKITE_ORGANIZATION_SLUG", "example")
     if token_source == "variable":

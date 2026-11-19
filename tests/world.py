@@ -10,6 +10,7 @@
 - Jobs: a checkout that is a git repository, and the environment an agent
   gives a job, with the step's plugin options flattened as the agent does.
   Hooks run as the agent runs them: bash, that environment, that checkout.
+  Every job holds the Buildkite API token, and no hook may print it.
 
 Every name is invented. Nothing reaches a network but pip in post-checkout.
 """
@@ -44,6 +45,7 @@ R2 = {
 }
 OPTION_PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
 GENERATED = ".buildkite/snapshot-pipeline.yml"
+TOKEN = "bkua_" + "0f1e2d3c4b5a6978" * 2
 # A hook of a test takes about a second; one that retries a store it cannot reach is stopped.
 HOOK_TIMEOUT = 60
 POST_CHECKOUT_TIMEOUT = 900
@@ -393,7 +395,11 @@ class Job:
         }
 
     def run(self, hook: str) -> Outcome:
-        return finish_hook(start_hook(self.plugin, hook, self.workspace, self.env), HOOK_TIMEOUT)
+        """The hook's outcome, run as the agent runs it. The job holds the Buildkite API token
+        (``test_security.py``), and a hook that prints it fails the test."""
+        outcome = finish_hook(start_hook(self.plugin, hook, self.workspace, self.env), HOOK_TIMEOUT)
+        assert TOKEN not in outcome.stdout + outcome.stderr, f"{hook} printed the token"
+        return outcome
 
 
 def store_variables(store: Store, backend: str, destination: str = f"s3://{BUCKET}") -> dict:
@@ -437,6 +443,7 @@ def jobs(tmp_path, store, agent, plugin, backend):
         env = {
             **host_variables(home, agent.bin),
             **store_variables(store, backend, destination or f"s3://{BUCKET}"),
+            "ARTIFACTS_BUILDKITE_TOKEN": TOKEN,
             "BUILDKITE": "true",
             "BUILDKITE_ORGANIZATION_SLUG": ORGANISATION,
             "BUILDKITE_PIPELINE_SLUG": pipeline,
