@@ -44,7 +44,8 @@ R2 = {
 }
 OPTION_PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
 GENERATED = ".buildkite/snapshot-pipeline.yml"
-HOOK_TIMEOUT = 300
+# A hook of a test takes about a second; one that retries a store it cannot reach is stopped.
+HOOK_TIMEOUT = 60
 POST_CHECKOUT_TIMEOUT = 900
 
 # Git as on an agent: no configuration of the host, a fixed author.
@@ -266,7 +267,13 @@ def start_hook(root: Path, name: str, cwd: Path, env: dict) -> subprocess.Popen:
 
 
 def finish_hook(process: subprocess.Popen, timeout: float) -> Outcome:
-    stdout, stderr = process.communicate(timeout=timeout)
+    """The hook's outcome; a hook still running after ``timeout`` seconds is killed."""
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
+        stderr += f"\n[killed after {timeout} s]"
     return Outcome(process.returncode, stdout, stderr)
 
 
@@ -391,17 +398,18 @@ class Job:
 
 def store_variables(store: Store, backend: str, destination: str = f"s3://{BUCKET}") -> dict:
     """What a job, or a program outside Buildkite, sets to reach the store; the AWS
-    configuration files of its home are absent."""
+    configuration files of its home are absent. An s3 job signs with AWS keys; an r2 job
+    holds the R2 key pair and no AWS credential, so that only the pair can sign its requests."""
+    aws = {"AWS_ACCESS_KEY_ID": "test-aws-access-key", "AWS_SECRET_ACCESS_KEY": "test-aws-secret"}
     return {
-        "AWS_ACCESS_KEY_ID": "test-aws-access-key",
-        "AWS_SECRET_ACCESS_KEY": "test-aws-secret-access-key",
+        **(R2 if backend == "r2" else aws),
         "AWS_DEFAULT_REGION": REGION,
         "AWS_ENDPOINT_URL_SSM": store.endpoint,
         "AWS_EC2_METADATA_DISABLED": "true",
         "ARTIFACTS_BACKEND": backend,
         "ARTIFACTS_DESTINATION": destination,
         "ARTIFACTS_ENDPOINT_URL": store.endpoint,
-        **(R2 if backend == "r2" else {}),
+        "ARTIFACTS_DOMAIN": "artifacts.example.test",
     }
 
 
@@ -429,7 +437,6 @@ def jobs(tmp_path, store, agent, plugin, backend):
         env = {
             **host_variables(home, agent.bin),
             **store_variables(store, backend, destination or f"s3://{BUCKET}"),
-            "ARTIFACTS_DOMAIN": "artifacts.example.test",
             "BUILDKITE": "true",
             "BUILDKITE_ORGANIZATION_SLUG": ORGANISATION,
             "BUILDKITE_PIPELINE_SLUG": pipeline,
