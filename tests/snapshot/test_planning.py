@@ -52,8 +52,8 @@ def keys(world, number: int) -> dict[str, set[str]]:
     for r in roots({p: n.deps for p, n in world.projects.items()}):
         commit = world.hosting.head(r)
         root = Root(r, "master", commit, f"01890000-0000-7000-8000-{number:012d}", number)
-        reading = read_declaration(world.hosting.trees[commit], r)
-        for p, node in make_plan(root, reading, world.git, world.pipelines).nodes.items():
+        declaration = read_declaration(world.hosting.trees[commit], r)
+        for p, node in make_plan(root, declaration, world.git, world.pipelines).nodes.items():
             found.setdefault(p, set()).add(node.key)
     return found
 
@@ -153,14 +153,14 @@ def template(request) -> Template:
 def test_the_declaration_holds_every_download_of_another_project(template):
     """Reading a template gives every other project it downloads, with the entry's type and
     pin, in either spelling; and the pipeline generated from it keeps the rule."""
-    reading = read_declaration({".buildkite/steps.yml": template.text}, template.own)
+    declaration = read_declaration({".buildkite/steps.yml": template.text}, template.own)
     doc = load_document(generated(template.text, template.own_ref))
 
-    entries = {(e.project, e.type, e.pin) for e in reading.declaration.entries}
+    entries = {(e.project, e.type, e.pin) for e in declaration.entries}
     violations = rule_violations(
-        pipeline_downloads(doc), reading.declaration, template.own, template.own_ref
+        pipeline_downloads(doc), declaration, template.own, template.own_ref
     )
-    assert (reading.errors, entries, violations) == ((), template.expected, [])
+    assert (entries, violations) == (template.expected, [])
 
 
 # ---------------------------------------------------------------------------

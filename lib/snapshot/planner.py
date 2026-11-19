@@ -24,10 +24,7 @@ not asked about. The walk is breadth first from the root; each project is
 resolved once, for the first consumer that reaches it (consumers in the order
 reached, their dependencies sorted):
 
-1. The root, at its own commit and ref, with its own declaration; a template
-   of its own that does not parse fails the plan before anything is asked
-   (``check_root``).
-   Its repository is Buildkite's answer for its slug. Its release line
+1. The root, at its own commit and ref, with its own declaration. Its repository is Buildkite's answer for its slug. Its release line
    (``lines.release_line`` of that repository and its branch) is found the
    first time a dependency without a pin is placed, and only then. Its
    declaration may hold a latest successful dependency: then it has no
@@ -43,16 +40,18 @@ reached, their dependencies sorted):
    c. its commit, ``git.commits_of``, a tag peeled; the root's repository and
       branch give the root's own commit. A ref that does not exist refuses
       the project;
-   d. the four conditions of section 3, the first that fails refusing the
-      project with its own message (``first_unmet``): Buildkite's
-      configuration runs ``.buildkite/pipeline.py``; that file at the commit
-      has the runner's shape; its templates parse; its declaration holds no
-      latest successful dependency;
-   e. a project that meets all four is a node, with its declaration, and so
+   d. the conditions of section 3, the first that fails refusing the project
+      with its own message (``first_unmet``): Buildkite's configuration runs
+      ``.buildkite/pipeline.py``; that file at the commit has the runner's
+      shape; its declaration holds no latest successful dependency. A
+      template that does not parse fails the plan, naming the project and
+      the file (``declaration.TemplateError``);
+   e. a project that meets all three is a node, with its declaration, and so
       with its own snapshot dependencies and pins.
 
 3. Pins come from every node of the tree. Two different pins of one project
-   fail the plan and name where each was found. The pins decide where their projects are taken from, which decides
+   fail the plan and name where each was found. The pins decide where their
+   projects are taken from, which decides
    which commits are read and so which pins there are: the walk is made again
    with the pins it found until they are the pins it was made with. Pins that
    never settle fail the plan.
@@ -90,13 +89,10 @@ from .declaration import (
     SNAPSHOT,
     Declaration,
     Entry,
-    ReadError,
-    Reading,
     declared_entries,
     has_snapshot,
     is_template_path,
     read_declaration,
-    size_problem,
 )
 from .git import Git, branch_of, branch_ref
 from .lines import is_release_line, release_line
@@ -328,19 +324,6 @@ def unmet_shape(project: str, place: Place, problem: str) -> Unmet:
     )
 
 
-def shown_errors(errors: Sequence[ReadError]) -> str:
-    """The templates that do not parse, each with why, for a message."""
-    return "; ".join(f"{shown_text(e.path)}: {e.detail}" for e in errors)
-
-
-def unmet_parse(project: str, place: Place, errors: Sequence[ReadError]) -> Unmet:
-    which = "that template" if len(errors) == 1 else "those templates"
-    return Unmet(
-        f"its templates do not parse by the reading rule: {shown_errors(errors)}",
-        f"{project} fixes {which} on {shown_text(place.ref)}",
-    )
-
-
 def unmet_latest(project: str, place: Place, latest: Entry) -> Unmet:
     path = shown_text(latest.path)
     return Unmet(
@@ -352,25 +335,22 @@ def unmet_latest(project: str, place: Place, latest: Entry) -> Unmet:
 
 
 def pipeline_py_problem(source: bytes | None) -> str | None:
-    """Why ``.buildkite/pipeline.py`` (None when there is none) lacks the runner's shape.
-
-    A file larger than ``FILE_LIMIT`` is not parsed: it has no shape.
-    """
+    """Why ``.buildkite/pipeline.py`` (None when there is none) lacks the runner's shape."""
     if source is None:
         return "is not there"
-    return size_problem(source) or shape_problem(source)
+    return shape_problem(source)
 
 
 def first_unmet(
     project: str, place: Place, facts: PipelineFacts, src: Sources
 ) -> Unmet | Declaration:
-    """The first of the four conditions that ``project`` at ``place`` does not meet.
+    """The first of the three conditions that ``project`` at ``place`` does not meet.
 
     In this order: Buildkite's configuration runs ``.buildkite/pipeline.py``
     (when it does not, the repository is not read); that file at the commit
-    has the runner's shape; the templates of the commit parse; their
-    declaration holds no latest successful dependency. Returns the
-    declaration when all four hold.
+    has the runner's shape; the declaration of the commit's templates holds
+    no latest successful dependency. Returns the declaration when all three
+    hold; a template that does not parse raises ``TemplateError``.
     """
     if not facts.runs_pipeline_py:
         return unmet_buildkite(project)
@@ -378,13 +358,11 @@ def first_unmet(
     problem = pipeline_py_problem(files.get(PIPELINE_PY))
     if problem is not None:
         return unmet_shape(project, place, problem)
-    reading = read_declaration(files, project)
-    if reading.errors:
-        return unmet_parse(project, place, reading.errors)
-    latest = declared_entries(reading.declaration, LATEST_SUCCESSFUL)
+    declaration = read_declaration(files, project)
+    latest = declared_entries(declaration, LATEST_SUCCESSFUL)
     if latest:
         return unmet_latest(project, place, latest[0])
-    return reading.declaration
+    return declaration
 
 
 def refusal(project: str, reached: Reached, place: Place, unmet: Unmet) -> Refused:
@@ -702,27 +680,16 @@ def plan_node(n: Member, key: str | None, label: str) -> Node:
 # ---------------------------------------------------------------------------
 
 
-def check_root(root: Root, own: Reading) -> None:
-    """What fails the plan of ``root`` before anything is asked: own templates that do not
-    parse."""
-    if own.errors:
-        raise PlanError(
-            f"the templates of {root.project} at {root.commit} do not parse by the reading "
-            f"rule: {shown_errors(own.errors)}"
-        )
-
-
-def make_plan(root: Root, own: Reading, git: Git, pipelines: Pipelines) -> Plan:
+def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> Plan:
     """The plan of ``root``; see the module docstring.
 
     ``own`` is the declaration read from the root's own commit. Raises
-    ``PlanError`` when the tree cannot be planned; other errors of git and of
-    Buildkite pass through unchanged.
+    ``PlanError`` when the tree cannot be planned; other errors of git, of
+    Buildkite and of templates pass through unchanged.
     """
-    check_root(root, own)
     pipeline = functools.cache(pipelines)
     repository = pipeline(root.project).repository
-    first = Member(Place(repository, branch_ref(root.branch), root.commit), own.declaration)
+    first = Member(Place(repository, branch_ref(root.branch), root.commit), own)
     src = asked_once(git, pipeline, repository, root.branch, root.commit)
     tree = tree_of(settled_walk(root, first, src))
     order = bottom_up(tree, root.project)

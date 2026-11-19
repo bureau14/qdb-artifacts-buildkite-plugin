@@ -59,7 +59,6 @@ from .declaration import (
     step_key,
     step_label,
     step_name,
-    yaml_problem,
 )
 from .plan import Plan, dependencies_first, trigger_label
 from .shown import shown_text, shown_value
@@ -94,7 +93,7 @@ def load_document(text: str) -> Any:
     try:
         return yaml.safe_load(text)
     except (yaml.YAMLError, ValueError, RecursionError) as exc:
-        raise DocumentError(f"the generated pipeline does not load: {yaml_problem(exc)}") from exc
+        raise DocumentError(f"the generated pipeline does not load: {exc}") from exc
 
 
 def dump_document(doc: Any) -> str:

@@ -15,19 +15,15 @@ the rule checks are one notion.
 A snapshot tree never contains a latest successful dependency: a declaration
 that holds one has no snapshot (``has_snapshot``).
 
-Nothing here raises on foreign input: a file that does not parse and a part
-of a template that names the plugin another way are values
-(``UnparsableFile``, ``InvalidEntry``) that the caller decides about. Beyond
-what the specification's reading rule says, so that a template of another
-repository costs no more than its size: a template larger than ``FILE_LIMIT``
-or holding a YAML anchor or alias does not parse.
+A template that does not parse raises ``TemplateError``, which names the
+project and the file.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any
 
 import yaml
 
@@ -37,7 +33,6 @@ from .configuration import (
     PLUGIN,
     PROJECT_ID,
     download_entries,
-    holds_plugin_name,
     misnamed_plugins,
     option_items,
     option_value,
@@ -45,13 +40,7 @@ from .configuration import (
 from .shown import shown_text, shown_value
 
 BUILDKITE_DIR = ".buildkite/"
-TOOLS_DIR = ".buildkite/tools/"
 TEMPLATE_SUFFIXES = (".yml", ".yaml")
-
-# The largest file of another repository the reader parses, in bytes. Parsing
-# takes many times the size of the text (YAML about 160, Python about 440);
-# the largest committed template is under 4 KB, the largest pipeline.py 22 KB.
-FILE_LIMIT = 1024 * 1024
 
 # The two types of dependency.
 SNAPSHOT = "snapshot"
@@ -88,32 +77,8 @@ class Declaration:
     entries: tuple[Entry, ...] = ()
 
 
-@dataclass(frozen=True)
-class UnparsableFile:
-    """A template that is not UTF-8 or not one YAML document."""
-
-    path: str
-    detail: str
-
-
-@dataclass(frozen=True)
-class InvalidEntry:
-    """A part of a template that names the plugin and that the reading rule cannot read: a key
-    that names the plugin another way (``misnamed_plugins``)."""
-
-    path: str
-    detail: str
-
-
-ReadError = Union[UnparsableFile, InvalidEntry]
-
-
-@dataclass(frozen=True)
-class Reading:
-    """What ``read_declaration`` found: the declaration and the errors on the way."""
-
-    declaration: Declaration
-    errors: tuple[ReadError, ...] = ()
+class TemplateError(ValueError):
+    """A template of the reading rule that does not parse as YAML."""
 
 
 @dataclass(frozen=True)
@@ -131,14 +96,9 @@ class StepDownloads:
 
 @dataclass(frozen=True)
 class Violation:
-    """A part of a generated pipeline that the declaration, or the reading of it, does not allow.
-
-    ``project`` is the project the entry downloads from; None for a problem of
-    the plugin's configuration, which concerns no one project.
-    """
+    """A part of a generated pipeline that the declaration does not allow: its step and why."""
 
     step: str
-    project: str | None
     reason: str
 
 
@@ -272,94 +232,33 @@ def is_template_path(path: str) -> bool:
     """True for a path the reading rule looks at.
 
     ``path`` is relative to the repository root and ``/``-separated: a
-    ``*.yml`` or ``*.yaml`` file under ``.buildkite/``, outside the tools
-    submodule. The files are those of a commit, never of a working tree, so
-    the pipeline a job generates is not among them unless it is committed.
+    ``*.yml`` or ``*.yaml`` file under ``.buildkite/``. The files are those of
+    a commit, never of a working tree, so the pipeline a job generates is not
+    among them unless it is committed, and the tools submodule is not
+    descended into.
     """
-    return (
-        path.startswith(BUILDKITE_DIR)
-        and path.endswith(TEMPLATE_SUFFIXES)
-        and not path.startswith(TOOLS_DIR)
-    )
+    return path.startswith(BUILDKITE_DIR) and path.endswith(TEMPLATE_SUFFIXES)
 
 
 def mentions_plugin(content: str | bytes) -> bool:
-    """True when the file's text contains the plugin's name in any ASCII case.
+    """True when the file's text contains the plugin's name. A file that does not is never
+    parsed."""
+    return (PLUGIN.encode("ascii") if isinstance(content, bytes) else PLUGIN) in content
 
-    A file that does not is never parsed. Any case, so that a key naming the
-    plugin another way (``configuration.names_plugin_another_way``) is found
-    and refused.
+
+def parse_template(own: str, path: str, content: str | bytes) -> Any:
+    """The parsed YAML of one template of ``own``, with a safe loader.
+
+    ``{placeholder}`` text is left alone. A template that does not parse
+    raises ``TemplateError``.
     """
-    if isinstance(content, bytes):
-        return PLUGIN.encode("ascii") in content.lower()
-    return holds_plugin_name(content)
-
-
-class AnchorRefused(yaml.MarkedYAMLError):
-    """A template holds an anchor or an alias, which the reading rule does not read."""
-
-
-class TemplateLoader(yaml.SafeLoader):
-    """The safe loader, refusing every anchor and alias.
-
-    PyYAML keeps an alias as a shared reference, so a few hundred bytes of
-    aliases stand for a tree of billions of nodes that any walk, comparison
-    or message of the value goes through in full. No committed template uses
-    one.
-    """
-
-    def compose_node(self, parent: Any, index: Any) -> Any:
-        event = self.peek_event()
-        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None) is not None:
-            raise AnchorRefused(problem="anchor or alias", problem_mark=event.start_mark)
-        return super().compose_node(parent, index)
-
-
-def _mark(exc: yaml.MarkedYAMLError) -> str:
-    mark = exc.problem_mark
-    return f"line {mark.line + 1}, column {mark.column + 1}"
-
-
-def yaml_problem(exc: Exception) -> str:
-    """The parser's explanation, shown short in ASCII: it may quote the file."""
-    problem = getattr(exc, "problem", None)
-    if isinstance(exc, yaml.MarkedYAMLError) and exc.problem_mark is not None and problem:
-        return f"{shown_text(problem)} at {_mark(exc)}"
-    return shown_text(" ".join(str(exc).split())) or type(exc).__name__
-
-
-def size_problem(content: str | bytes) -> str | None:
-    """Why ``content`` is too large for the reader to parse; None when it is not."""
-    size = len(content) if isinstance(content, bytes) else len(content.encode("utf-8"))
-    if size <= FILE_LIMIT:
-        return None
-    return f"is {size} bytes, more than the {FILE_LIMIT} bytes the reader parses"
-
-
-def parse_template(path: str, content: str | bytes) -> Any | UnparsableFile:
-    """The parsed YAML of one template, or why it cannot be parsed.
-
-    A template larger than ``FILE_LIMIT`` does not parse, decided before it
-    is decoded. Bytes are decoded as UTF-8. The text is parsed as it is, with
-    a safe loader that refuses anchors and aliases (``TemplateLoader``):
-    ``{placeholder}`` text is left alone.
-    """
-    too_large = size_problem(content)
-    if too_large is not None:
-        return UnparsableFile(path, too_large)
     try:
-        text = content.decode("utf-8") if isinstance(content, bytes) else content
-    except UnicodeDecodeError as exc:
-        return UnparsableFile(path, f"not UTF-8: {exc.reason} at byte {exc.start}")
-    try:
-        return yaml.load(text, Loader=TemplateLoader)
-    except AnchorRefused as exc:
-        return UnparsableFile(path, f"holds an anchor or alias at {_mark(exc)}")
-    except (yaml.YAMLError, ValueError, RecursionError) as exc:
-        return UnparsableFile(path, f"not valid YAML: {yaml_problem(exc)}")
+        return yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        raise TemplateError(f"{own}: {path} does not parse as YAML: {exc}") from exc
 
 
-def read_entry(path: str, entry: Mapping[str, Any], own: str) -> Entry | InvalidEntry | None:
+def read_entry(path: str, entry: Mapping[str, Any], own: str) -> Entry | None:
     """The dependency one download entry of a template declares; None for the own project.
 
     An entry that names its build is a latest successful dependency, without
@@ -373,22 +272,18 @@ def read_entry(path: str, entry: Mapping[str, Any], own: str) -> Entry | Invalid
     return Entry(project, SNAPSHOT, literal_pin(option_value(entry, GIT_REF)), path)
 
 
-def read_template(path: str, content: str | bytes, own: str) -> list[Entry | ReadError]:
-    """The entries and errors of one template that mentions the plugin."""
-    doc = parse_template(path, content)
-    if isinstance(doc, UnparsableFile):
-        return [doc]
-    misnamed = [InvalidEntry(path, p) for p in misnamed_plugins(doc)]
-    found = [read_entry(path, e, own) for e in download_entries(doc)]
-    return [*misnamed, *(x for x in found if x is not None)]
+def read_template(path: str, content: str | bytes, own: str) -> list[Entry]:
+    """The entries of one template that mentions the plugin."""
+    found = (read_entry(path, e, own) for e in download_entries(parse_template(own, path, content)))
+    return [x for x in found if x is not None]
 
 
 def _entry_order(e: Entry) -> tuple[str, str, str]:
     return e.project, e.type, e.pin or ""
 
 
-def read_declaration(files: Mapping[str, str | bytes], own: str) -> Reading:
-    """The declaration of pipeline ``own`` in ``files``, and the errors found reading it.
+def read_declaration(files: Mapping[str, str | bytes], own: str) -> Declaration:
+    """The declaration of pipeline ``own`` in ``files``.
 
     ``files`` maps paths relative to the repository root to their content,
     for the files of one commit's tree under ``.buildkite/``; other paths are
@@ -398,18 +293,15 @@ def read_declaration(files: Mapping[str, str | bytes], own: str) -> Reading:
     type, pin)``: a latest successful one when it names its build
     (``names_build``), else a snapshot one. Entries of ``own`` and entries
     without a project id are dropped. Files are read in path order; entries
-    are kept once each, sorted, with the first file each was found in, and
-    errors once each, in the order found.
+    are kept once each, sorted, with the first file each was found in.
     """
-    results = [
-        x
+    found = [
+        e
         for path in sorted(files)
         if is_template_path(path) and mentions_plugin(files[path])
-        for x in read_template(path, files[path], own)
+        for e in read_template(path, files[path], own)
     ]
-    entries = sorted({x for x in results if isinstance(x, Entry)}, key=_entry_order)
-    errors = dict.fromkeys(x for x in results if not isinstance(x, Entry))
-    return Reading(Declaration(tuple(entries)), tuple(errors))
+    return Declaration(tuple(sorted(dict.fromkeys(found), key=_entry_order)))
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +325,8 @@ def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> 
 
 def entry_problem(
     entry: Mapping[str, Any], declaration: Declaration, own: str, own_ref: str
-) -> tuple[str, str] | None:
-    """``(project, reason)`` when one download entry breaks the rule; None when it does not.
+) -> str | None:
+    """Why one download entry breaks the rule; None when it does not.
 
     The entry's type must be the type a template declares the project with.
     A latest successful entry is left as generated, so its ref is not looked at.
@@ -445,12 +337,11 @@ def entry_problem(
     t = entry_type(entry)
     if project not in declared_projects(declaration, t):
         why = f"which no committed template declares as a {t} dependency"
-        return project, f"downloads from {project} as a {t} dependency, {why}"
+        return f"downloads from {project} as a {t} dependency, {why}"
     if t == LATEST_SUCCESSFUL:
         return None
     ref = option_value(entry, GIT_REF)
-    problem = _ref_problem(project, ref, declared_pins(declaration, project), own_ref)
-    return None if problem is None else (project, problem)
+    return _ref_problem(project, ref, declared_pins(declaration, project), own_ref)
 
 
 def rule_violations(
@@ -469,8 +360,7 @@ def rule_violations(
     """
 
     def of_step(sd: StepDownloads) -> list[Violation]:
-        problems = [Violation(sd.step, None, p) for p in sd.problems]
         found = (entry_problem(e, declaration, own, own_ref) for e in sd.entries)
-        return problems + [Violation(sd.step, *f) for f in found if f is not None]
+        return [Violation(sd.step, p) for p in (*sd.problems, *found) if p is not None]
 
     return list(dict.fromkeys(v for sd in downloads for v in of_step(sd)))

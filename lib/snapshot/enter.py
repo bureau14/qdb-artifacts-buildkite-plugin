@@ -44,7 +44,8 @@ from .annotation import (
 from .buildkite import PipelineFacts, fetch_pipeline
 from .canonical import canonical_json
 from .declaration import (
-    Reading,
+    Declaration,
+    TemplateError,
     is_template_path,
     pipeline_downloads,
     read_declaration,
@@ -164,10 +165,10 @@ def check_command(job: Job, edge: Edge) -> None:
 
 @dataclass(frozen=True)
 class Generated:
-    """The generated pipeline as loaded, and the reading of the build's own commit's templates."""
+    """The generated pipeline as loaded, and the declaration of the build's own commit."""
 
     doc: Any
-    reading: Reading
+    declaration: Declaration
 
 
 def generated_pipeline(job: Job, edge: Edge) -> Generated:
@@ -175,7 +176,8 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
 
     A file the command did not leave, or one that does not load, is the
     generator's failure. A template of the build's own commit that does not
-    parse fails the build that reads it for itself, as the rule does.
+    parse fails the build that reads it for itself, as the rule does
+    (``TemplateError``).
     """
     path = Path(job.pipeline or "")
     try:
@@ -186,15 +188,16 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
             job, GENERATOR_FAILED, message, chain_origin(job, edge), edge.clock()
         ) from exc
     files = edge.checkout.checkout_files(TEMPLATE_DIRECTORY, is_template_path)
-    reading = read_declaration(files, job.project)
-    unparsed = [f"{shown_text(e.path)}: {e.detail}" for e in reading.errors]
+    try:
+        declaration = read_declaration(files, job.project)
+    except TemplateError as exc:
+        raise reason_refusal(job, RULE, str(exc), chain_origin(job, edge), edge.clock()) from exc
     downloads = pipeline_downloads(doc)
-    violations = rule_violations(downloads, reading.declaration, job.project, own_ref(job))
-    problems = unparsed + [violation_message(v) for v in violations]
-    if problems:
-        message = "\n".join(problems)
+    violations = rule_violations(downloads, declaration, job.project, own_ref(job))
+    if violations:
+        message = "\n".join(violation_message(v) for v in violations)
         raise reason_refusal(job, RULE, message, chain_origin(job, edge), edge.clock())
-    return Generated(doc, reading)
+    return Generated(doc, declaration)
 
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
@@ -211,7 +214,7 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
             build_number=job.build.number,
             rebuild=rebuild_setting(job.rebuild),
         )
-        p = make_plan(root, generated.reading, edge.git, edge.pipelines)
+        p = make_plan(root, generated.declaration, edge.git, edge.pipelines)
     except PlanError as exc:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc

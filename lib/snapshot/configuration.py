@@ -13,9 +13,9 @@ configuration could reach the plugin's variables by another path; those are
 not read, as no template writes one. A key is read as the agent reads it, in
 any case and with ``-`` as ``_`` (``option_name``), so ``project_id``,
 ``project-id`` and ``Project-Id`` are one option; of one option written two
-ways, the first is read. A key that names the plugin another way than
-``PLUGIN`` is an error: the agent runs the plugin for it, and the reader would
-not see its downloads (``misnamed_plugins``).
+ways, the first is read. A key of a generated pipeline that names the plugin
+another way than ``PLUGIN`` breaks the rule: the agent runs the plugin for it,
+and the reader would not see its downloads (``misnamed_plugins``).
 
 A download entry is a mapping in the ``download.projects`` list of the value
 under a key that names the plugin (``download_entries``), wherever that key
@@ -75,13 +75,6 @@ def option_value(options: Mapping[Any, Any], option: str) -> Any:
 # The plugin's name
 # ---------------------------------------------------------------------------
 
-_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-
-
-def holds_plugin_name(text: str) -> bool:
-    """True when ``text`` holds ``PLUGIN`` in any ASCII case."""
-    return PLUGIN in text.translate(_ASCII_LOWER)
-
 
 def is_plugin_key(k: Any) -> bool:
     """True for a mapping key naming the artifacts plugin: its part before ``#`` is ``PLUGIN``."""
@@ -89,7 +82,7 @@ def is_plugin_key(k: Any) -> bool:
 
 
 def names_plugin_another_way(k: Any) -> bool:
-    """True for a key whose part before ``#`` holds ``PLUGIN`` in any ASCII case and is not it.
+    """True for a key whose part before ``#`` holds ``PLUGIN`` in any case and is not it.
 
     The agent runs a plugin for such a key (GitHub's names have no case),
     while the reader reads only ``is_plugin_key``.
@@ -97,7 +90,7 @@ def names_plugin_another_way(k: Any) -> bool:
     if not isinstance(k, str):
         return False
     name = k.split("#", 1)[0]
-    return name != PLUGIN and holds_plugin_name(name)
+    return name != PLUGIN and PLUGIN in name.lower()
 
 
 # ---------------------------------------------------------------------------
