@@ -86,7 +86,7 @@ from .edge import (
     pointers_at,
     stored_records,
 )
-from .failing import EDGE_ERRORS, Refusal, gated
+from .failing import EDGE_ERRORS, Refusal, gated, survive
 from .git import Git, RealGit
 from .job import Job, is_chain_node, job_of, own_ref
 from .plan import Node, Plan, PlanError, encode_plan
@@ -212,7 +212,8 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
     """4, a root: make the plan (sections 3 and 4), write it, annotate the build with it.
 
     A retried step loads the plan it wrote. A plan that cannot be made fails
-    the build with its message.
+    the build with its message. An annotation the agent refuses is logged: the
+    plan is written, and the build is sound without its picture.
     """
     p = own_plan(job, edge)
     if p is None:
@@ -232,7 +233,10 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
             annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
             raise Refusal(str(exc), annotation) from exc
         edge.agent.meta_data_set(PLAN, text)
-    edge.agent.annotate(plan_annotation(p, job.project), "info", PLAN_CONTEXT)
+    annotation = plan_annotation(p, job.project)
+    survive(
+        edge, lambda: edge.agent.annotate(annotation, "info", PLAN_CONTEXT), "annotate the plan"
+    )
     return p
 
 
@@ -296,10 +300,18 @@ def is_reused(d: frozenset[str], n: frozenset[str], m: frozenset[str]) -> bool:
 def reuse(
     job: Job, edge: Edge, p: Plan, held: Mapping[str, Pointer | None], n: frozenset[str]
 ) -> None:
-    """7. Mode ``reused``, and the builds that hold the variants asked for on the build page."""
+    """7. Mode ``reused``, and the builds that hold the variants asked for on the build page.
+
+    An annotation the agent refuses is logged: the build is reused all the same.
+    """
     builds = {v: held[v].build for v in n if held[v] is not None}
     edge.agent.meta_data_set(MODE, REUSED)
-    edge.agent.annotate(reused_annotation(p, job.project, builds), "success", STEP_CONTEXT)
+    annotation = reused_annotation(p, job.project, builds)
+    survive(
+        edge,
+        lambda: edge.agent.annotate(annotation, "success", STEP_CONTEXT),
+        "annotate the builds that hold the variants",
+    )
     edge.log(f"{job.project} is reused: every variant asked for is held")
 
 

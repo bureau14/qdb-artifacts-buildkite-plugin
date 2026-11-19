@@ -706,6 +706,30 @@ def test_the_text_of_an_exception_no_module_names_is_shown_short_and_in_ascii(tm
     assert all(" " <= c <= "~" for c in message)
 
 
+REFUSED_ANNOTATION = "could not {what}: buildkite-agent annotate failed (1): gone"
+
+
+def test_a_plan_the_agent_does_not_annotate_is_logged_and_the_build_goes_on(tmp_path):
+    gate = Gate(tmp_path, APP, objects=pointer_objects(*ALL_HELD))
+    gate.agent = Mute(meta_data=gate.agent.meta_data)
+
+    assert gate.run() == 0
+
+    assert gate.mode == "built" and len(gate.agent.uploads) == 1
+    assert REFUSED_ANNOTATION.format(what="annotate the plan") in gate.lines
+
+
+def test_a_reuse_the_agent_does_not_annotate_is_logged_and_the_build_is_reused(tmp_path):
+    gate = Gate(tmp_path, LIB, objects=pointer_objects(held(LIB, LINUX, 20)))
+    gate.agent = Mute(meta_data=gate.agent.meta_data, builds=gate.agent.builds)
+
+    assert gate.run() == 0
+
+    assert gate.mode == "reused" and gate.agent.uploads == []
+    what = "annotate the builds that hold the variants"
+    assert REFUSED_ANNOTATION.format(what=what) in gate.lines
+
+
 def test_a_failing_step_that_cannot_annotate_still_sets_its_mode_and_says_so(tmp_path):
     gate = Gate(tmp_path, APP, exit_status=1)
     gate.agent = Mute()
