@@ -238,7 +238,7 @@ plugins:
 | ------------- | ------- | -------- | ----------------------------------------------------------------------- |
 | `variant`     | string  | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).              |
 | `git_ref`     | string  | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                         |
-| `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_NAME`. |
+| `project_id`  | string  |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_SLUG`. |
 | `files`       | string  | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).       |
 | `exclude`     | array of strings |          | Glob patterns to skip after `files` has matched. Matched against the uploaded artifact path after `base_dir` is stripped. |
 | `base_dir`    | string  |          | Optional base directory to strip from uploaded object keys (e.g. `dist`). |
@@ -252,7 +252,7 @@ plugins:
 
 | Key          | Type   | Required | Description                                                                                   |
 | ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
-| `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_NAME`.        |
+| `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_SLUG`.        |
 | `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                          |
 | `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                  |
 | `snapshot`   | string |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
@@ -270,7 +270,7 @@ plugins:
 
 | Key           | Type             | Required | Description                                                                                     |
 | ------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_NAME`.                  |
+| `project_id`  | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_SLUG`.                  |
 | `build_id`    | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
 | `variant`     | string           | ✓        | Variant of the artifacts to download.                                                           |
 | `git_ref`     | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                              |
@@ -308,11 +308,11 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 | Hook            | Trigger                 | Action                                                                                                                                                                       |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `post-checkout` | After repo checkout     | Prints the path and version of the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, fails when that is not set or names nothing that runs, and makes `<plugin-dir>/.venv` anew with it, with the dependencies from `lib/requirements.txt`. |
+| `post-checkout` | After repo checkout     | Prints the path and version of the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, fails when that is not set or names nothing that runs, and makes the step's venv anew with it: `<plugin-dir>/.venv` with the dependencies from `lib/requirements.txt`, or the venv of a gate step, described below. |
 | `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                    |
 | `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty. |
 
-`pre-command` and `post-command` only find Python and start `artifacts.py` with the name of their phase; `lib/cli.py` decides what the phase runs.
+`pre-command` and `post-command` start `artifacts.py` with the Python of the venv that `post-checkout` made, and the name of their phase; `lib/cli.py` decides what the phase runs.
 
 On a gate step of a build with snapshot dependencies (option `plan`, `resume` or `leave`), `post-command` runs the gate command of the step, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform. Those steps make their venv in `<plugin-dir>/.venv-snapshot`: every job of one plugin commit on a host shares the plugin's checkout and makes its venv again, and no other job's venv then replaces theirs.
 
@@ -331,9 +331,9 @@ the projects and never inside a build.
 
 The options `promote.snapshot` and `upload.snapshot` hold a key. The plan step
 of a build with snapshot dependencies writes them into the pipeline it uploads;
-a person never writes them. In a step whose `promote` block has a key and whose
-command passed, promote moves `LATEST_SUCCESSFUL` and then creates the
-pointer of the variant, once: the first build of the key to promote the variant
+a person never writes them. In a step whose `promote` block has a key, whose
+command passed and whose upload, if it names files, was not empty, promote
+moves `LATEST_SUCCESSFUL` and then creates the pointer of the variant, once: the first build of the key to promote the variant
 holds it, and a later build logs which build that is and leaves the pointer as
 it is. Nothing changes or removes a pointer.
 
@@ -379,8 +379,10 @@ downloads.
 
 ### Two types of dependency
 
-A download entry of another project in a committed template under
-`.buildkite/` declares a dependency. Whether it names a build gives its type.
+A download entry of another project declares a dependency when it is in a
+committed `.yml` or `.yaml` file under `.buildkite/`, under a key that names
+the plugin exactly: `bureau14/qdb-artifacts` or `bureau14/qdb-artifacts#<ref>`.
+Whether the entry names a build gives its type.
 
 A **snapshot** dependency names none:
 
@@ -395,8 +397,10 @@ download:
 
 Before any job runs, the plan step writes the build of the planned snapshot
 into the entry: `build_id`, its `git_ref` and `require_strict_ref_match: true`.
-A `git_ref` that is literal text, such as `refs/heads/3.14.x`, is a pin: the
-project is planned at that ref for the whole chain.
+A `git_ref` that is literal text in the template, such as `refs/heads/3.14.x`,
+is a pin: the project is planned at that ref for the whole chain. A ref that
+only `pipeline.py` gives, through `by_project` for example, is no pin: the plan
+step reads templates and never runs another repository's `pipeline.py`.
 
 A **latest successful** dependency names its build:
 
@@ -438,16 +442,20 @@ can take it as a snapshot dependency.
   `.buildkite/pipeline.py | buildkite-agent pipeline upload`: the plan step
   looks for that text in it.
 - Every download of another project that its generated pipeline makes is in a
-  committed template, with the same type. The plan step fails a build whose
-  pipeline breaks this rule, and names the step and the project.
+  committed template, with the same type; the `git_ref` of a snapshot download
+  is the build's own ref or a pin written in a committed template; and no key
+  names the plugin another way (`Bureau14/qdb-artifacts`, say). The plan step
+  fails a build whose pipeline breaks this rule, and names the step and why.
 - A project that others take as a snapshot dependency holds no latest
   successful dependency itself.
 
 A dependency that cannot give a snapshot fails the plan of the root before
 anything is triggered. The message names who needs it, which condition failed
-and the way out, which always includes this one: the consumer takes it as a
-latest successful dependency. A template of a dependency that does not parse
-fails the plan too, and the message names the project and the file.
+and the way out, which includes this one: the consumer takes it as a latest
+successful dependency. A dependency whose ref its repository does not have
+fails the plan the same way, without a way out. A template of a dependency
+that does not parse fails the plan step with an error that names the project
+and the file.
 
 ### How a build runs
 
@@ -457,14 +465,16 @@ fails the plan too, and the message names the project and the file.
    commit passes the gate at a time.
 2. Enter: its command generates the pipeline, then the plugin plans. A root
    makes the plan and keeps it as meta-data of its own build; a chain node
-   reads its root's. A build whose every variant asked for has a pointer at its
-   key is reused and builds nothing. Else the dependencies that lack a variant
+   reads its root's. A build whose pipeline promotes at least one variant, and
+   whose every variant asked for has a pointer at its key, is reused and builds
+   nothing. Else the dependencies that lack a variant
    are triggered, with a resume step that carries `resume`. Else the pipeline
    is uploaded with one build of every snapshot dependency written into it.
 3. Resume: once the triggered builds have ended, it uploads the pipeline, or
    fails and names the dependency that failed.
 4. The jobs run as ever. A step that promotes writes the pointer of its
-   variant after its command passed.
+   variant after its command passed and its upload, if it names files, was not
+   empty.
 5. Leave runs after every other step and records the variants whose step did
    not pass.
 
@@ -492,8 +502,8 @@ nothing.
 | -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------- |
 | pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket                 | once, by the step that promotes the variant   |
 | failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket              | once, by a gate step of a build that has a key |
-| plan           | meta-data `snapshot-plan` of the root build                                          | once, by the root's enter step                |
-| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                                    | by the gate steps of each build               |
+| plan           | meta-data `snapshot-plan` of the root build                                          | by the root's enter step; a retried enter writes it again |
+| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                                    | by the enter and resume steps of each build   |
 | arrival        | meta-data `snapshot-arrived`                                                         | by the runner, when it prints the gate        |
 
 A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
@@ -505,23 +515,26 @@ away with the root build; a pointer and a failure record stay.
 A build that failed for its snapshot says why on its build page. A failure of
 its own names the steps that did not pass; a dependency that failed is
 followed down its failure records to the builds that failed. The annotation
-ends: "To retry: retry the failed job in `<pipeline>` `<number>`. When it
-passes, start a new build of `<root pipeline>`. Everything that passed is
-reused."
+ends with how to retry. For one failed build: "To retry: retry the failed job
+in `<pipeline>` `<number>`. When it passes, start a new build of `<root
+pipeline>`. Everything that passed is reused." For several it names each; with
+none it says to start a new build of the root pipeline when the cause is
+fixed.
 
 If a snapshot fails, it fails everywhere: a variant whose step hard failed
 fails, without compiling it again, every build of that key in a chain whose
-root build started before the failure was recorded, also one that waited at
-the gate meanwhile and one that reaches the dependency later. Only a root
-build started after the failure builds the key again. Within one chain a key
-is built at most once.
+root build arrived at the gate more than 5 seconds before the failure was
+recorded, also one that waited at the gate meanwhile and one that reaches the
+dependency later. A root build that arrived later, or 5 seconds or less
+before the failure, builds the key again. Within one chain a key is built at
+most once.
 
 ### Limits
 
-- The gate steps run on the Linux agents of the default queue; the steps that
-  upload, download and promote run on every platform, as before.
-- A plan is one meta-data value, which the agent takes up to 102400 bytes; a
-  larger plan fails the root with the agent's message.
+- The gate steps name no agents, so they run on the default queue; the steps
+  that upload, download and promote run on every platform, as before.
+- A plan is one meta-data value; the plugin sets no limit on its size, and a
+  value that the agent refuses fails the root with the agent's message.
 - A root whose pipeline is a selection (`QDB_PIPELINE_FILTER`, or a build
   message that selects), one with `SNAPSHOT_DISABLE=1`, and one on a branch its
   repository does not have (a release build on a tag) run their plain pipeline.

@@ -11,7 +11,7 @@ configuration:
       properties:
         project_id:
           type: string
-          description: "Unique project identifier for namespacing artifacts (defaults to BUILDKITE_PIPELINE_NAME)"
+          description: "Unique project identifier for namespacing artifacts (defaults to BUILDKITE_PIPELINE_SLUG)"
         variant:
           type: string
           description: "Build variant key to upload to"
@@ -56,7 +56,7 @@ configuration:
       properties:
         project_id:
           type: string
-          description: "Unique project identifier of the artifacts to mark as latest (defaults to BUILDKITE_PIPELINE_NAME)"
+          description: "Unique project identifier of the artifacts to mark as latest (defaults to BUILDKITE_PIPELINE_SLUG)"
         variant:
           type: string
           description: "Artifact path to mark as latest successful build of the current variant (e.g linux-amd64-haswell-release)"
@@ -90,7 +90,7 @@ configuration:
             properties:
               project_id:
                 type: string
-                description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
+                description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_SLUG)"
               build_id:
                 type: string
                 description: "Build identifier to download from. For the pipeline's own project it defaults to BUILDKITE_BUILD_ID when git_ref is the current ref. For another project it sets the type of the dependency: left out, a snapshot dependency, whose build the plan step writes here in a build with snapshot dependencies (in any other build it is LATEST_SUCCESSFUL, as before); written, as LATEST_SUCCESSFUL, a latest successful dependency, which is never planned."
