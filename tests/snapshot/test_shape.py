@@ -19,10 +19,15 @@ from pathlib import Path
 
 import pytest
 
-from lib.snapshot.shape import has_runner_shape, shape_problem
+from lib.snapshot.shape import shape_problem
 
 VECTORS = Path(__file__).parent / "shape"
 EXPECTED = {"has-shape": True, "has-no-shape": False}
+
+
+def has_shape(source: bytes) -> bool:
+    """The rule's answer as the planner takes it: a source without a problem has the shape."""
+    return shape_problem(source) is None
 
 
 def vectors() -> list[tuple[Path, bool]]:
@@ -38,7 +43,7 @@ def vectors() -> list[tuple[Path, bool]]:
 )
 def test_vector(path, expected):
     source = path.read_bytes()
-    assert has_runner_shape(source) is expected, shape_problem(source)
+    assert has_shape(source) is expected, shape_problem(source)
 
 
 def test_the_vectors_are_two_directories_of_sources_kept_as_bytes():
@@ -92,7 +97,7 @@ CASES = [
 @pytest.mark.parametrize("source, expected", [c[1:] for c in CASES], ids=[c[0] for c in CASES])
 def test_a_case_the_shared_vectors_lack(source, expected):
     data = source.encode("ascii")
-    assert has_runner_shape(data) is expected, shape_problem(data)
+    assert has_shape(data) is expected, shape_problem(data)
 
 
 BLOCK = 'if __name__ == "__main__": block'
@@ -136,30 +141,29 @@ def test_the_reason_quotes_the_source_short_on_one_line_of_ascii(source):
 
 def test_a_source_with_the_shape_has_no_problem():
     assert shape_problem(MINIMAL.encode("ascii")) is None
-    assert has_runner_shape(MINIMAL.encode("ascii"))
 
 
 def test_the_source_is_parsed_never_executed(tmp_path):
     marker = tmp_path / "ran"
     source = f"open({str(marker)!r}, 'w').close()\nraise SystemExit(3)\n" + MINIMAL
-    assert has_runner_shape(source.encode("utf-8"))
+    assert has_shape(source.encode("utf-8"))
     assert not marker.exists()
 
 
 def test_bytes_are_decoded_as_python_decodes_a_source_file():
     body = MINIMAL.encode("ascii")
-    assert has_runner_shape(b"# -*- coding: latin-1 -*-\n# caf\xe9\n" + body)
-    assert has_runner_shape(b"\xef\xbb\xbf" + body)
-    assert not has_runner_shape(b"# caf\xe9\n" + body), "not UTF-8 and no declaration"
+    assert has_shape(b"# -*- coding: latin-1 -*-\n# caf\xe9\n" + body)
+    assert has_shape(b"\xef\xbb\xbf" + body)
+    assert not has_shape(b"# caf\xe9\n" + body), "not UTF-8 and no declaration"
 
 
 @pytest.mark.parametrize("coding", [b"rot13", b"hex", b"no-such-codec"])
 def test_a_coding_line_that_names_no_text_encoding_has_no_shape(coding):
     source = b"# -*- coding: " + coding + b" -*-\n" + MINIMAL.encode("ascii")
-    assert not has_runner_shape(source)
+    assert not has_shape(source)
     assert shape_problem(source).startswith("does not parse as Python 3.9")
 
 
 def test_deep_nesting_has_no_shape():
     source = "x = " + "(" * 100_000 + ")" * 100_000 + "\n" + MINIMAL
-    assert not has_runner_shape(source.encode("ascii"))
+    assert not has_shape(source.encode("ascii"))

@@ -2,10 +2,9 @@
 
 The plan step and the gate steps talk to Buildkite only through an ``Agent``:
 
-- ``meta_data_exists(key, build=None)``: whether ``key`` is set on this build,
-  or on the build whose id is ``build``;
-- ``meta_data_get(key, build=None)``: its value, without the one newline the
-  agent adds; ``MetaDataAbsent`` when the key is not set;
+- ``meta_data_get(key, build=None)``: the value of ``key`` on this build, or
+  on the build whose id is ``build``, without the one newline the agent adds;
+  ``MetaDataAbsent`` when the key is not set;
 - ``meta_data_set(key, value)``: set a key of this build, the value passed on
   standard input;
 - ``step_outcome(key)``: the outcome of a step of this build (``passed``,
@@ -47,8 +46,6 @@ class MetaDataAbsent(AgentError):
 
 class Agent(Protocol):
     """What the jobs may do through the agent. See the module docstring."""
-
-    def meta_data_exists(self, key: str, build: str | None = None) -> bool: ...
 
     def meta_data_get(self, key: str, build: str | None = None) -> str: ...
 
@@ -150,26 +147,21 @@ def checked(o: Outcome, args: Sequence[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+AGENT = "buildkite-agent"
+
+
 class RealAgent:
-    """``Agent`` over the ``buildkite-agent`` command of the job.
+    """``Agent`` over the ``buildkite-agent`` command of the job, found on its PATH.
 
     ``run`` executes one command; tests may replace it.
     """
 
-    def __init__(self, run: Runner = run_process, binary: str = "buildkite-agent") -> None:
+    def __init__(self, run: Runner = run_process) -> None:
         self._run = run
-        self._bin = binary
 
     def _agent(self, args: Sequence[str], stdin: str | None = None) -> tuple[Outcome, list[str]]:
-        command = [self._bin, *args]
+        command = [AGENT, *args]
         return self._run(command, stdin), command
-
-    def meta_data_exists(self, key: str, build: str | None = None) -> bool:
-        o, command = self._agent(["meta-data", "exists", key, *build_option(build)])
-        if o.returncode == META_DATA_ABSENT:
-            return False
-        checked(o, command)
-        return True
 
     def _absent(self, key: str, build: str | None) -> bool:
         """True only when ``meta-data exists`` says the key is not set; never raises."""

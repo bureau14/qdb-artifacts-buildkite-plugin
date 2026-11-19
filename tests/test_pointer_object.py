@@ -104,6 +104,8 @@ def test_a_pointer_reads_back_as_the_value_it_was_written_from(pointer, value):
         (document(build=build_member(number="512")), "build.number"),
         (document(build=build_member(url="http://buildkite.example.test/b/1")), "build.url"),
         (document(build=build_member(url="https://buildkite.example.test/a b")), "build.url"),
+        (document(build=build_member(url="https://buildkite.example.test/$(x)")), "build.url"),
+        (document(build=build_member(url='https://buildkite.example.test/"x')), "build.url"),
         (document(written_at="2026-11-19T02:15:14Z"), "written_at"),
         (document(written_at="2026-11-19T02:15:14.123+00:00"), "written_at"),
     ],

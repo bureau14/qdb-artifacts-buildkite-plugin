@@ -63,9 +63,6 @@ class RecordingAgent:
             raise AgentError(f"fake agent: no build {build}")
         return self.builds[build]
 
-    def meta_data_exists(self, key: str, build: str | None = None) -> bool:
-        return key in self._data(build)
-
     def meta_data_get(self, key: str, build: str | None = None) -> str:
         data = self._data(build)
         if key not in data:

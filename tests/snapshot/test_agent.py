@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 import sys
@@ -96,33 +97,16 @@ def test_an_absent_key_of_another_build_names_the_build():
     assert run.calls[1][0][-2:] == ["--build", ROOT_BUILD]
 
 
-@pytest.mark.parametrize("call", ["meta_data_get", "meta_data_exists"])
-def test_an_empty_build_id_is_refused_before_any_call(call):
+def test_an_empty_build_id_is_refused_before_any_call():
     run = Script()
     with pytest.raises(AgentError, match="empty build id"):
-        getattr(RealAgent(run), call)("snapshot-plan", "")
+        RealAgent(run).meta_data_get("snapshot-plan", "")
     assert run.calls == []
 
 
 def test_build_option():
     assert build_option(None) == []
     assert build_option(ROOT_BUILD) == ["--build", ROOT_BUILD]
-
-
-def test_meta_data_exists():
-    run = Script(OK, ABSENT)
-    a = RealAgent(run)
-    assert a.meta_data_exists("snapshot-plan") is True
-    assert a.meta_data_exists("snapshot-plan", ROOT_BUILD) is False
-    assert run.calls == [
-        (["buildkite-agent", "meta-data", "exists", "snapshot-plan"], None),
-        (["buildkite-agent", "meta-data", "exists", "snapshot-plan", "--build", ROOT_BUILD], None),
-    ]
-
-
-def test_meta_data_exists_of_a_build_that_cannot_be_read_is_an_error():
-    with pytest.raises(AgentError, match="Could not find build"):
-        RealAgent(Script(NO_BUILD)).meta_data_exists("k", ROOT_BUILD)
 
 
 def test_meta_data_set_passes_the_value_on_stdin():
@@ -177,9 +161,10 @@ def test_upload_failure_raises():
         RealAgent(Script(Outcome(2, "", "bad"))).pipeline_upload("x")
 
 
-def test_a_missing_agent_binary_is_an_agent_error():
+def test_an_agent_that_is_not_on_the_path_is_an_agent_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(AgentError, match="failed \\(127\\)"):
-        RealAgent(binary="/nonexistent/buildkite-agent").meta_data_get("k")
+        RealAgent().meta_data_get("k")
 
 
 def test_annotate_rejects_unknown_style():
@@ -205,20 +190,20 @@ esac
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in is a POSIX shell script")
 def test_the_real_agent_through_a_process(tmp_path, monkeypatch):
-    binary = tmp_path / "buildkite-agent"
+    binary = tmp_path / "bin" / "buildkite-agent"
+    binary.parent.mkdir()
     binary.write_text(STAND_IN)
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     log = tmp_path / "log"
     monkeypatch.setenv("LOG", str(log))
-    a = RealAgent(binary=str(binary))
+    monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ['PATH']}")
+    a = RealAgent()
     assert a.meta_data_get("known", ROOT_BUILD) == "value"
-    assert a.meta_data_exists("unknown") is False
     with pytest.raises(MetaDataAbsent):
         a.meta_data_get("unknown")
     a.meta_data_set("snapshot-mode", "built")
     assert log.read_text().splitlines() == [
         f"meta-data get known --build {ROOT_BUILD}",
-        "meta-data exists unknown",
         "meta-data get unknown",
         "meta-data exists unknown",
         "meta-data set snapshot-mode",
@@ -262,8 +247,6 @@ def test_recording_agent_behaves_as_the_agent():
     a.annotate("body", "info", "ctx")
     assert (a.meta_data_get("a"), a.meta_data_get("b")) == ("1", "2")
     assert a.meta_data_get("snapshot-plan", ROOT_BUILD) == "{}"
-    assert a.meta_data_exists("a") and not a.meta_data_exists("c")
-    assert not a.meta_data_exists("a", ROOT_BUILD)
     with pytest.raises(MetaDataAbsent):
         a.meta_data_get("c")
     with pytest.raises(AgentError, match="empty build id"):

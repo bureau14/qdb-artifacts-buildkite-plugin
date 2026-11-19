@@ -47,10 +47,6 @@ def pointer(n: int, ref: str = MASTER, project: str = REST) -> Pointer:
     return Pointer(project, KEY, LINUX, ref, "b" * 40, build, "2025-11-17T12:00:00.000Z")
 
 
-def with_build(p: Pointer, **changes) -> Pointer:
-    return replace(p, build=replace(p.build, **changes))
-
-
 def entry(project: str | None, variant: str, **more) -> dict:
     found = {"variant": variant, "git_ref": MASTER, "files": ["*.tar.zst"], **more}
     return {"project_id": project, **found} if project else found
@@ -511,24 +507,6 @@ def test_a_snapshot_entry_without_a_build_handed_in_is_an_error():
     deps = {k: v for k, v in DEPENDENCIES.items() if k != (DUCK, ARM)}
     with pytest.raises(DocumentError, match="no build of qdb-duck linux-aarch64-release"):
         planned(pipeline(), rewrite(dependencies=deps))
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        with_build(pointer(1), url="https://ci.example/$(touch x)"),
-        with_build(pointer(1), url='https://ci.example/"x'),
-        with_build(pointer(1), id="x"),
-        with_build(pointer(1), number=-1),
-        replace(pointer(1), project="a b"),
-        replace(pointer(1), git_ref="refs/heads/a b"),
-    ],
-)
-def test_a_pointer_handed_in_is_checked_before_anything_is_written(bad):
-    with pytest.raises(DocumentError, match="pointer handed in"):
-        planned(pipeline(), rewrite(dependencies={**DEPENDENCIES, (QDB, LINUX): bad}))
-    with pytest.raises(DocumentError, match="pointer handed in"):
-        planned(pipeline(), rewrite(existing={LINUX: bad}))
 
 
 def test_a_shared_entry_is_rewritten_once_and_stays_shared():

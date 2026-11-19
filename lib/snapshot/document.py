@@ -33,9 +33,8 @@ from typing import Any
 
 import yaml
 
-from ..errors import ArtifactsError
 from ..forms import is_object_id, is_slug, is_variant
-from ..pointer import Pointer, checked
+from ..pointer import Pointer
 from .configuration import (
     BUILD_ID,
     GIT_REF,
@@ -378,7 +377,9 @@ class Rewrite:
     ``plugin_commit`` the commit the plan step runs (``git rev-parse HEAD`` of
     the plugin's checkout); ``dependencies`` the pointer of each snapshot
     dependency and variant the entries name, by ``(project, variant)``;
-    ``existing`` the pointer of each own variant at ``key``, by variant.
+    ``existing`` the pointer of each own variant at ``key``, by variant. Each
+    pointer is one that ``pointer.find`` read, which checked the form of every
+    field that goes into an entry or a step command.
     """
 
     own: str
@@ -394,14 +395,6 @@ class Rewrite:
             raise ValueError("own variants exist only at a key, and this rewrite has none")
         if not is_object_id(self.plugin_commit):
             raise ValueError(f"plugin commit {shown_value(self.plugin_commit)} is not a commit")
-
-
-def checked_pointer(p: Pointer, what: str) -> Pointer:
-    """``p``, when each of its fields has its form: it goes into entries and a step command."""
-    try:
-        return checked(p)
-    except ArtifactsError as exc:
-        raise DocumentError(f"the pointer handed in for {what} is not of its form: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -551,13 +544,8 @@ def planned(doc: Any, r: Rewrite) -> Any:
     - Every key that names the plugin names it at the plugin commit.
 
     Without a key no step gets a key: only the leave step of a build with a
-    key asks for outcomes. Every pointer handed in is checked first
-    (``checked_pointer``).
+    key asks for outcomes.
     """
-    for (project, variant), p in r.dependencies.items():
-        checked_pointer(p, f"{project} {variant}")
-    for variant, p in r.existing.items():
-        checked_pointer(p, variant)
     out = copy.deepcopy(doc) if r.key is None else with_promote_keys(doc, r.own)
     replaced = replaced_steps(out, r.own, r.existing)
     rewired = rewired_variants(unique_steps(out), r.own, replaced)

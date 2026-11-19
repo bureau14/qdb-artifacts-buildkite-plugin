@@ -176,8 +176,3 @@ def shape_problem(source: bytes) -> str | None:
     if len(blocks) != 1:
         return f"has {len(blocks)} {MAIN_TEST} blocks at module level, not one"
     return block_problem(blocks[0])
-
-
-def has_runner_shape(source: bytes) -> bool:
-    """True when ``source`` hands its pipeline to the runner (module docstring)."""
-    return shape_problem(source) is None
