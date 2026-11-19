@@ -56,7 +56,7 @@ from ..errors import ArtifactsError
 from ..forms import BRANCH_PREFIX, is_build_id, is_https_url, is_slug, is_variant
 from ..log import log
 from ..objects import Store, destination_store
-from ..options import command_exit_status, job_build_number, job_variable
+from ..options import command_exit_status, job_build, job_variable
 from ..pointer import Build, Pointer
 from .agent import Agent, AgentError, MetaDataAbsent, RealAgent
 from .annotation import (
@@ -149,13 +149,8 @@ def is_chain_node(job: Job) -> bool:
     return job.plan_id is not None
 
 
-def job_build(option: str) -> Build:
-    """This job's build, of the form a pointer and a record hold."""
-    b = Build(
-        id=job_variable("BUILDKITE_BUILD_ID", option),
-        number=job_build_number(option),
-        url=job_variable("BUILDKITE_BUILD_URL", option),
-    )
+def checked_build(b: Build) -> Build:
+    """This job's build, when its id and URL have the forms a record holds."""
     if not is_build_id(b.id):
         raise ArtifactsError(f"BUILDKITE_BUILD_ID {shown_value(b.id)} is not a build uuid")
     if not is_https_url(b.url):
@@ -173,7 +168,7 @@ def job_of(kind: str, pipeline: str | None) -> Job:
         pipeline=pipeline,
         step_key=job_variable("BUILDKITE_STEP_KEY", kind),
         project=project,
-        build=job_build(kind),
+        build=checked_build(job_build(kind)),
         branch=os.environ.get("BUILDKITE_BRANCH", ""),
         command=os.environ.get("BUILDKITE_COMMAND"),
         exit_status=command_exit_status(),

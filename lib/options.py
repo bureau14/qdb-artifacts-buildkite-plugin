@@ -202,6 +202,16 @@ def job_build_number(option):
     return int(value)
 
 
+def job_build(option):
+    """The build the job runs in, as the agent names it: its id, number and URL. Whoever
+    writes it into an object checks the form of each."""
+    return pointer.Build(
+        id=job_variable("BUILDKITE_BUILD_ID", option),
+        number=job_build_number(option),
+        url=job_variable("BUILDKITE_BUILD_URL", option),
+    )
+
+
 def refuse_another_build(build_id, option, key_option):
     """A step with a snapshot key records the build it runs in, by the id, number
     and URL the agent gives, so a build_id option may name only that build."""
@@ -213,10 +223,10 @@ def refuse_another_build(build_id, option, key_option):
         )
 
 
-def snapshot_pointer(project_id, key, variant, git_ref, build_id):
+def snapshot_pointer(project_id, key, variant, git_ref):
     """The pointer promote creates in a build with a snapshot key, checked before
-    anything is written."""
-    option = "promote.snapshot"
+    anything is written. It names the job's own build: refuse_another_build holds
+    the build_id option to it."""
     return pointer.checked(
         pointer.Pointer(
             project=project_id,
@@ -224,11 +234,7 @@ def snapshot_pointer(project_id, key, variant, git_ref, build_id):
             variant=variant,
             git_ref=git_ref,
             commit=checkout_commit(),
-            build=pointer.Build(
-                id=build_id,
-                number=job_build_number(option),
-                url=job_variable("BUILDKITE_BUILD_URL", option),
-            ),
+            build=job_build("promote.snapshot"),
             written_at=forms.iso_utc(time.time()),
         )
     )
@@ -364,7 +370,7 @@ def promote_arguments():
         "git_ref": git_ref,
         "variant": variant,
         "snapshot_pointer": (
-            None if key is None else snapshot_pointer(project_id, key, variant, git_ref, build_id)
+            None if key is None else snapshot_pointer(project_id, key, variant, git_ref)
         ),
     }
 
