@@ -224,23 +224,33 @@ def test_a_snapshot_missing_a_variant_builds_only_that_variant(worlds, graph_nod
     )
 
 
-WHEN = ("waits-at-the-gate", "reaches-it-later", "starts-after")
+# When the root of the chain of ``other`` starts against the hard failure of a node, and
+# whether that chain compiles the node again: only when it started after the failure, or so
+# shortly before it was recorded (records.SHARED_AFTER) that it counts as after.
+WHEN = {
+    "waits-at-the-gate": False,
+    "reaches-it-later": False,
+    "starts-after": True,
+    "starts-after-and-an-earlier-chain-shares-it": True,
+    "starts-as-it-is-recorded": True,
+}
 
 
-@pytest.mark.parametrize("when", WHEN)
+@pytest.mark.parametrize("when", sorted(WHEN))
 def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_started_before_it(
     worlds, lower_node, matrix, when
 ):
     """When a node's build hard fails a variant, a build of the same snapshot fails without
     compiling it in every chain whose root started before the failure, whether that build
     waited at its gate meanwhile or reached the node later; a chain whose root started after
-    the failure compiles that variant again, and nothing else of the node."""
+    the failure, or within five seconds before it was recorded, compiles that variant once
+    again, and nothing else of the node, also when a chain that started before has shared the
+    failure since."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds({**graph, "other": (node,)}, matrix)
-    first = {"ran": False, "compiled": 0}
+    first = {"compiled": 0}
 
     def a_chain_fails_at_the_node() -> None:
-        first["ran"] = True
         world.now += 10
         world.broken.add((node, matrix[-1]))
         world.build(root)
@@ -248,24 +258,48 @@ def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_starte
         world.now += 10
         first["compiled"] = len(world.compiled)
 
-    def at_gate(build) -> None:
-        if build.project == node and not first["ran"]:
-            a_chain_fails_at_the_node()
+    def at_the_node_once(then) -> list:
+        """Call ``then`` when the next build of the node waits at its gate; what it gave."""
+        given: list = []
 
-    if when == "starts-after":
+        def at_gate(build) -> None:
+            if build.project == node:
+                world.at_gate = lambda b: None
+                given.append(then())
+
+        world.at_gate = at_gate
+        return given
+
+    def start_other():
+        return world.start("other", "master", None, {})
+
+    if when == "waits-at-the-gate":
+        other = start_other()
+        at_the_node_once(a_chain_fails_at_the_node)
+    elif when == "reaches-it-later":
+        other = start_other()
         a_chain_fails_at_the_node()
-        other = world.build("other")
+    elif when == "starts-after":
+        a_chain_fails_at_the_node()
+        other = start_other()
+    elif when == "starts-after-and-an-earlier-chain-shares-it":
+        earlier = world.start(root, "master", None, {})
+        a_chain_fails_at_the_node()
+        other = start_other()
+        world.now += 10
+        world.play(earlier)
     else:
-        other = world.start("other", "master", None, {})
-        if when == "reaches-it-later":
-            a_chain_fails_at_the_node()
-        else:
-            world.at_gate = at_gate
-        world.play(other)
+        # Only the node builds in the failing chain, so its record follows other's start at once.
+        world.build(root)
+        world.commit(node)
+        started = at_the_node_once(start_other)
+        a_chain_fails_at_the_node()
+        (other,) = started
+    world.play(other)
 
-    again = {v for p, v in compiled_since(world, first["compiled"]) if p == node}
-    assert other.state == ("passed" if when == "starts-after" else "failed")
-    assert again == ({matrix[-1]} if when == "starts-after" else set())
+    again = [c.variant for c in world.compiled[first["compiled"] :] if c.build.project == node]
+    assert other.state == ("passed" if WHEN[when] else "failed")
+    assert again == ([matrix[-1]] if WHEN[when] else [])
 
 
 def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, matrix):

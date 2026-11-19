@@ -277,8 +277,9 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
     If it fails, it fails everywhere: the failure counts for every build of a
     chain whose root started before it was recorded, also one that reaches
     ``K`` later. A new root build builds ``K`` again. The own record copies
-    those entries and names that build under ``shared_with``. An empty
-    outcome or any other state is not a failure.
+    those entries and names that build under ``shared_with``; such a copy is
+    never shared itself (``shared_failure``). An empty outcome or any other
+    state is not a failure.
     """
     if not wanted:
         return

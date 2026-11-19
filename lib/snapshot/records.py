@@ -279,12 +279,17 @@ def shared_failure(
     (``recorded_time``), and every wanted variant has the outcome
     ``hard_failed`` in it. With nothing wanted nothing is shared. Of several,
     the most recent.
+
+    A record that shares a failure (``shared_with``) never counts: it is
+    written when its build shares, later than the failure it copies, which
+    is a record of the same key and counts by its own time.
     """
     needed = frozenset(wanted)
     return _most_recent(
         r
         for r in records
         if needed
+        and r.shared_with is None
         and r.build.id != own_build
         and recorded_time(r) > arrived + SHARED_AFTER
         and needed <= _hard_failed(r)
