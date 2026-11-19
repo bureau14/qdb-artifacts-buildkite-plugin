@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from ..forms import BRANCH_PREFIX
 from ..options import command_exit_status, job_build
 from ..pointer import Build
 
@@ -54,8 +53,3 @@ def job_of(pipeline: str | None) -> Job:
         needs=os.environ.get("SNAPSHOT_NEEDS"),
         rebuild=os.environ.get("SNAPSHOT_REBUILD"),
     )
-
-
-def own_ref(job: Job) -> str:
-    """The build's own ref, as the generator writes it from ``BUILDKITE_BRANCH``."""
-    return BRANCH_PREFIX + job.branch

@@ -82,8 +82,8 @@ from .edge import (
     stored_records,
 )
 from .failing import Refusal, gated
-from .git import Git, RealGit
-from .job import Job, is_chain_node, job_of, own_ref
+from .git import Git, RealGit, branch_ref
+from .job import Job, is_chain_node, job_of
 from .plan import Node, Plan, PlanError, encode_plan, short_commit
 from .planner import Pipelines, Root, make_plan, rebuild_setting
 from .records import (
@@ -183,7 +183,8 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
     except TemplateError as exc:
         raise reason_refusal(job, RULE, str(exc), chain_origin(job, edge), edge.clock()) from exc
     downloads = pipeline_downloads(doc)
-    violations = rule_violations(downloads, declaration, job.project, own_ref(job))
+    # The build's own ref, as the generator writes it from BUILDKITE_BRANCH.
+    violations = rule_violations(downloads, declaration, job.project, branch_ref(job.branch))
     if violations:
         message = "\n".join(violation_message(v) for v in violations)
         raise reason_refusal(job, RULE, message, chain_origin(job, edge), edge.clock())

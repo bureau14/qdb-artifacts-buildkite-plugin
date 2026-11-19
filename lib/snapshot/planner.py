@@ -80,7 +80,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
-from ..forms import BRANCH_PREFIX
 from .buildkite import PipelineFacts, PipelineNotFound
 from .canonical import snapshot_key
 from .declaration import (
@@ -665,8 +664,7 @@ def label_of(p: str, as_itself: bool, tree: Mapping[str, Member], context: str) 
     is ``snapshot/<root branch>``: no branch has that name, so a build under it
     moves no ``LATEST_SUCCESSFUL`` that anybody reads.
     """
-    own = tree[p].place.ref[len(BRANCH_PREFIX) :]
-    return own if as_itself else SNAPSHOT_LABEL_PREFIX + context
+    return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_LABEL_PREFIX + context
 
 
 def plan_node(n: Member, key: str | None, label: str) -> Node:
