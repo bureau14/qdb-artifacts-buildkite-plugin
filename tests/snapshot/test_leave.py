@@ -122,6 +122,20 @@ def test_a_retried_leave_leaves_its_record_as_it_is(tmp_path):
     assert gate.lines[-1].endswith("exists; left as it is")
 
 
+@pytest.mark.parametrize(
+    "promotes",
+    ['["linux"]', '{"linux": "build linux"}', '{"linux macos": "build-linux"}', "{"],
+    ids=["a-list", "a-step-key-with-a-space", "a-variant-with-a-space", "not-json"],
+)
+def test_leave_refuses_snapshot_promotes_that_is_not_its_form(tmp_path, promotes):
+    # Any job of the build can write its meta-data.
+    gate = leaving(tmp_path, CORE, {"build-linux": HARD_FAILED})
+    gate.agent.meta_data["snapshot-promotes"] = promotes
+
+    assert gate.fails().startswith("snapshot-promotes is ")
+    assert gate.records() == []
+
+
 class Garbled(RecordingAgent):
     """An agent whose answer is not UTF-8, which ``agent.run_process`` decodes strictly."""
 

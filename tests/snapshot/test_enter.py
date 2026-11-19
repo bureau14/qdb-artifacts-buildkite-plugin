@@ -38,6 +38,7 @@ from gates import (
     pipeline,
     pointer_objects,
     record_objects,
+    step,
     tree,
     url,
 )
@@ -56,8 +57,10 @@ from lib.snapshot.records import (
     HARD_FAILED,
     NOT_DECLARED,
     RULE,
+    Cause,
     Failed,
     Record,
+    caused_record,
     compose_record,
     encode_record,
 )
@@ -245,6 +248,16 @@ def test_4_a_chain_node_whose_root_holds_no_plan_fails(tmp_path):
     assert f"build '{ROOT_BUILD.id}' holds no snapshot-plan" in gate.fails()
 
 
+def test_4_a_chain_node_whose_root_holds_the_plan_of_another_build_fails(tmp_path):
+    # Any job of the root build can write its meta-data.
+    other = dataclasses.replace(PLAN, id="01890000-bbbb-7000-8000-000000000099")
+    gate = Gate(tmp_path, CORE)
+    gate.agent.builds[ROOT_BUILD.id] = {"snapshot-plan": encode_plan(other)}
+
+    assert f"build {ROOT_BUILD.id} holds the plan {other.id}" in gate.fails()
+    assert gate.records() == [] and gate.agent.uploads == [] and gate.mode == "failed"
+
+
 def test_4_an_empty_snapshot_plan_is_refused(tmp_path):
     gate = Gate(tmp_path, CORE, plan_id="")
 
@@ -425,6 +438,21 @@ def test_8_a_build_of_the_key_that_failed_while_this_one_waited_is_shared(tmp_pa
     assert gate.agent.uploads == []
 
 
+def test_8_only_the_wanted_variants_without_a_pointer_must_have_failed_to_share_it(tmp_path):
+    # N is linux and macos; linux has a pointer, so only macos is wanted.
+    macos = compose_record(
+        origin(CORE, 30), ARRIVED + 60, None, [Failed(MACOS, "build-macos", HARD_FAILED)], (), None
+    )
+    objects = {**pointer_objects(held(CORE, LINUX, 30)), **record_objects(macos)}
+    gate = Gate(tmp_path, CORE, objects=objects)
+
+    assert "build 30 of the same snapshot failed on macos while" in gate.fails()
+
+    (own,) = [r for r in gate.records() if r.build == BUILDS[CORE]]
+    assert [f.variant for f in own.failed] == [MACOS] and own.shared_with == build_of(CORE, 30)
+    assert gate.agent.uploads == []
+
+
 @pytest.mark.parametrize(
     "record",
     [
@@ -511,6 +539,25 @@ def test_10_a_dependency_that_failed_earlier_in_this_chain_fails_the_build_witho
         "To retry: retry the failed job in `core` `31`. When it passes, start a new build of "
         "`app`. Everything that passed is reused."
     )
+
+
+def test_10_the_annotation_follows_the_records_of_this_chain_down_to_the_build_that_failed(
+    tmp_path,
+):
+    # app downloads lib only; lib failed because core failed.
+    core = compose_record(
+        origin(CORE, 31), T - 40, None, [Failed(LINUX, "build-linux", HARD_FAILED)], (), None
+    )
+    lib = caused_record(origin(LIB, 21), [Cause(CORE, key(CORE), (LINUX,))], T - 30)
+    doc = {"steps": [step(APP, "build-linux", LINUX, [(LIB, LINUX)], MASTER)]}
+    gate = Gate(tmp_path, APP, doc=doc, objects=record_objects(core, lib))
+
+    assert gate.fails().startswith(f"lib @ {commit(LIB)[:12]} ({key(LIB)}) has no linux: its build")
+
+    body, _ = gate.annotation()
+    assert "FAILED in lib build 21: https://ci.example/lib/21" in body
+    assert f"caused by core @ {commit(CORE)[:12]} ({key(CORE)}), which has no linux." in body
+    assert "FAILED in core build 31: https://ci.example/core/31" in body
 
 
 def test_10_a_record_of_another_chain_triggers_the_dependency_again(tmp_path):

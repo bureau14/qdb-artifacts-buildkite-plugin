@@ -321,6 +321,13 @@ def test_429_and_5xx_are_tried_again(api):
     assert len(api.requests) == 3
 
 
+def test_500_is_tried_again(api):
+    api.answer(500, {"message": "internal"})
+    api.answer(200, answer())
+    assert api.fetch().runs_pipeline_py
+    assert api.sleeps == [1.0] and len(api.requests) == 2
+
+
 def test_five_failed_attempts_are_an_error(api):
     for _ in range(5):
         api.answer(503, {"message": "maintenance"})
