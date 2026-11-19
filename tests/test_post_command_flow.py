@@ -206,22 +206,13 @@ def test_exclude_arrives_as_a_list_or_as_one_string(job, store, hook):
     assert store.stored_keys() == [f"{PREFIX}/a.bin", f"{PREFIX}/a.tmp", f"{PREFIX}/manifest.json"]
 
 
-@pytest.mark.parametrize(
-    "options, named",
-    [
-        ({"PLAN": "p.yml", "LEAVE": "true"}, "this one plan and leave"),
-        ({"PLAN": "p.yml", "RESUME": "p.yml"}, "this one plan and resume"),
-        ({"LEAVE": "false"}, "leave is true on the step that leaves the gate, not 'false'"),
-    ],
-    ids=["plan-and-leave", "plan-and-resume", "leave-false"],
-)
-def test_a_step_whose_gate_options_cannot_be_read_fails_before_anything_runs(
-    job, store, hook, agent, options, named
-):
-    outcome = hook("post-command", job.with_options(**options))
+def test_a_leave_that_is_not_true_fails_before_anything_runs(job, store, hook, agent):
+    # A step that carries plan or resume runs the venv its post-checkout makes
+    # for it: tests/gate holds those cases, with the plugin such a step has.
+    outcome = hook("post-command", job.with_options(LEAVE="false"))
 
     assert outcome.code == 1
-    assert named in outcome.error
+    assert "leave is true on the step that leaves the gate, not 'false'" in outcome.error
     assert store.requests == [] and agent.calls() == []
 
 

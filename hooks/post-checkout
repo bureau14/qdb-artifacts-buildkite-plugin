@@ -16,10 +16,7 @@ if [[ -z "${PYTHON3_CMD}" ]]; then
 fi
 
 REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
-
-# The gate steps of enter and resume read pipeline documents, which needs
-# PyYAML. No other step reads one, so no other job on any platform installs it.
-if plugin_has_any PLAN RESUME; then
+if step_reads_documents; then
   REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/snapshot/requirements.txt")
 fi
 

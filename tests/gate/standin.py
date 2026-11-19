@@ -652,9 +652,9 @@ class Buildkite:
     ``template`` is a job of the suite's harness (``tests/conftest.py``), whose
     environment holds the store and the host's variables; ``hook`` runs a hook
     as the agent does. The steps of enter and resume run the plugin at
-    ``gate_plugin``, whose .venv post-checkout made with PyYAML; every other
-    step, leave too, the plugin at ``plugin_root``, whose .venv has none, as
-    on an agent. ``compiled`` is the file every build step's command appends
+    ``gate_plugin``, whose .venv-snapshot post-checkout made with PyYAML;
+    every other step, leave too, the plugin at ``plugin_root``, whose .venv
+    has none, as on an agent. ``compiled`` is the file every build step's command appends
     to.
     """
 

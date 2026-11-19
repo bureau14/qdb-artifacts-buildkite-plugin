@@ -1,4 +1,7 @@
-"""Which Python the hooks use: post-checkout builds .venv, the other hooks run it."""
+"""Which Python the hooks use: post-checkout builds the step's venv, the other hooks run it.
+
+A step that carries plan or resume has .venv-snapshot, any other .venv.
+"""
 
 import os
 import platform
@@ -98,6 +101,32 @@ def test_post_checkout_of_a_plan_or_resume_step_also_installs_what_reading_docum
         str(plugin_copy / "lib" / "requirements.txt"),
         "-r",
         str(plugin_copy / "lib" / "snapshot" / "requirements.txt"),
+    ]
+
+
+def test_the_steps_that_read_documents_keep_a_venv_that_no_other_job_replaces(
+    job, hook, plugin_copy, fake_python
+):
+    # Every job of one plugin commit on a host shares the plugin's checkout, and
+    # the post-checkout of each makes its venv again.
+    job = job.with_env(
+        QDB_CICD_AGENT_PYTHON3=str(fake_python.path), FAKE_PYTHON_CALLS=str(fake_python.calls_dir)
+    )
+    plan = job.with_options(PLAN=".buildkite/snapshot-pipeline.yml")
+    upload = job.with_options(UPLOAD_FILES="out/*", UPLOAD_VARIANT="linux")
+
+    assert hook("post-checkout", plan, root=plugin_copy).code == 0
+    made_for_plan = Path(fake_python.calls()[0].argv[-1])
+    (made_for_plan / "in-use").write_text("")
+    assert hook("post-checkout", upload, root=plugin_copy).code == 0
+    assert hook("post-command", plan, root=plugin_copy).code == 0
+
+    assert made_for_plan == plugin_copy / ".venv-snapshot"
+    assert (made_for_plan / "in-use").exists()
+    assert fake_python.calls()[-1].argv[:3] == [
+        str(made_for_plan / "bin" / "python"),
+        str(plugin_copy / "artifacts.py"),
+        "post-command",
     ]
 
 

@@ -3,7 +3,6 @@ set -euo pipefail
 
 PLUGIN_PREFIX="QDB_ARTIFACTS"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_DIR="${PLUGIN_DIR}/.venv"
 ARTIFACTS_PY="${PLUGIN_DIR}/artifacts.py"
 
 # Detect Python 3.
@@ -40,15 +39,6 @@ _find_python3() {
 
 PYTHON3_CMD="$(_find_python3)"
 
-# Venv layout differs between platforms:
-#   Linux/macOS: .venv/bin/python3, .venv/bin/pip
-#   Windows:     .venv/Scripts/python.exe, .venv/Scripts/pip.exe
-if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]; then
-  VENV_BIN="${VENV_DIR}/Scripts"
-else
-  VENV_BIN="${VENV_DIR}/bin"
-fi
-
 plugin_read_config() {
   local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
   local default="${2:-}"
@@ -83,6 +73,30 @@ plugin_has_any() {
   done
   return 1
 }
+
+# The gate steps of enter and resume read pipeline documents, which needs
+# PyYAML. No other step reads one, so no other job on any platform installs it.
+step_reads_documents() {
+  plugin_has_any PLAN RESUME
+}
+
+# Every job of one plugin commit on a host shares this checkout, and the
+# post-checkout of each makes its venv again. The steps that read documents
+# keep a venv of their own, so that no other job takes PyYAML from under them.
+if step_reads_documents; then
+  VENV_DIR="${PLUGIN_DIR}/.venv-snapshot"
+else
+  VENV_DIR="${PLUGIN_DIR}/.venv"
+fi
+
+# Venv layout differs between platforms:
+#   Linux/macOS: .venv/bin/python3, .venv/bin/pip
+#   Windows:     .venv/Scripts/python.exe, .venv/Scripts/pip.exe
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]; then
+  VENV_BIN="${VENV_DIR}/Scripts"
+else
+  VENV_BIN="${VENV_DIR}/bin"
+fi
 
 # One call per hook phase: "pre-command" or "post-command". What a phase does is
 # decided in lib/cli.py from the step's options, not here.

@@ -28,8 +28,8 @@ def commit_as_checked_out(root: Path) -> None:
 
 
 def build_gate_plugin(root: Path, home: Path) -> None:
-    """Hooks and library of the worktree in a checkout of their own, its .venv made by
-    the real post-checkout of a step that carries ``plan``."""
+    """Hooks and library of the worktree in a checkout of their own, its .venv-snapshot
+    made by the real post-checkout of a step that carries ``plan``."""
     for part in ("hooks", "lib"):
         shutil.copytree(
             PLUGIN_ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__")

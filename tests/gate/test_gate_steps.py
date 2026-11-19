@@ -7,6 +7,7 @@ widget then finds.
 
 import json
 
+import pytest
 import yaml
 from standin import HOST, TOKEN
 
@@ -193,6 +194,24 @@ def test_a_gate_step_runs_its_gate_command_after_a_failed_command_and_nothing_el
     assert "the command exited 3" in run.output
     assert store.plugin_requests() == []
     assert buildkite.agent.meta_data(engine.id)["snapshot-mode"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "options, named",
+    [
+        ({"PLAN": "p.yml", "LEAVE": "true"}, "this one plan and leave"),
+        ({"PLAN": "p.yml", "RESUME": "p.yml"}, "this one plan and resume"),
+    ],
+    ids=["plan-and-leave", "plan-and-resume"],
+)
+def test_a_plan_step_that_carries_a_second_gate_option_fails_before_anything_runs(
+    job, store, hook, agent, gate_plugin, options, named
+):
+    outcome = hook("post-command", job.with_options(**options), root=gate_plugin)
+
+    assert outcome.code == 1
+    assert named in outcome.error
+    assert store.requests == [] and agent.calls() == []
 
 
 def test_a_retried_plan_step_after_its_upload_uploads_nothing_again(buildkite, store):

@@ -314,7 +314,7 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 `pre-command` and `post-command` only find Python and start `artifacts.py` with the name of their phase; `lib/cli.py` decides what the phase runs.
 
-On a gate step of a build with snapshot dependencies (option `plan`, `resume` or `leave`), `post-command` runs the gate command of the step, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform.
+On a gate step of a build with snapshot dependencies (option `plan`, `resume` or `leave`), `post-command` runs the gate command of the step, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform. Those steps make their venv in `<plugin-dir>/.venv-snapshot`: every job of one plugin commit on a host shares the plugin's checkout and makes its venv again, and no other job's venv then replaces theirs.
 
 ### Failed builds
 

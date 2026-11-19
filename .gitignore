@@ -1,4 +1,5 @@
 .venv/
+.venv-snapshot/
 .venv.lock
 .ruff_cache/
 __pycache__/
