@@ -17,6 +17,7 @@ from chain import GRAPHS
 from fakes import url
 from world import TOKEN
 
+from lib import retry
 from lib.extract import extract_local_archive
 from lib.snapshot import buildkite
 from lib.snapshot.buildkite import Response
@@ -116,14 +117,16 @@ class TokenParameter:
         return {"Parameter": {"Value": TOKEN + "\n"}}
 
 
-def api(answer: int, received: list):
-    """Buildkite's API behind its transport: every pipeline's settings, and ``answer`` for
-    ``core``. Each token it is sent goes into ``received``."""
+def api(answers: tuple, received: list):
+    """Buildkite's API behind its transport: every pipeline's settings, and for ``core`` the
+    statuses ``answers`` in turn, the last one again for every later call. Each token it is
+    sent goes into ``received``."""
+    core = iter(answers)
 
     def http_get(address: str, token: str, timeout: float = 30.0) -> Response:
         received.append(token)
         slug = address.rsplit("/", 1)[-1]
-        status = 200 if slug != "core" else answer
+        status = 200 if slug != "core" else next(core, answers[-1])
         body = (
             {"repository": url(slug), "configuration": RUNS_PIPELINE_PY}
             if status == 200
@@ -134,20 +137,27 @@ def api(answer: int, received: list):
     return http_get
 
 
+# What Buildkite's API answers for one pipeline, call after call: the pipeline, a 404, a 401,
+# or a 503 that the next call repairs.
+ANSWERS = {"200": (200,), "404": (404,), "401": (401,), "503-then-200": (503, 200)}
+
+
 @pytest.mark.parametrize("token_source", ["variable", "ssm"])
-@pytest.mark.parametrize("answer", [200, 404, 401])
-def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_source, answer):
-    """The plan step of a root sends the Buildkite API token to the API and puts it in nothing
-    the chain prints, logs, annotates, raises, sets as meta-data, uploads or stores, whatever
-    the API answers and wherever the token was read. (Every job of ``world.py`` holds the token
-    too, and its ``Job.run`` fails a hook that prints it.)"""
+@pytest.mark.parametrize("answers", sorted(ANSWERS))
+def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_source, answers):
+    """The plan step of a root sends the Buildkite API token to the API, again after an answer
+    that a retry may repair, and puts it in nothing the chain prints, logs, annotates, raises,
+    sets as meta-data, uploads or stores, whatever the API answers and wherever the token was
+    read; the root passes when the API gives the pipelines in the end. (Every job of
+    ``world.py`` holds the token too, and its ``Job.run`` fails a hook that prints it.)"""
     received: list[str] = []
     monkeypatch.setenv("BUILDKITE_ORGANIZATION_SLUG", "example")
     if token_source == "variable":
         monkeypatch.setenv("ARTIFACTS_BUILDKITE_TOKEN", TOKEN)
     else:
         monkeypatch.delenv("ARTIFACTS_BUILDKITE_TOKEN", raising=False)
-    monkeypatch.setattr(buildkite, "http_get", api(answer, received))
+    monkeypatch.setattr(buildkite, "http_get", api(ANSWERS[answers], received))
+    monkeypatch.setattr(retry, "BACKOFF_BASE", 0)  # the pause before a retry, in seconds
     world = worlds(GRAPHS["diamond"])
     world.pipelines = buildkite_pipelines(TokenParameter())
 
@@ -161,7 +171,7 @@ def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_sour
         *(line for b in world.builds for line in b.outputs),
         *map(json.dumps, kept),
     ]
-    assert top.state == ("passed" if answer == 200 else "failed")
+    assert top.state == ("passed" if ANSWERS[answers][-1] == 200 else "failed")
     assert received and set(received) == {TOKEN}
     assert [text for text in shown if TOKEN in text] == []
     assert [key for key, body in world.store.objects.items() if TOKEN.encode() in body] == []
