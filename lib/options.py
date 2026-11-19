@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import functools
 import os
-import re
 import subprocess
 import time
 import urllib.parse
@@ -187,35 +186,19 @@ def checkout_commit():
     return commit
 
 
-def job_variable(name, option):
-    """A variable the agent sets for every job, which a step with option needs."""
-    value = os.environ.get(name)
-    if not value:
-        raise ArtifactsError(f"{name} is not set, and a step with {option} needs it")
-    return value
-
-
-def job_build_number(option):
-    value = job_variable("BUILDKITE_BUILD_NUMBER", option)
-    if not re.fullmatch(r"[0-9]+", value):
-        raise ArtifactsError(f"BUILDKITE_BUILD_NUMBER {value!r} is not a build number")
-    return int(value)
-
-
-def job_build(option):
-    """The build the job runs in, as the agent names it: its id, number and URL. Whoever
-    writes it into an object checks the form of each."""
+def job_build():
+    """The build the job runs in, as the agent names it: its id, number and URL."""
     return pointer.Build(
-        id=job_variable("BUILDKITE_BUILD_ID", option),
-        number=job_build_number(option),
-        url=job_variable("BUILDKITE_BUILD_URL", option),
+        id=os.environ["BUILDKITE_BUILD_ID"],
+        number=int(os.environ["BUILDKITE_BUILD_NUMBER"]),
+        url=os.environ["BUILDKITE_BUILD_URL"],
     )
 
 
 def refuse_another_build(build_id, option, key_option):
     """A step with a snapshot key records the build it runs in, by the id, number
     and URL the agent gives, so a build_id option may name only that build."""
-    own = job_variable("BUILDKITE_BUILD_ID", key_option)
+    own = os.environ["BUILDKITE_BUILD_ID"]
     if build_id != own:
         raise ArtifactsError(
             f"{option} {build_id!r} is not this job's build {own!r}, "
@@ -234,7 +217,7 @@ def snapshot_pointer(project_id, key, variant, git_ref):
             variant=variant,
             git_ref=git_ref,
             commit=checkout_commit(),
-            build=job_build("promote.snapshot"),
+            build=job_build(),
             written_at=forms.iso_utc(time.time()),
         )
     )
@@ -269,15 +252,14 @@ def without_user(repository):
 
 def upload_provenance(key, build_id):
     """Where the files of an upload in a build with a snapshot key were made."""
-    option = "upload.snapshot"
     return Provenance(
         source=Source(
-            repository=without_user(job_variable("BUILDKITE_REPO", option)),
+            repository=without_user(os.environ["BUILDKITE_REPO"]),
             commit=checkout_commit(),
-            pipeline=job_variable("BUILDKITE_PIPELINE_SLUG", option),
-            build_number=job_build_number(option),
+            pipeline=os.environ["BUILDKITE_PIPELINE_SLUG"],
+            build_number=int(os.environ["BUILDKITE_BUILD_NUMBER"]),
             build_id=build_id,
-            job_id=job_variable("BUILDKITE_JOB_ID", option),
+            job_id=os.environ["BUILDKITE_JOB_ID"],
             snapshot=key,
         ),
         downloads=own_downloads(),

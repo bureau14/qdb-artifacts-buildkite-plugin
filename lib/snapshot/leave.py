@@ -110,4 +110,4 @@ def real_edge() -> Edge:
 
 def run() -> int:
     """The gate command of the step that carries ``leave``, on an agent."""
-    return leave(job_of("leave", None), real_edge())
+    return leave(job_of(None), real_edge())
