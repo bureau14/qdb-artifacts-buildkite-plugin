@@ -37,6 +37,7 @@ from world import (
 
 from lib.pointer import Build, Pointer, decode, encode
 from lib.snapshot.plan import Node, Plan, RootInfo, encode_plan
+from lib.snapshot.records import decode_record
 
 FEATURE = "refs/heads/feature"
 TAG = "refs/tags/v1.0.0"
@@ -542,6 +543,8 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
 ROOT = 9
 KEYS = {"app": "v1-" + "1" * 32, "widget": "v1-" + "2" * 32, "engine": "v1-" + "3" * 32}
 ENGINE_COMMIT = "e" * 40
+ENGINE_LATER = "01900000-0000-7000-8000-0000000000e8"
+OUTCOMES = ("every-variant-passes", "the-last-variant-fails")
 
 
 def chain_plan(widget_commit: str) -> str:
@@ -583,6 +586,21 @@ def engine_pointer(variant: str) -> bytes:
     )
 
 
+def engine_file(build: str, variant: str) -> dict:
+    return {"engine.tar.zst": f"engine {build} {variant}".encode()}
+
+
+def engine_builds(variant: str) -> dict:
+    """engine's build that its pointer names, and a later build that was promoted after it."""
+    return {
+        k: body
+        for b in (ENGINE_BUILD, ENGINE_LATER)
+        for k, body in master_wrote(
+            MASTER, variant, b, engine_file(b, variant), True, project="engine"
+        ).items()
+    }
+
+
 def artifacts_options(step: dict) -> dict:
     ((options,),) = [
         [o for name, o in p.items() if name.startswith(PLUGIN)] for p in step["plugins"]
@@ -591,12 +609,14 @@ def artifacts_options(step: dict) -> dict:
 
 
 @pytest.mark.parametrize(
-    "matrix, backend", paired(sorted(MATRICES.values()), BACKENDS), ids=case_id
+    "matrix, backend, outcome", paired(sorted(MATRICES.values()), BACKENDS, OUTCOMES), ids=case_id
 )
-def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store, matrix):
-    """Through the real post-command hook, a chain node's plan step triggers the dependency it
-    lacks, its resume step uploads the pipeline with that dependency's build in every download,
-    its build steps write the node's pointers, and leave records no failure."""
+def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store, matrix, outcome):
+    """Through the real hooks, a chain node's plan step triggers the dependency it lacks, its
+    resume step uploads the pipeline, each build step downloads the dependency's build its
+    pointer names although a later build was promoted, and writes the node's pointer after a
+    passed command; leave records exactly the variant whose command failed."""
+    failing = set(matrix[-1:]) if outcome == "the-last-variant-fails" else set()
     steps = [build_step("widget", v, [entry("engine", v)]) for v in matrix]
     template = yaml.safe_dump({"steps": steps})
     job = jobs("widget", 1).committed(
@@ -615,6 +635,7 @@ def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store,
         .run("post-command")
     )
     for v in matrix:
+        store.put_all(engine_builds(v))
         store.put(f"_snapshot/v1/pointers/engine/{KEYS['engine']}/{v}.json", engine_pointer(v))
     resumed = (
         gate.with_env(BUILDKITE_STEP_KEY="snapshot-resume")
@@ -622,30 +643,37 @@ def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store,
         .run("post-command")
     )
     triggers, pipeline = [yaml.safe_load(u)["steps"] for u in agent.files(build_id(1), "uploads")]
-    built = []
+    ran, fetched = [], {}
     for step in pipeline:
-        built.append(
-            job.with_env(BUILDKITE_STEP_KEY=step["key"])
-            .with_plugin(artifacts_options(step))
-            .run("post-command")
-        )
-        agent.set(
-            build_id(1), "outcomes", step["key"], "passed" if built[-1].code == 0 else "hard_failed"
-        )
+        options = artifacts_options(step)
+        v = options["upload"]["variant"]
+        this = job.with_env(BUILDKITE_STEP_KEY=step["key"]).with_plugin(options)
+        ran.append(this.run("pre-command"))
+        fetched.update({v: (job.workspace / "engine.tar.zst").read_bytes()})
+        status = 1 if v in failing else 0
+        ran.append(this.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(status)).run("post-command"))
+        agent.set(build_id(1), "outcomes", step["key"], "hard_failed" if status else "passed")
     left = (
         gate.with_env(BUILDKITE_STEP_KEY="snapshot-leave")
         .with_plugin({"leave": True})
         .run("post-command")
     )
 
-    downloads = [e for s in pipeline for e in artifacts_options(s)["download"]["projects"]]
-    pointers = [
-        decode(store.get(f"_snapshot/v1/pointers/widget/{KEYS['widget']}/{v}.json")) for v in matrix
-    ]
-    assert all(o.code == 0 for o in (planned, resumed, *built, left)), [
-        o.output for o in (planned, resumed, *built, left)
+    pointers = {
+        v: store.get(f"_snapshot/v1/pointers/widget/{KEYS['widget']}/{v}.json") for v in matrix
+    }
+    records = [decode_record(b.decode()) for b in store.objects("_snapshot/v1/failures/").values()]
+    assert all(o.code == 0 for o in (planned, resumed, *ran, left)), [
+        o.output for o in (planned, resumed, *ran, left)
     ]
     assert [s.get("trigger") for s in triggers if "trigger" in s] == ["engine"]
-    assert {(e["project_id"], e["build_id"]) for e in downloads} == {("engine", ENGINE_BUILD)}
-    assert all(p.build.id == build_id(1) and p.commit == job.commit for p in pointers)
-    assert store.stored("_snapshot/v1/failures/") == set()
+    assert fetched == {v: engine_file(ENGINE_BUILD, v)["engine.tar.zst"] for v in matrix}
+    assert {v for v, p in pointers.items() if p is not None} == set(matrix) - failing
+    assert all(
+        decode(p).build.id == build_id(1) and decode(p).commit == job.commit
+        for p in pointers.values()
+        if p is not None
+    )
+    assert {(r.project, f.variant) for r in records for f in r.failed} == {
+        ("widget", v) for v in failing
+    }
