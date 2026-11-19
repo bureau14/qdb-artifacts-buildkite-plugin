@@ -14,7 +14,7 @@ Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipe
 
 ## Requirements
 
-- **Python 3** must be available on the host agent (`python3` in `PATH`).
+- **Python 3.12 or newer** on the host agent, named by the agent in `QDB_CICD_AGENT_PYTHON3` or, where that is not set, in `QDB_CICD_AGENT_PYTHON_313_PATH`. The plugin runs no other Python, none from `PATH`.
 - The agent must have IAM permissions (S3) or SSM-stored R2 credentials configured. See [Backend configuration](#backend-configuration).
 
 ## Usage
@@ -308,7 +308,7 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 | Hook            | Trigger                 | Action                                                                                                                                                                       |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `post-checkout` | After repo checkout     | Creates/updates a Python venv in `<plugin-dir>/.venv` with dependencies from `lib/requirements.txt`. Uses `flock` to prevent races when multiple jobs run on the same agent. |
+| `post-checkout` | After repo checkout     | Prints the path and version of the Python the agent names, fails unless it is 3.12 or newer, and makes `<plugin-dir>/.venv` anew with it, with the dependencies from `lib/requirements.txt`. |
 | `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                    |
 | `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty. |
 
