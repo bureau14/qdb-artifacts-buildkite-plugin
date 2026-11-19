@@ -24,9 +24,9 @@ not asked about. The walk is breadth first from the root; each project is
 resolved once, for the first consumer that reaches it (consumers in the order
 reached, their dependencies sorted):
 
-1. The root, at its own commit and ref, with its own declaration; a branch
-   name git does not accept or a template of its own that does not parse
-   fails the plan before anything is asked (``check_root``).
+1. The root, at its own commit and ref, with its own declaration; a template
+   of its own that does not parse fails the plan before anything is asked
+   (``check_root``).
    Its repository is Buildkite's answer for its slug. Its release line
    (``lines.release_line`` of that repository and its branch) is found the
    first time a dependency without a pin is placed, and only then. Its
@@ -38,8 +38,8 @@ reached, their dependencies sorted):
       plan;
    b. its ref: its pin; else the root's branch when its repository has it;
       else the root's release line when its repository has it; else
-      ``master``; else ``main``. A pin is ``refs/heads/<branch>`` or
-      ``refs/tags/<tag>``;
+      ``master``; else ``main``. A pin names ``refs/heads/<branch>`` or
+      ``refs/tags/<tag>``: any other text is a ref no repository has;
    c. its commit, ``git.commits_of``, a tag peeled; the root's repository and
       branch give the root's own commit. A ref that does not exist refuses
       the project;
@@ -51,9 +51,8 @@ reached, their dependencies sorted):
    e. a project that meets all four is a node, with its declaration, and so
       with its own snapshot dependencies and pins.
 
-3. Pins come from every node of the tree. A pin that is not a full ref, or
-   two different pins of one project, fail the plan and name where each was
-   found. The pins decide where their projects are taken from, which decides
+3. Pins come from every node of the tree. Two different pins of one project
+   fail the plan and name where each was found. The pins decide where their projects are taken from, which decides
    which commits are read and so which pins there are: the walk is made again
    with the pins it found until they are the pins it was made with. Pins that
    never settle fail the plan.
@@ -77,11 +76,12 @@ reached, their dependencies sorted):
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Callable, TypeVar, Union
+from typing import Callable, Union
 
-from ..forms import BRANCH_PREFIX, is_full_ref, is_ref_name
+from ..forms import BRANCH_PREFIX
 from .buildkite import PipelineFacts, PipelineNotFound
 from .canonical import snapshot_key
 from .declaration import (
@@ -104,7 +104,6 @@ from .plan import (
     REBUILD_ALL,
     REBUILD_NONE,
     REBUILD_ONE,
-    REBUILD_SETTINGS,
     Node,
     Plan,
     PlanError,
@@ -141,8 +140,8 @@ class Root:
     """The root build: its pipeline, branch and commit, and how its plan is identified.
 
     ``commit`` is the commit checked out (``git rev-parse HEAD``),
-    ``build_id`` the build's uuid (the plan id), ``rebuild`` a setting of
-    ``plan.REBUILD_SETTINGS`` (``rebuild_setting``).
+    ``build_id`` the build's uuid (the plan id), ``rebuild`` the setting
+    ``rebuild_setting`` gives.
     """
 
     project: str
@@ -175,21 +174,6 @@ def counts(path: str) -> bool:
 # ---------------------------------------------------------------------------
 # Asking each question once
 # ---------------------------------------------------------------------------
-
-T = TypeVar("T")
-
-
-def memoised(f: Callable[..., T]) -> Callable[..., T]:
-    """``f`` called at most once per arguments."""
-    memo: dict[tuple, T] = {}
-
-    def once(*args):
-        if args not in memo:
-            memo[args] = f(*args)
-        return memo[args]
-
-    return once
-
 
 Commits = Callable[[str, Sequence[str]], Mapping[str, str]]
 
@@ -248,8 +232,8 @@ def asked_once(
     return Sources(
         pipeline=pipeline,
         first_ref=first_ref_asked_once(git.commits_of, {(repository, branch_ref(branch)): commit}),
-        files=memoised(lambda url, c: git.read_files(url, c, DIRECTORY, counts)),
-        line=memoised(lambda: release_line(git, repository, branch)),
+        files=functools.cache(lambda url, c: git.read_files(url, c, DIRECTORY, counts)),
+        line=functools.cache(lambda: release_line(git, repository, branch)),
     )
 
 
@@ -530,18 +514,11 @@ def found_pins(nodes: Mapping[str, Found]) -> list[Pin]:
 def chain_pins(nodes: Mapping[str, Found]) -> dict[str, Pin]:
     """``{project: pin}`` of the pins of every node.
 
-    A pin that is not ``refs/heads/<branch>`` or ``refs/tags/<tag>``, or two
-    different pins of one project, fail the plan and name where each was
+    Two different pins of one project fail the plan and name where each was
     found. One ref written in two places is one pin.
     """
     by_project: dict[str, list[Pin]] = {}
     for pin in found_pins(nodes):
-        if not is_full_ref(pin.ref):
-            raise PlanError(
-                f"{pin.project} has the pin {shown_value(pin.ref)} in {shown_text(pin.path)} of "
-                f"{pin.node} at "
-                f"{pin.commit}: a pin is refs/heads/<branch> or refs/tags/<tag>"
-            )
         by_project.setdefault(pin.project, []).append(pin)
     for project, pins in sorted(by_project.items()):
         if len({p.ref for p in pins}) > 1:
@@ -726,20 +703,8 @@ def plan_node(n: Member, key: str | None, label: str) -> Node:
 
 
 def check_root(root: Root, own: Reading) -> None:
-    """What fails the plan of ``root`` before anything is asked.
-
-    A branch name git does not accept: the branch is the plan's context, and
-    a chain node writes it into the trigger steps it uploads. A rebuild
-    setting that means nothing. Own templates that do not parse.
-    """
-    if not is_ref_name(root.branch):
-        raise PlanError(
-            f"{root.project} cannot be planned on the branch {shown_value(root.branch)}: "
-            "git accepts no branch of that name"
-        )
-    if root.rebuild not in REBUILD_SETTINGS:
-        shown = shown_value(root.rebuild)
-        raise PlanError(f"rebuild setting {shown} is none of {', '.join(REBUILD_SETTINGS)}")
+    """What fails the plan of ``root`` before anything is asked: own templates that do not
+    parse."""
     if own.errors:
         raise PlanError(
             f"the templates of {root.project} at {root.commit} do not parse by the reading "
@@ -755,7 +720,7 @@ def make_plan(root: Root, own: Reading, git: Git, pipelines: Pipelines) -> Plan:
     Buildkite pass through unchanged.
     """
     check_root(root, own)
-    pipeline = memoised(pipelines)
+    pipeline = functools.cache(pipelines)
     repository = pipeline(root.project).repository
     first = Member(Place(repository, branch_ref(root.branch), root.commit), own.declaration)
     src = asked_once(git, pipeline, repository, root.branch, root.commit)

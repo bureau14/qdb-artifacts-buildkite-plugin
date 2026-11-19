@@ -38,7 +38,6 @@ SCHEMA = 3
 REBUILD_NONE = "none"
 REBUILD_ONE = "one"
 REBUILD_ALL = "all"
-REBUILD_SETTINGS = (REBUILD_NONE, REBUILD_ONE, REBUILD_ALL)
 
 
 class PlanError(RuntimeError):
