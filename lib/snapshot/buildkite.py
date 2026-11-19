@@ -7,10 +7,10 @@ a bearer (scope ``read_pipelines``). Of the answer two facts are kept
 (``https_repository``), and whether its configuration runs
 ``.buildkite/pipeline.py`` into a pipeline upload (``runs_pipeline_py``).
 
-Answers 429 and 5xx, and failures to reach the API at all, are tried again with
-a growing pause, five attempts in all; a 404 names the project; any other
-answer is an error. An error is never read as an answer, such as "cannot give
-a snapshot".
+Answers 429 and 5xx, and failures to reach the API at all, are tried again by
+the library's ``retry.with_retry``, five attempts in all; a 404 names the
+project; any other answer is an error. An error is never read as an answer,
+such as "cannot give a snapshot".
 
 The standard library only. The token and the organisation are parameters;
 where the token comes from is the caller's business. No message contains the
@@ -20,26 +20,21 @@ only.
 
 from __future__ import annotations
 
-import http.client
 import json
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from ..errors import ArtifactsError
 from ..options import without_user
+from ..retry import with_retry
 
 API = "https://api.buildkite.com"
 ATTEMPTS = 5
 TIMEOUT = 30.0
-# The pause after the first failed attempt; it doubles after each further one.
-BACKOFF = 1.0
-# No pause is longer, whatever the server asks for.
-BACKOFF_CAP = 60.0
 
 
 class PipelineNotFound(ArtifactsError):
@@ -138,32 +133,30 @@ def pipeline_url(api: str, organisation: str, slug: str) -> str:
     return f"{api.rstrip('/')}/v2/organizations/{quoted[0]}/pipelines/{quoted[1]}"
 
 
-def is_retried(status: int) -> bool:
-    return status == 429 or status >= 500
+def answer_of(url: str, token: str, timeout: float) -> Response:
+    """One GET of ``url`` that Buildkite answered.
 
-
-def _seconds(headers: Mapping[str, str], name: str) -> float:
-    value = headers.get(name, "").strip()
-    return float(value) if value.isdigit() else 0.0
-
-
-# Seconds until a rate limit resets: Buildkite sends one per limit scope
-# (organisation and user); Retry-After is the standard form.
-_WAIT_HEADERS = ("ratelimit-reset", "ratelimit-user-reset", "retry-after")
-
-
-def retry_pause(failed_attempts: int, headers: Mapping[str, str]) -> float:
-    """The pause after ``failed_attempts`` failures: 1, 2, 4, 8 s, or longer when asked.
-
-    The longest wait any of ``_WAIT_HEADERS`` asks for wins over the backoff;
-    no pause is longer than ``BACKOFF_CAP``.
+    429 and 5xx raise ``RuntimeError``, which ``with_retry`` tries again, as it
+    does no answer at all (``OSError``, ``http.client.HTTPException``).
     """
-    backoff = BACKOFF * 2 ** (failed_attempts - 1)
-    asked = max(_seconds(headers, name) for name in _WAIT_HEADERS)
-    return min(max(backoff, asked), BACKOFF_CAP)
+    r = http_get(url, token, timeout)
+    if r.status == 429 or r.status >= 500:
+        raise RuntimeError(f"Buildkite answered {r.status}")
+    return r
 
 
-def _answer(slug: str, organisation: str, r: Response) -> PipelineFacts:
+def fetch_pipeline(
+    slug: str, organisation: str, token: str, *, api: str = API, timeout: float = TIMEOUT
+) -> PipelineFacts:
+    """Ask Buildkite for pipeline ``slug`` of ``organisation`` and return its facts.
+
+    Up to ``ATTEMPTS`` calls (``retry.with_retry``): an answer 429 or 5xx, or
+    no answer at all, is followed by a pause and another call. Raises
+    ``PipelineNotFound`` for a 404 and ``ArtifactsError`` for any other answer
+    that is not the pipeline.
+    """
+    url = pipeline_url(api, organisation, slug)
+    r = with_retry(lambda: answer_of(url, token, timeout), f"pipeline {slug}", ATTEMPTS)
     if r.status == 200:
         return pipeline_facts(json.loads(r.body))
     if r.status == 404:
@@ -172,35 +165,3 @@ def _answer(slug: str, organisation: str, r: Response) -> PipelineFacts:
             f"{organisation} that the token can see (404)"
         )
     raise ArtifactsError(f"pipeline {slug}: Buildkite answered {r.status}")
-
-
-def fetch_pipeline(
-    slug: str,
-    organisation: str,
-    token: str,
-    *,
-    api: str = API,
-    sleep: Callable[[float], None] = time.sleep,
-    timeout: float = TIMEOUT,
-) -> PipelineFacts:
-    """Ask Buildkite for pipeline ``slug`` of ``organisation`` and return its facts.
-
-    Up to ``ATTEMPTS`` calls: an answer 429 or 5xx, or no answer at all, is
-    followed by ``sleep(retry_pause(...))`` and another call. Raises
-    ``PipelineNotFound`` for a 404 and ``ArtifactsError`` for everything else
-    that is not the pipeline.
-    """
-    url = pipeline_url(api, organisation, slug)
-    last = ""
-    for attempt in range(1, ATTEMPTS + 1):
-        try:
-            r = http_get(url, token, timeout)
-        except (OSError, http.client.HTTPException) as exc:
-            last, headers = f"no answer ({type(exc).__name__}: {exc})", {}
-        else:
-            if not is_retried(r.status):
-                return _answer(slug, organisation, r)
-            last, headers = f"answer {r.status}", r.headers
-        if attempt < ATTEMPTS:
-            sleep(retry_pause(attempt, headers))
-    raise ArtifactsError(f"pipeline {slug}: {ATTEMPTS} attempts failed, the last with {last}")
