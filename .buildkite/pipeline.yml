@@ -14,21 +14,8 @@ steps:
           image: "python:3.14-slim"
           chown: true
 
-  # The agent images name Python 3.12 or 3.13, the two the suite runs on, each at
-  # an exact version, as the images do.
-  - label: "Tests (Python 3.12)"
-    timeout_in_minutes: 20
-    command: |
-      # every job of the suite runs in a git checkout, and the image lacks git
-      apt-get update -qq && apt-get install -y -qq --no-install-recommends git
-      pip install -r tests/requirements.txt
-      # hooks, command line and library against a local S3 and SSM server; chains in process
-      python -B -m pytest -p no:cacheprovider tests
-    plugins:
-      - docker#v5.13.0:
-          image: "python:3.12.16-slim"
-          chown: true
-
+  # Every agent image names Python 3.13 for its plugins, the one the suite runs
+  # on, at an exact version, as the images do.
   - label: "Tests (Python 3.13)"
     timeout_in_minutes: 20
     command: |
