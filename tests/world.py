@@ -21,6 +21,7 @@ import dataclasses
 import itertools
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -266,6 +267,7 @@ class Outcome:
 
 
 def start_hook(root: Path, name: str, cwd: Path, env: dict) -> subprocess.Popen:
+    """The hook, started as the leader of a process group of its own."""
     return subprocess.Popen(
         [shutil.which("bash"), str(root / "hooks" / name)],
         cwd=cwd,
@@ -274,15 +276,17 @@ def start_hook(root: Path, name: str, cwd: Path, env: dict) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
 
 def finish_hook(process: subprocess.Popen, timeout: float) -> Outcome:
-    """The hook's outcome; a hook still running after ``timeout`` seconds is killed."""
+    """The hook's outcome; a hook still running after ``timeout`` seconds is killed with the
+    Python it started, which holds its output open."""
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        process.kill()
+        os.killpg(process.pid, signal.SIGKILL)
         stdout, stderr = process.communicate()
         stderr += f"\n[killed after {timeout} s]"
     return Outcome(process.returncode, stdout, stderr)
