@@ -308,7 +308,8 @@ def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_starte
         world.now += 10
         world.play(earlier)
     else:
-        # Only the node builds in the failing chain, so its record follows other's start at once.
+        # With the tree built, nothing below the node builds again in the failing chain, so the
+        # node's record follows other's start within the margin.
         world.build(root)
         world.commit(node)
         started = at_the_node_once(start_other)
