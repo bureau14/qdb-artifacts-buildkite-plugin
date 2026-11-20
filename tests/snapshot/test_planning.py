@@ -24,6 +24,7 @@ from chain import (
     generated,
     roots,
 )
+from world import GIT_IDENTITY, git
 
 from lib.pointer import Build, Pointer
 from lib.snapshot.declaration import (
@@ -34,6 +35,8 @@ from lib.snapshot.declaration import (
     rule_violations,
 )
 from lib.snapshot.document import Rewrite, load_document, needed_variants, planned
+from lib.snapshot.git import RealGit, run_command
+from lib.snapshot.lines import release_line
 from lib.snapshot.planner import Root, make_plan
 
 MASTER = "refs/heads/master"
@@ -246,3 +249,51 @@ def test_the_rewrite_names_the_planned_build_in_every_snapshot_download(template
                 p.git_ref,
                 True,
             )
+
+
+# ---------------------------------------------------------------------------
+# The release line, asked of git itself
+# ---------------------------------------------------------------------------
+
+LEFT = ("master", "3.14.x")
+
+
+def as_on_an_agent(args, cwd, stdin, env):
+    """``run_command`` without the configuration of the host."""
+    return run_command(args, cwd, stdin, {**env, **GIT_IDENTITY})
+
+
+def lined_repository(directory: Path, commit) -> None:
+    """Make ``directory`` a repository with three release lines: ``master``, ``3.14.x`` that
+    left it, and ``3.8.x`` that began from another root commit. ``commit(repository, time)``
+    commits on the branch checked out."""
+    git(directory, "init", "-q")
+    git(directory, "symbolic-ref", "HEAD", "refs/heads/master")
+    commit(directory, 1000)
+    git(directory, "branch", "3.14.x")
+    commit(directory, 3000)
+    git(directory, "checkout", "-q", "3.14.x")
+    commit(directory, 2000)
+    git(directory, "checkout", "-q", "--orphan", "3.8.x")
+    commit(directory, 500)
+
+
+@pytest.mark.parametrize("left", LEFT)
+def test_a_branch_belongs_to_the_release_line_it_left_last(tmp_path, monkeypatch, left):
+    """The release line of a branch that is not one is the line it left last, in a repository
+    that also has a release line with which the branch shares no history."""
+
+    def commit(repository: Path, time: int) -> None:
+        monkeypatch.setenv("GIT_COMMITTER_DATE", f"@{time} +0000")
+        git(repository, "commit", "-q", "--allow-empty", "-m", f"at {time}")
+
+    origin, checkout = tmp_path / "origin", tmp_path / "checkout"
+    origin.mkdir()
+    lined_repository(origin, commit)
+    git(tmp_path, "clone", "-q", str(origin), str(checkout))
+    git(checkout, "checkout", "-q", "-b", "feature", f"origin/{left}")
+    commit(checkout, 4000)
+
+    asked = RealGit(str(checkout), run=as_on_an_agent)
+
+    assert release_line(asked, str(origin), "feature") == left

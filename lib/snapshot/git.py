@@ -12,9 +12,9 @@ Two interfaces, one for each caller. ``Git`` is what the planner asks:
 - ``branches(url)``: ``{branch: commit}`` of every branch of ``url``;
 - ``merge_base_times(url, commits)``: for each of ``commits`` of ``url``, the
   committer time of its merge-base with the commit checked out in the current
-  directory. ``RealGit`` fails when git finds no merge-base; None is the
-  answer of an answerer that knows no history (the fakes), and ``lines``
-  reads it as no time.
+  directory. None for a commit that shares no history with it (a release line
+  begun from another root commit) and from an answerer that knows no history
+  (the fakes); ``lines`` reads it as no time.
 
 ``Checkout`` is what a build asks of its own checkout, in the current
 directory:
@@ -234,12 +234,15 @@ class RealGit:
     ) -> Completed:
         return self._run(["git", *args], cwd or self._cwd, stdin, git_environment(os.environ))
 
-    def _ok(self, args: Sequence[str], cwd: str | None = None, stdin: bytes | None = None) -> bytes:
-        c = self._git(args, cwd, stdin)
+    def _output(self, args: Sequence[str], c: Completed) -> bytes:
+        """The standard output of the command ``args`` that ended as ``c``; raises when it failed."""
         if c.returncode != 0:
             shown = " ".join(["git", *args])
             raise ArtifactsError(f"{shown} failed ({c.returncode}): {c.stderr.strip()}")
         return c.stdout
+
+    def _ok(self, args: Sequence[str], cwd: str | None = None, stdin: bytes | None = None) -> bytes:
+        return self._output(args, self._git(args, cwd, stdin))
 
     def _remote(self, args: Sequence[str], cwd: str | None = None) -> bytes:
         """``_ok`` of a command that talks to a remote, with ``PROACTIVE_AUTH``."""
@@ -309,22 +312,38 @@ class RealGit:
         """The commit checked out in ``cwd`` (``git rev-parse HEAD``)."""
         return checkout_commit(self._cwd)
 
-    def _merge_base_time(self, commit: str) -> int:
-        """Committer time of the merge-base of HEAD and ``commit``."""
-        base = self._ok(["merge-base", "--end-of-options", "HEAD", commit]).decode("ascii")
-        shown = self._ok(["show", "-s", "--format=%ct", "--end-of-options", base.strip()])
+    def _merge_base(self, commit: str) -> str | None:
+        """The merge-base of HEAD and ``commit``; None when they share no history.
+
+        ``git merge-base`` exits 1 and prints nothing for two commits without
+        a common ancestor. Every other failure is an error.
+        """
+        args = ["merge-base", "--end-of-options", "HEAD", commit]
+        c = self._git(args)
+        if c.returncode == 1 and not c.stdout.strip() and not c.stderr.strip():
+            return None
+        return self._output(args, c).decode("ascii").strip()
+
+    def _merge_base_time(self, commit: str) -> int | None:
+        """Committer time of the merge-base of HEAD and ``commit``; None when there is none."""
+        base = self._merge_base(commit)
+        if base is None:
+            return None
+        shown = self._ok(["show", "-s", "--format=%ct", "--end-of-options", base])
         return int(shown.decode("ascii").strip())
 
-    def merge_base_times(self, url: str, commits: Sequence[str]) -> dict[str, int]:
+    def merge_base_times(self, url: str, commits: Sequence[str]) -> dict[str, int | None]:
         """For each of ``commits`` of ``url``: the committer time of its merge-base with HEAD.
 
-        The commits are fetched into the checkout in one fetch, objects only
-        (no ref, no FETCH_HEAD).
+        None for a commit that shares no history with HEAD. The commits are
+        fetched into the checkout in one fetch, objects only (no ref, no
+        FETCH_HEAD).
         """
         wanted = list(dict.fromkeys(commits))
         if wanted:
             self._remote(fetch_objects_arguments(url, wanted))
         times = {c: self._merge_base_time(c) for c in wanted}
-        shown = ", ".join(f"{c[:12]} {t}" for c, t in times.items())
+        told = {c: "no shared history" if t is None else t for c, t in times.items()}
+        shown = ", ".join(f"{c[:12]} {t}" for c, t in told.items())
         self._log(f"merge-base times of HEAD with {url}: {shown or 'none asked'}")
         return times
