@@ -393,10 +393,11 @@ under `refs/heads/<BUILDKITE_BRANCH>`, also when that name is a tag's; the
 last writer wins. The plan step writes it too, for each step it finds made at
 its key, when git names the build's commit as the newest of its branch, or as
 its tag's: so a branch cut at, or a tag put on, built commits gets its latest
-files at its first build. A build started for a dependency writes none when
-its plan says that its own build would take a project below it at another
-commit (see [Snapshot dependencies](#snapshot-dependencies)); its variable
-`SNAPSHOT_BRANCH_BUILD` carries that answer to its promotes and its plan step.
+files at its first build. A build started for a dependency writes them only
+when its plan says so (see
+[Who writes a branch's latest files](#who-writes-a-branchs-latest-files)); its
+variable `SNAPSHOT_BRANCH_BUILD` carries that answer to its promotes and its
+plan step.
 
 ### What a build shows of its downloads
 
@@ -457,13 +458,9 @@ project each step downloads, and the step id of each step that uploads.
   a tag's, so a build taken from `refs/heads/master` runs as `master`.
 - The first build writes its branch's latest files. A build started for a
   dependency writes them when its **own build**, the one a person would start
-  on its branch at its commit, takes every project below it at the commit the
-  plan takes it at. The plan step plans that own build as it plans its own,
-  pins and all, from what git told it, asks git nothing more, and counts what
-  git did not tell it as no. The own build's release line is taken as its
-  branch when that is a release line; on the first build's branch, as the
-  first build's line when its repository has a branch of that name; else it
-  has none, and only its own branch counts.
+  on its branch at its commit, would take every project below it at the
+  commit the plan takes it at (see
+  [Who writes a branch's latest files](#who-writes-a-branchs-latest-files)).
 
 ### Two types of dependency
 
@@ -543,6 +540,24 @@ A pin wins over each of these. The first build itself is taken at the commit
 its checkout holds. A build at a tag reuses what any build made of the same
 commits, and its promotes write the latest files of the tag's name,
 `refs/heads/<tag>`.
+
+### Who writes a branch's latest files
+
+The first build writes its branch's latest files. For each build started for a
+dependency, the first build's plan step places the projects below that build
+as its own build would place them: by the rules above, from its ref, with the
+pins of its templates and of the projects below it, and without a pin that a
+project above it writes. For this it asks git nothing more than it asked to
+make the plan. The build writes its branch's latest files when every project
+below it is placed at the commit the plan takes it at. It writes none when one
+is placed at another commit, when its own build could not be planned, or when
+placing it would need an answer that git did not give the plan step.
+
+The own build's release line is its branch when that branch is a release line.
+On the first build's branch it is the first build's line, in the first build's
+repository and in each repository that has a branch of that line's name. In
+another repository, or on another branch, it has none, and a dependency
+without a pin is taken from its branch alone, never from `master` or `main`.
 
 ### What a repository changes to adopt
 
