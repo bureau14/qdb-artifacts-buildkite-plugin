@@ -44,8 +44,8 @@ imports read no document, so the step of leave runs without PyYAML.
 - ``edge``: what every gate step reads and changes (the store, the agent, the
   checkout, the clock, the log), and the reads they share through it.
 - ``failing``: how a gate step fails: its record, its annotation, its mode.
-- ``enter``: enter and resume, the decisions of the plan step in the
-  specification's order, over the edge and what only the plan step reaches
-  (git, Buildkite's API, the plugin's own commit).
+- ``enter``: enter and resume, the decisions of the plan step in their
+  numbered order, over the edge and what only the plan step reaches (git,
+  Buildkite's API, the plugin's own commit).
 - ``leave``: leave, which records the folders whose step did not pass.
 """

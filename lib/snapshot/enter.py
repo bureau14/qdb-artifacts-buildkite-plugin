@@ -12,8 +12,8 @@ generated the pipeline:
 
 What a build makes is a set of folders of its key, each a platform and a step
 id; a folder is made when its manifest says promoted. Each step is its
-decisions in the specification's order, under its numbers; the first decision
-that ends the step ends it. A decision is a function of what the plan step's
+decisions in order, under their numbers (``enter``); the first decision that
+ends the step ends it. A decision is a function of what the plan step's
 edge (``PlanEdge``) returned. A decision that fails the step raises a
 ``failing.Refusal``.
 """
@@ -172,7 +172,7 @@ def create_chain_key_json(job: Job, edge: Edge) -> Origin | None:
 
 
 # ---------------------------------------------------------------------------
-# Steps 1 to 5, of enter and of resume
+# Steps 1 to 4, of enter and of resume
 # ---------------------------------------------------------------------------
 
 
@@ -303,7 +303,7 @@ def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
 
 
 def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[Folder]:
-    """5. ``D``, the folders this pipeline promotes; a folder promoted twice fails, as the rule.
+    """4. ``D``, the folders this pipeline promotes; a folder promoted twice fails, as the rule.
 
     Two steps that promote one folder break a rule the plan step holds every
     pipeline to, so the record's reason is ``rule``.
@@ -315,7 +315,7 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
 
 
 def check_step_ids(job: Job, edge: Edge, generated: Generated, p: Plan, origin: Origin) -> None:
-    """5. Every step id this pipeline promotes is one a template of its commit writes, which
+    """4. Every step id this pipeline promotes is one a template of its commit writes, which
     the builds that depend on it read; and every dependency a download takes without naming
     a step has step ids. Else record ``rule``; fail."""
     broken = [
@@ -327,7 +327,7 @@ def check_step_ids(job: Job, edge: Edge, generated: Generated, p: Plan, origin: 
 
 
 def asked(job: Job, d: frozenset[Folder]) -> frozenset[Folder]:
-    """5. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
+    """4. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
     return read_needs(job.needs) if is_chain_node(job) else d
 
 
@@ -343,7 +343,7 @@ def refused_folders(n: frozenset[Folder], d: frozenset[Folder]) -> list[RefusedF
 def check_declared(
     job: Job, edge: Edge, n: frozenset[Folder], d: frozenset[Folder], origin: Origin
 ) -> None:
-    """5. A folder of ``N`` that is not in ``D``: record ``not_declared`` with the folders
+    """4. A folder of ``N`` that is not in ``D``: record ``not_declared`` with the folders
     refused; fail. Nothing compiles."""
     refused = refused_folders(n, d)
     if refused:
@@ -358,7 +358,7 @@ def check_declared(
 
 @dataclass(frozen=True)
 class Prepared:
-    """What steps 1 to 5 found: the pipeline, the plan and git's answer of step 3
+    """What steps 1 to 4 found: the pipeline, the plan and git's answer of step 3
     (``Placed``), the origin of the own records (which holds the own key), ``D`` and ``N``."""
 
     generated: Generated
@@ -370,7 +370,7 @@ class Prepared:
 
 
 # ---------------------------------------------------------------------------
-# Steps 6 and 7, of enter
+# Steps 5 and 6, of enter
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +387,7 @@ def newest_commit(job: Job, edge: PlanEdge, p: Plan, named: Mapping[str, str] | 
 def point_latest_files(
     job: Job, edge: PlanEdge, prepared: Prepared, made: Mapping[Folder, Manifest]
 ) -> None:
-    """6. Point the latest file of every step made at the build's key at it, under the name the
+    """5. Point the latest file of every step made at the build's key at it, under the name the
     build runs under, when git names the build's commit as its ref's: so a branch cut at, or a
     tag put on, built commits gets its latest files at its first build, and an older build
     that runs again does not move them back. A build under a ``snapshot/`` name writes none.
@@ -408,14 +408,14 @@ def point_latest_files(
 
 
 def is_reused(d: frozenset[Folder], n: frozenset[Folder], m: frozenset[Folder]) -> bool:
-    """6. ``D`` is not empty and no folder of ``N`` is in ``M``, the folders not made."""
+    """5. ``D`` is not empty and no folder of ``N`` is in ``M``, the folders not made."""
     return bool(d) and not (n & m)
 
 
 def reuse(
     job: Job, edge: Edge, p: Plan, made: Mapping[Folder, Manifest], n: frozenset[Folder]
 ) -> None:
-    """6. Mode ``reused``, and the builds that made the folders asked for on the build page."""
+    """5. Mode ``reused``, and the builds that made the folders asked for on the build page."""
     builds = {f: made[f].promoted.build for f in n}
     edge.agent.meta_data_set(MODE, REUSED)
     edge.agent.annotate(reused_annotation(p, job.project, builds), "success", STEP_CONTEXT)
@@ -423,7 +423,7 @@ def reuse(
 
 
 def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozenset[Folder]) -> None:
-    """7. Another build of ``K`` hard failed on every wanted folder after the root build of
+    """6. Another build of ``K`` hard failed on every wanted folder after the root build of
     this chain arrived at the gate: fail, compiling nothing.
 
     If it fails, it fails everywhere: the failure counts for every build of a
@@ -451,7 +451,7 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
 
 
 # ---------------------------------------------------------------------------
-# Steps 8 to 11
+# Steps 7 to 10
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +468,7 @@ def steps_of(p: Plan) -> dict[str, tuple[str, ...]]:
 def dependency_manifests(
     edge: Edge, p: Plan, needs: Mapping[str, frozenset[Folder]]
 ) -> dict[tuple[str, Folder], Manifest | None]:
-    """8. The manifest of each folder of each dependency at its key; None where none is."""
+    """7. The manifest of each folder of each dependency at its key; None where none is."""
     return {
         (project, f): found
         for project, folders in sorted(needs.items())
@@ -479,7 +479,7 @@ def dependency_manifests(
 def missing_folders(
     found: Mapping[tuple[str, Folder], Manifest | None],
 ) -> dict[str, tuple[Folder, ...]]:
-    """8. The folders of each dependency that are not made at its key, sorted."""
+    """7. The folders of each dependency that are not made at its key, sorted."""
     made = made_only(found)
     missing: dict[str, list[Folder]] = {}
     for project, f in sorted(found):
@@ -546,7 +546,7 @@ def failed_in_chain(
     missing: Mapping[str, tuple[Folder, ...]],
     origin: Origin,
 ) -> None:
-    """9. A dependency with a missing folder failed earlier in this chain: fail, triggering
+    """8. A dependency with a missing folder failed earlier in this chain: fail, triggering
     nothing.
 
     Its failure record of ``key(P)`` carries this plan. The own record names it
@@ -565,7 +565,7 @@ def trigger(
     needs: Mapping[str, frozenset[Folder]],
     missing: Mapping[str, tuple[Folder, ...]],
 ) -> None:
-    """10. One trigger step per dependency with a missing folder, and the resume step.
+    """9. One trigger step per dependency with a missing folder, and the resume step.
 
     Each trigger step hands down every folder this pipeline's entries take of
     its dependency. The resume step runs this step's command again.
@@ -584,7 +584,7 @@ def build_pipeline(
     key: str,
     made: Mapping[Folder, Manifest],
 ) -> None:
-    """11. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
+    """10. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
 
     ``snapshot-promotes`` names the step of each folder that is built: a
     replaced step promotes nothing, so leave asks for no outcome of it. The
@@ -614,7 +614,7 @@ def build_pipeline(
 
 
 def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
-    """Steps 1 to 5, the same in enter and resume but for how step 3 comes to the plan.
+    """Steps 1 to 4, the same in enter and resume but for how step 3 comes to the plan.
 
     Step 3 also checks that the plan plans this build at the commit it checked
     out, and creates ``key.json`` of its key before any record or upload.
@@ -681,24 +681,24 @@ def enter(job: Job, edge: PlanEdge) -> int:
        and annotates the build with it. A download that finds no latest file,
        and a plan that cannot be made, fail the build with their message.
        Then ``key.json`` of the own key.
-    5. ``D`` is what this pipeline promotes, a folder promoted twice failing;
+    4. ``D`` is what this pipeline promotes, a folder promoted twice failing;
        a step id no template of the commit writes, or a download without a
        step of a dependency that has no step ids: record ``rule``; fail.
        ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A folder of
        ``N`` not in ``D``: record ``not_declared`` with what it refuses; fail.
-    6. The latest files of the folders of ``D`` made at ``K`` name ``K``,
+    5. The latest files of the folders of ``D`` made at ``K`` name ``K``,
        when git names the build's commit as its ref's: its branch's newest,
        or its tag's. ``D`` is not empty and every folder of ``N`` is made at
        ``K``: mode reused; done.
-    7. Another build of ``K`` failed on the wanted folders after the chain's
+    6. Another build of ``K`` failed on the wanted folders after the chain's
        root arrived at the gate: record its failure as shared; fail.
-    8. For each direct snapshot dependency, the folders the kept steps take,
+    7. For each direct snapshot dependency, the folders the kept steps take,
        and which of them are not made at its key.
-    9. A dependency with a missing folder failed earlier in this chain:
+    8. A dependency with a missing folder failed earlier in this chain:
        record the cause; fail. Nothing is triggered.
-    10. Some are missing: upload a trigger step per such dependency and the
-        resume step; done.
-    11. Else mode built, and upload the rewritten pipeline; done.
+    9. Some are missing: upload a trigger step per such dependency and the
+       resume step; done.
+    10. Else mode built, and upload the rewritten pipeline; done.
     """
     return gated(job, edge, enter_decisions, STEP_CONTEXT, mark=True)
 
@@ -706,11 +706,11 @@ def enter(job: Job, edge: PlanEdge) -> int:
 def resume(job: Job, edge: PlanEdge) -> int:
     """After the triggered builds: build, or fail with the cause.
 
-    Steps 1 to 5 of enter, except that in step 3 a root, too, loads the plan:
+    Steps 1 to 4 of enter, except that in step 3 a root, too, loads the plan:
     the one its enter made. Then, for each dependency folder still missing,
     a failure record of its key that carries this plan is its cause, and
     without one the build of that dependency left no record. Resume never
-    triggers. With nothing missing it goes on at step 11.
+    triggers. With nothing missing it goes on at step 10.
     """
     return gated(job, edge, resume_decisions, STEP_CONTEXT, mark=True)
 

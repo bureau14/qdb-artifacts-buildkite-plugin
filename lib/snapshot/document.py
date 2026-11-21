@@ -421,7 +421,7 @@ def needed_folders(
     entry that names no step takes. A step that completion replaces
     (``replaced_steps``) downloads nothing, so it needs nothing; an entry it
     shares with a kept step is needed. This is what the plan step reads the
-    manifests of (step 8), and what a trigger step hands down as
+    manifests of (step 7), and what a trigger step hands down as
     ``SNAPSHOT_NEEDS``.
     """
     kept = copy.deepcopy(doc)
@@ -588,7 +588,7 @@ def resume_pipeline(
     plugin_commit: str,
     pipeline_path: str,
 ) -> dict:
-    """The document of step 10: a trigger step per dependency of ``needs``, and the resume step."""
+    """The document of step 9: a trigger step per dependency of ``needs``, and the resume step."""
     triggers = trigger_steps(plan, needs)
     keys = [t["key"] for t in triggers]
     return {"steps": [*triggers, resume_step(command, plugin_commit, pipeline_path, keys)]}

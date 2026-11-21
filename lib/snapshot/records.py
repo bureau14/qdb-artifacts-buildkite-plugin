@@ -11,11 +11,11 @@ decisions of section 7 over records the caller has read:
 - ``unpassed`` and ``leave_record``: the folders (platform and step id) whose
   step did not pass, whose manifests the leave step reads, and its record of
   those that are not made;
-- ``shared_failure`` and ``shared_record``: step 7, the failure of another
+- ``shared_failure`` and ``shared_record``: step 6, the failure of another
   build of the same key since the root build of this chain started;
-- ``chain_failure`` and ``caused_record``: step 9 and resume, a dependency
+- ``chain_failure`` and ``caused_record``: step 8 and resume, a dependency
   that failed earlier in this chain;
-- ``reason_record`` and ``refused_record``: steps 1, 2 and 5, a build that
+- ``reason_record`` and ``refused_record``: steps 1, 2 and 4, a build that
   failed before it built, and one asked for steps it does not make.
 
 A record never says whether a step is made: its manifest does. A record only
@@ -62,7 +62,7 @@ RULE = "rule"
 NOT_DECLARED = "not_declared"
 
 # The outcome of a step that failed the build; the only one another build
-# shares (step 7). ``buildkite-agent step get outcome`` gives it.
+# shares (step 6). ``buildkite-agent step get outcome`` gives it.
 HARD_FAILED = "hard_failed"
 PASSED = "passed"
 
@@ -281,7 +281,7 @@ def leave_record(
 
 
 # ---------------------------------------------------------------------------
-# Step 7: the failure of another build of the key since this chain began
+# Step 6: the failure of another build of the key since this chain began
 # ---------------------------------------------------------------------------
 
 
@@ -336,7 +336,7 @@ def shared_record(origin: Origin, source: Record, wanted: Iterable[Folder], now:
 
 
 # ---------------------------------------------------------------------------
-# Step 9 and resume: a dependency that failed in this chain
+# Step 8 and resume: a dependency that failed in this chain
 # ---------------------------------------------------------------------------
 
 
