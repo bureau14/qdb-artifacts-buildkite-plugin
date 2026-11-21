@@ -53,7 +53,7 @@ configuration:
       properties:
         variant:
           type: string
-          description: "The platform whose upload the promote makes official: this step's, or that of the step id step names (e.g linux-amd64-release)"
+          description: "The platform whose upload the promote makes official: this step's, or that of the step id step names (e.g. 'linux-amd64-release')"
         step:
           type: string
           pattern: "^[a-z][a-z0-9_]*$"
@@ -85,7 +85,7 @@ configuration:
                 type: string
                 description: "The platform to download"
               step:
-                description: "The step ids to download, one or a list. Without it: from another project, every step of the platform; from the build's own project and branch, nothing, so it must be written."
+                description: "The step ids to download, one or a list. Without it: of a planned dependency, every step id its templates promote; of a latest successful build, every step whose latest file names the newest key of the platform; from the build's own key it must be written, and the runner writes it."
                 oneOf:
                   - type: string
                   - type: array
@@ -99,13 +99,13 @@ configuration:
                 description: "Written by the plan step, never by a person: the key of each step the entry takes."
               latest:
                 type: boolean
-                description: "The download takes the latest successful build of the project, which is not planned"
+                description: "The download takes the latest successful build of another project, which is not planned: the plan step reads its keys from the latest files of git_ref, of no other branch in a build at a tag"
               git_ref:
                 type: string
-                description: "Git ref whose latest successful build to download (e.g. 'refs/heads/main'); required for another project's entry without keys"
+                description: "The ref of the download (e.g. 'refs/heads/main'): of a planned dependency the build's own ref, or a pin that places the project; else the branch whose latest successful build to take. Required in an entry of another project without keys"
               require_strict_ref_match:
                 type: boolean
-                description: "Disable branch fallback (default: false)"
+                description: "Take the latest successful build of git_ref alone, never of master or main (default: false)"
               output-dir:
                 type: string
                 description: "Download destination directory (default: '.')"
@@ -131,13 +131,13 @@ configuration:
         - projects
     plan:
       type: string
-      description: "Written by the runner (qdb_pipeline.run), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. After the command the plugin plans the build, then uploads that pipeline with the key of every step a download takes written into it, or the trigger steps of the dependencies that are built first."
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the plan step of a build with snapshot dependencies, and the path of the pipeline its command generated. After the command the plugin plans the build, then uploads that pipeline with the key of every step a download takes written into it, or the trigger steps of the dependencies that are built first."
     resume:
       type: string
-      description: "Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. It uploads that pipeline, or fails and names the dependency that failed."
+      description: "Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. It uploads that pipeline, or fails and names the dependency that failed."
     leave:
       type: boolean
-      description: "Written by the runner (qdb_pipeline.run), never by a person: the gate step that runs after every other step of a build with snapshot dependencies and records which steps did not pass."
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the last step of a build with snapshot dependencies, which runs after every other step and records which steps did not pass."
     debug:
       type: boolean
       description: "Enable bash debug tracing"
