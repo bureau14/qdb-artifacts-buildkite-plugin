@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..manifest import Build
 from ..options import command_exit_status, job_build
+from .buildkite import https_repository
 
 
 @dataclass(frozen=True)
@@ -19,9 +20,10 @@ class Job:
 
     ``pipeline`` is the path of the generated pipeline that the option of
     ``plan`` and ``resume`` names; ``repository`` Buildkite's repository URL of
-    the pipeline. ``plan_id`` is ``SNAPSHOT_PLAN`` (the root build's uuid) of a
-    chain node, None for a root; ``needs`` and ``rebuild`` are
-    ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD`` as given.
+    the pipeline, in the form the plan step asks git with every repository
+    (``buildkite.https_repository``). ``plan_id`` is ``SNAPSHOT_PLAN`` (the
+    root build's uuid) of a chain node, None for a root; ``needs`` and
+    ``rebuild`` are ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD`` as given.
     """
 
     pipeline: str | None
@@ -47,7 +49,7 @@ def job_of(pipeline: str | None) -> Job:
     return Job(
         pipeline=pipeline,
         project=os.environ["BUILDKITE_PIPELINE_SLUG"],
-        repository=os.environ["BUILDKITE_REPO"],
+        repository=https_repository(os.environ["BUILDKITE_REPO"]),
         build=job_build(),
         branch=os.environ.get("BUILDKITE_BRANCH", ""),
         command=os.environ.get("BUILDKITE_COMMAND"),
