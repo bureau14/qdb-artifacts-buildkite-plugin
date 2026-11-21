@@ -177,10 +177,10 @@ BRANCH_BUILD = "SNAPSHOT_BRANCH_BUILD"
 
 
 def is_branch_build(value):
-    """Whether a build whose ``SNAPSHOT_BRANCH_BUILD`` is ``value`` (None when unset) speaks
-    for its branch, and so writes its branch's latest files. Unset, as in a build a person or
-    a push starts, it does."""
-    return read_bool(value, default=True)
+    """Whether a build whose ``SNAPSHOT_BRANCH_BUILD`` is ``value`` (None when unset) writes its
+    branch's latest files: unless it is ``false``, the one text by which the trigger step says
+    no. Unset, as in a build a person or a push starts, it does."""
+    return value != "false"
 
 
 @dataclass(frozen=True)
