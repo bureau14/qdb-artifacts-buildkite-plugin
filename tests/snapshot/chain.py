@@ -83,7 +83,15 @@ REAL = {
 }
 GRAPHS = {
     "chain": {"app": ("lib",), "lib": ("core",), "core": ()},
-    "diamond": {"app": ("left", "right"), "left": ("core",), "right": ("core",), "core": ()},
+    # The left arm is a project longer, so that a pin right writes can move core, two levels
+    # below left, where left's own build does not see that pin.
+    "diamond": {
+        "app": ("left", "right"),
+        "left": ("mid",),
+        "mid": ("core",),
+        "right": ("core",),
+        "core": (),
+    },
     "wide": {"app": ("one", "three", "two"), "one": (), "three": (), "two": ()},
     "real": REAL,
 }
