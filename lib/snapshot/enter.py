@@ -256,8 +256,7 @@ class Placed:
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     """3, a root: ask git where its name is, read the keys of its latest successful downloads,
-    make the plan, write it, annotate the build with it and with the downloads of its own
-    project at another ref, which the key leaves out.
+    make the plan and write it.
 
     A download that finds no latest file, and a plan that cannot be made, fail
     the build with their message, before anything runs.
@@ -281,9 +280,15 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
     edge.agent.meta_data_set(PLAN, encode_plan(p))
+    return Placed(p, refs_of_name)
+
+
+def show_plan(job: Job, edge: PlanEdge, generated: Generated, p: Plan) -> None:
+    """3, enter: annotate the build with its part of the plan, and with each download of its
+    own project at another ref: its key leaves such a download out, and its job reads that
+    ref's latest build when it runs."""
     outside = outside_the_key(generated.doc, job.project, branch_ref(job.name))
     edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
-    return Placed(p, refs_of_name)
 
 
 # How step 3 comes to the plan: in enter (``entered_plan``) or in resume (``resumed_plan``).
@@ -291,10 +296,14 @@ PlanOf = Callable[[Job, PlanEdge, Generated], Placed]
 
 
 def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
-    """3, enter. A chain node loads the plan of its chain; a root makes it."""
+    """3, enter. A chain node loads the plan of its chain; a root makes it. Either shows it on
+    its page (``show_plan``)."""
     if is_chain_node(job):
-        return Placed(chain_plan(job, edge), None)
-    return root_plan(job, edge, generated)
+        placed = Placed(chain_plan(job, edge), None)
+    else:
+        placed = root_plan(job, edge, generated)
+    show_plan(job, edge, generated, placed.plan)
+    return placed
 
 
 def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
@@ -681,10 +690,11 @@ def enter(job: Job, edge: PlanEdge) -> int:
        when a chain node; fail.
     3. A chain node loads the plan and checks its commit; a root asks git
        once whether its name is a branch or a tag of its repository, reads
-       the keys of its latest successful downloads, makes the plan, writes it
-       and annotates the build with it. A download that finds no latest file,
-       and a plan that cannot be made, fail the build with their message.
-       Then ``key.json`` of the own key.
+       the keys of its latest successful downloads, makes the plan and writes
+       it. A download that finds no latest file, and a plan that cannot be
+       made, fail the build with their message. The build's page shows its
+       part of the plan and the downloads of its own project at another ref,
+       which its key leaves out. Then ``key.json`` of the own key.
     4. ``D`` is what this pipeline promotes, a folder promoted twice failing;
        a step id no template of the commit writes, or a download without a
        step of a dependency that has no step ids: record ``rule``; fail.

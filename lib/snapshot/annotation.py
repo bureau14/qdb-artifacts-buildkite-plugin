@@ -4,7 +4,7 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 
 - the plan (``plan_annotation``): the tree of a node, each node with its
   commit, ref, key and the branch it runs under, and each download of the
-  root's own project at another ref, which the key leaves out; for a build
+  node's own project at another ref, which its key leaves out; for a build
   that is reused, also the builds that made its steps (``reused_annotation``);
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;

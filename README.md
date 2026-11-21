@@ -624,11 +624,12 @@ dependency makes nothing, the download to remove. So does the first build.
 A key some of whose steps are made builds only what is missing: a job all of
 whose folders are made is replaced by one that names the build that made them.
 
-The page of the first build's plan step lists each project of the plan, with
-its commit, ref, key and the name its build runs under, and each download of
-the pipeline's own project at another branch, which its job reads when it
-runs: the key leaves such a download out, so a reused build does not take it
-again.
+The page of a plan step, of a first build or of a build started for a
+dependency alike, lists the build's project and each project below it in the
+plan, with its commit, ref, key and the name its build runs under, and each
+download of the pipeline's own project at another branch, which its job reads
+when it runs: the key leaves such a download out, so a reused build does not
+take it again.
 
 ### Variables a person can set
 

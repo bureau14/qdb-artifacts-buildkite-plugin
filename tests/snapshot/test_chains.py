@@ -539,33 +539,36 @@ def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_f
     assert all(len(world.builds_of(p)) == 1 for p in below(graph, root))
 
 
-# The branches at which every step of a root's pipeline also downloads its own project, as a
-# compatibility test does, besides the build's own branch; and the branch at which it pins a
-# dependency, a download of another project at another branch.
+# The branches at which every step of a node's pipeline also downloads its own project, as a
+# compatibility test does, besides the build's own branch; and the branch at which the root
+# pins a dependency, a download of another project at another branch.
 ELSEWHERE = ("3.14.x", "runner")
 PINNED_AT = "3.13.x"
 
 
 def test_the_plan_steps_page_names_each_download_of_its_own_project_at_another_branch(
-    worlds, graph_root, shape
+    worlds, graph_node, shape
 ):
-    """When every step of a root's pipeline also downloads its own project at other branches,
-    and the root pins a dependency to yet another branch, the page of the root's plan step
-    names each download of its own project at another branch, with the step, its platform and
-    that branch, on a line of its own, and no other download."""
-    graph, root = graph_root.graph, graph_root.node
+    """When every step of a node's pipeline also downloads its own project at other branches,
+    and the root pins a dependency to yet another branch, the page of the plan step of the
+    node's build, the first build or one started for a dependency alike, names each download
+    of its own project at another branch, with the step, its platform and that branch, on a
+    line of its own, and no other download."""
+    graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     world.build(root)
+    world.projects[node].elsewhere = tuple((step_ids[0], branch_ref(b)) for b in ELSEWHERE)
+    world.commit(node)
     pinned = graph[root][0]
     world.commit(pinned, branch=PINNED_AT)
     world.projects[root].pins[pinned] = branch_ref(PINNED_AT)
-    world.projects[root].elsewhere = tuple((step_ids[0], branch_ref(b)) for b in ELSEWHERE)
     world.commit(root)
 
     top = world.build(root)
 
-    _, page = world.agents.annotations[top.id]["snapshot-plan"]
+    shown = next(b for b in top.chain() if b.project == node)
+    _, page = world.agents.annotations[shown.id]["snapshot-plan"]
     expected = {(f"{s}-{v}", v, b) for v in matrix for s in step_ids for b in ELSEWHERE}
     naming = [line for line in page.splitlines() if any(k in line for k, _, _ in expected)]
     assert top.state == "passed"
