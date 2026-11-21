@@ -909,12 +909,13 @@ def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_w
     line each branch left.
 
     A build that leaves them has an own build that takes every project below it at the commit
-    the plan takes it at, but in the one case the README names among its limits: on the first
-    build's branch, in a repository that has a branch of the first build's release line, which
-    the plan then takes as its line, where its branch left another line. A build that leaves
-    none has an own build that takes a project below it at another commit, or that cannot be
-    planned, or that asks what git did not tell the plan: a ref of another repository, or a
-    release line other than the one the plan takes it to have."""
+    the plan takes it at, but in the one case the README names among its limits, where one
+    whose own build takes a project elsewhere leaves them too: on the first build's branch, in
+    a repository that has a branch of the first build's release line, which the plan then takes
+    as its line, where its branch left another line. A build that leaves none has an own build
+    that takes a project below it at another commit, or that cannot be planned, or that asks
+    what git did not tell the plan: a ref of another repository, or a release line other than
+    the one the plan takes it to have."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = SHAPES[shaped]
     world = worlds(graph, matrix, step_ids)
@@ -948,7 +949,7 @@ def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_w
     assert top.state == "passed"
     assert [b.branch for b in started] == [name_of(plan.projects[b.project].ref) for b in started]
     assert left == {p: latest_files(p) if p in writes else {} for p in last}
-    assert wrong <= accepted
+    assert wrong == {p for p in accepted if own[p].takes != SAME}
     assert late <= untold
 
 
