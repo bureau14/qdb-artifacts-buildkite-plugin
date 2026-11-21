@@ -686,7 +686,8 @@ class Untold(Exception):
 class Told:
     """What git told this plan: every ``ls-remote`` answer (``refs``, an absent ref None), the
     files of every commit it read (``files``), the first build's place, and its release line
-    (None: never looked up)."""
+    as ``known_line`` gives it (None: not known to the settled tree, also when an earlier pass
+    of the walk looked it up)."""
 
     refs: Mapping[tuple[str, str], str | None]
     files: Mapping[tuple[str, str], Mapping[str, bytes]]
@@ -695,9 +696,10 @@ class Told:
 
 
 def known_line(project: str, tree: Mapping[str, Member], src: Sources) -> str | None:
-    """The release line of the first build, ``project``, when this plan has it: a first build
-    on a release line has its branch, with no question to git; one on another branch looked
-    its line up to place a project without a pin, and ``src.line`` keeps it. Else None."""
+    """The release line of the first build, ``project``, when its settled tree has it: a first
+    build on a release line has its branch, with no question to git; one on another branch
+    has it when the tree holds a project placed without a pin, for which the walk looked the
+    line up, and ``src.line`` keeps it. Else None."""
     branch = branch_of(tree[project].place.ref)
     if branch is None:
         return None
