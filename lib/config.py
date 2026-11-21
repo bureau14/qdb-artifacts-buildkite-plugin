@@ -50,9 +50,7 @@ def _ssm_get_optional(ssm, name, with_decryption=True):
         if code == "ParameterNotFound":
             return None
         msg = exc.response.get("Error", {}).get("Message", str(exc))
-        raise ArtifactsError(
-            f"failed to read SSM parameter {name}: {code} \N{EM DASH} {msg}"
-        ) from exc
+        raise ArtifactsError(f"failed to read SSM parameter {name}: {code} -- {msg}") from exc
 
 
 # Prefixes that indicate a placeholder / unconfigured value rather than a real one.
@@ -63,7 +61,7 @@ def _check_placeholder(value, label):
     """Raise if value looks like a placeholder that was never replaced with a real one."""
     if value and any(value.startswith(p) for p in _PLACEHOLDER_PREFIXES):
         raise ArtifactsError(
-            f"{label} contains placeholder value {value!r} \N{EM DASH} "
+            f"{label} contains placeholder value {value!r} -- "
             f"replace it with the real credential in Terraform tfvars or SSM"
         )
 
