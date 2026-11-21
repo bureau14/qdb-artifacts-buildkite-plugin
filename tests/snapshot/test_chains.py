@@ -14,6 +14,7 @@ platform.
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -476,20 +477,28 @@ def test_snapshot_rebuild_builds_the_root_again_and_keeps_what_was_made(worlds, 
     assert kept.items() <= world.store.objects.items()
 
 
+def canonical(document) -> bytes:
+    """``document`` as canonical JSON: members sorted, no white space, UTF-8."""
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
 def test_key_json_read_down_from_any_key_gives_every_commit_of_its_tree(worlds, graph_root):
     """After a root's first build, the key.json of the key the plan names for any project of
     its tree, read down through the keys it names, gives the commit of every project of that
-    project's tree; every key starts with its commit."""
+    project's tree; every key is its commit, a dash and the first 32 hex digits of the SHA-256
+    of its key.json, which is canonical JSON with its deps sorted."""
     graph, root = graph_root.graph, graph_root.node
     world = worlds(graph)
 
     top = world.build(root)
 
     plan = world.plan(top)
+    stored = {}
 
     def read_down(project: str, key: str) -> dict[str, str]:
         """The commit of ``project`` and of every project below it, read from key.json down."""
-        found = json.loads(world.store.objects[layout.key_json("", project, key)])
+        stored[key] = world.store.objects[layout.key_json("", project, key)]
+        found = json.loads(stored[key])
         commits = {project: found["commit"]}
         for d, k in found["deps"]:
             commits.update(read_down(d, k))
@@ -498,8 +507,12 @@ def test_key_json_read_down_from_any_key_gives_every_commit_of_its_tree(worlds, 
     assert top.state == "passed"
     for p in tree(graph, root):
         key = plan.projects[p].key
-        assert key.startswith(plan.projects[p].commit + "-")
         assert read_down(p, key) == {q: plan.projects[q].commit for q in tree(graph, p)}
+    for key, body in stored.items():
+        found = json.loads(body)
+        assert key == f"{found['commit']}-{hashlib.sha256(body).hexdigest()[:32]}"
+        assert body == canonical(found)
+        assert found["deps"] == sorted(found["deps"])
 
 
 RELEASE_LINES = ("master", "3.14.x")

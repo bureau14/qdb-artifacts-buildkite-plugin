@@ -13,10 +13,11 @@ A build starts with the runner's gate. The gate steps run the library's own
 decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
 over its ``Edge``. A trigger step starts the build it asks for, with its branch,
 commit and environment, and plays it to its end. A command step is a simulated
-job of the plugin, through the library's own store functions: it finds the steps
-each download takes (``download.resolved_steps``), compiles (or fails, when the test
-broke that step), captures its files (``upload.capture_step``) and promotes after a
-passed command (``promote.promote_folder``).
+job of the plugin, through the library's own functions: it reads its download entries
+(``options.download_entry``), finds the steps each takes (``download.resolved_steps``),
+compiles (or fails, when the test broke that step), captures its files
+(``upload.capture_step``) and promotes after a passed command
+(``promote.promote_folder``), unless it found the folder promoted.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from lib.forms import iso_utc
 from lib.key import KeyJson, create_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
+from lib.options import OwnKey, download_entry
 from lib.promote import promote_folder
 from lib.snapshot.buildkite import PipelineFacts
 from lib.snapshot.enter import PlanEdge, enter, resume
@@ -303,25 +305,23 @@ def dependencies(step: dict) -> list[tuple[str, bool]]:
     ]
 
 
-def entry_of(e: dict, build: Build, key: str) -> Entry:
-    """A download entry as a job of ``build``, whose key is ``key``, reads it from the agent."""
-    project = e.get("PROJECT_ID") or build.project
-    ref = e.get("GIT_REF")
-    steps = e.get("STEP") or ()
-    own = project == build.project and ref in (None, "refs/heads/" + build.branch)
-    return Entry(
-        project=project,
-        variant=e["VARIANT"],
-        files=tuple(e["FILES"]),
-        exclude=(),
-        output_dir=".",
-        extract=False,
-        keys={s.lower(): k for s, k in e.get("KEYS", {}).items()},
-        steps=(steps,) if isinstance(steps, str) else tuple(steps),
-        git_ref=ref,
-        strict=bool(e.get("REQUIRE_STRICT_REF_MATCH")),
-        own_key=key if own else None,
-    )
+def entry_of(n: int, e: dict, build: Build, own: OwnKey) -> Entry:
+    """The ``n``-th download entry as a job of ``build``, whose key ``own`` is, reads it: the
+    options the agent hands it, checked and completed by the plugin."""
+    steps = e.get("STEP") or []
+    handed = {
+        "variant": e["VARIANT"],
+        "git_ref": e.get("GIT_REF"),
+        "require_strict_ref_match": bool(e.get("REQUIRE_STRICT_REF_MATCH")),
+        "project_id": e.get("PROJECT_ID"),
+        "step": [steps] if isinstance(steps, str) else list(steps),
+        "keys": {s.lower(): k for s, k in e.get("KEYS", {}).items()},
+        "output_dir": ".",
+        "extract": False,
+        "files": e["FILES"],
+        "exclude": [],
+    }
+    return download_entry(n, handed, build.project, "refs/heads/" + build.branch, lambda: own)
 
 
 def made_by(m: Manifest) -> str:
@@ -517,43 +517,45 @@ class World:
             return "passed"
         return "soft_failed" if step.get("soft_fail") else "hard_failed"
 
-    def own_key(self, build: Build, options: dict) -> str:
+    def own_key(self, build: Build, options: dict) -> OwnKey:
         """The build's key: the plan step's; else, as a job computes it, a key of the build's
-        own, whose key.json it creates."""
+        own, whose key.json its upload creates."""
         if options.get("KEY"):
-            return options["KEY"]
+            return OwnKey(options["KEY"], None)
         stands_for = KeyJson(build.project, build.commit, (), build.id)
-        key = key_of(stands_for)
-        create_key_json(self.store, "", key, stands_for)
-        return key
+        return OwnKey(key_of(stands_for), stands_for)
 
     def job(self, build: Build, options: dict | None) -> str:
         """A job of the plugin: download, compile, capture its files, then promote after a
-        passed command."""
+        passed command, unless the folder was promoted already, which makes the upload
+        empty."""
         if options is None:  # a step completion put in place of one whose folders are made
             return "passed"
-        key = self.own_key(build, options)
-        for e in options.get("DOWNLOAD", {}).get("PROJECTS", []):
-            found = entry_of(e, build, key)
+        own = self.own_key(build, options)
+        for n, e in enumerate(options.get("DOWNLOAD", {}).get("PROJECTS", []), start=1):
+            found = entry_of(n, e, build, own)
             for s in resolved_steps(self.store, "", found, f"{build.project} {found.variant}"):
                 made = made_by(s.manifest)
                 self.downloads.append(Download(build, s.project, s.folder, s.key, made))
         variant = (options.get("UPLOAD") or options["PROMOTE"])["VARIANT"]
         folder = Folder(variant, options["STEP"])
-        location = layout.step_folder("", build.project, key, folder)
+        location = layout.step_folder("", build.project, own.key, folder)
         name = f"out/{variant}.bin"
 
         def write_files() -> None:
+            if own.stands_for is not None:
+                create_key_json(self.store, "", own.key, own.stands_for)
             self.store.put(f"{location}/{name}", build.id.encode(), "application/octet-stream")
 
         uploaded = captured([(name, len(build.id))], Uploaded(build.branch, build.info))
-        capture_step(self.store, location, write_files, uploaded)
+        held = capture_step(self.store, location, write_files, uploaded)
         if (build.project, folder) in self.broken:
             return "hard_failed"
         self.compiled.append(Compiled(build, folder))
-        # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
-        promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
-        promote_folder(self.store, "", build.project, key, folder, promotion)
+        if held is None:
+            # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
+            promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
+            promote_folder(self.store, "", build.project, own.key, folder, promotion)
         return "passed"
 
     # -- what a test reads -------------------------------------------------

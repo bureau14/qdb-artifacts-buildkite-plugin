@@ -20,6 +20,7 @@ import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import yaml
@@ -209,7 +210,7 @@ PAYLOADS = [
 # Builds of widget, numbered in the order they ran; the build under test is SUBJECT.
 EARLIER, NEWER, SUBJECT, LATER = 1, 2, 3, 4
 NEXT = "refs/heads/next"
-NEW_BRANCH = "refs/heads/new"  # a branch that has no build yet
+NEW_BRANCH = "refs/heads/new"  # a branch whose one build made no step
 STEPS = ("build", "notes")
 
 
@@ -235,16 +236,27 @@ def built(payload: Payload, number: int, ref: str, variant: str, promoted: bool)
     }
 
 
+def promotes_lost(payload: Payload, number: int, ref: str, variant: str) -> dict:
+    """The objects of both steps of widget's build ``number`` of ``variant`` whose latest files
+    of ``ref`` name its key while its manifests say captured: a promote that a late upload
+    overwrote."""
+    key = made_up_key("widget", number, ref).encode()
+    latest = {layout.latest_file("", "widget", ref, Folder(variant, s)): key for s in STEPS}
+    return {**built(payload, number, ref, variant, promoted=False), **latest}
+
+
 def history(payload: Payload, ref: str) -> dict:
     """The builds of widget before the build under test: on its ref and on master, for linux
-    and macos, an earlier build that was promoted and a newer one that was not."""
-    return {
+    and macos, an earlier build that was promoted and a newer one that was not; on a new
+    branch, a build of macos whose promotes were lost."""
+    made = {
         k: body
         for r in dict.fromkeys((ref, MASTER))
         for v in ("linux", "macos")
         for number, promoted in ((EARLIER, True), (NEWER, False))
         for k, body in built(payload, number, r, v, promoted).items()
     }
+    return {**made, **promotes_lost(payload, NEWER, NEW_BRANCH, "macos")}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -384,8 +396,8 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     step whose entry names steps of a build (its own build's, by their keys, or the latest
     successful of a ref, by name, as a list, or without a step) gets exactly the files of
     those steps at the keys they name, at the paths the options name, and nothing else there;
-    an entry of a branch without builds gets every step of master's newest key; the uploads
-    annotate their build unless told not to."""
+    an entry of a branch whose latest files name a key at which no step is promoted gets every
+    step of master's newest key; the uploads annotate their build unless told not to."""
     store.put_all(history(payload, ref))
     maker = jobs("widget", SUBJECT, ref)
     for s in STEPS:
@@ -445,66 +457,111 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     assert bool(annotations) == transfer.annotates
 
 
-# One job of a step at a key: its build, whether its command passed, whether it has files to
-# upload, and whether the step promotes.
-Attempt = tuple[int, int, bool, bool]
+OTHER_KEY = "6" * 40 + "-" + "6" * 32
 
-# Orders of jobs of one step of one platform at one key: a job retried after it failed or
-# passed, another build of the key, a job without files, a step that only uploads.
+
+class Attempt(NamedTuple):
+    """One job of the step: its build, its command's exit status, whether it has files to
+    upload, whether the step promotes, whether it uploads, and the key of its build."""
+
+    build: int
+    status: int
+    has_files: bool
+    promotes: bool
+    uploads: bool = True
+    key: str = PLANNED_KEY
+
+
+# Orders of jobs of one step of one platform: a job retried after it failed or passed, another
+# build of the key, a job without files, a step that only uploads, and a step that only
+# promotes, after a build of another key moved the branch's latest file.
 ORDERS = {
-    "one-passes": [(1, 0, True, True)],
-    "retried-after-a-failure": [(1, 1, True, True), (1, 0, True, True)],
-    "retried-after-it-passed": [(1, 0, True, True), (1, 0, True, True)],
-    "another-build-after": [(1, 0, True, True), (2, 0, True, True)],
-    "no-files-then-a-failure": [(1, 0, False, True), (2, 1, True, True)],
-    "uploads-only-then-promotes": [(1, 0, True, False), (2, 1, False, True), (3, 0, True, True)],
+    "one-passes": [Attempt(1, 0, True, True)],
+    "retried-after-a-failure": [Attempt(1, 1, True, True), Attempt(1, 0, True, True)],
+    "retried-after-it-passed": [Attempt(1, 0, True, True), Attempt(1, 0, True, True)],
+    "another-build-after": [Attempt(1, 0, True, True), Attempt(2, 0, True, True)],
+    "no-files-then-a-failure": [Attempt(1, 0, False, True), Attempt(2, 1, True, True)],
+    "uploads-only-then-promotes": [
+        Attempt(1, 0, True, False),
+        Attempt(2, 1, False, True),
+        Attempt(3, 0, True, True),
+    ],
+    "promotes-only-after-another-key": [
+        Attempt(1, 0, True, True),
+        Attempt(2, 0, True, True, key=OTHER_KEY),
+        Attempt(3, 0, False, True, uploads=False),
+    ],
 }
 
 
-def first_promoter(order: list[Attempt]) -> int | None:
-    """The position of the job that promotes the folder: the first whose step promotes, whose
-    command passed, and that uploaded files."""
-    return next((i for i, (_, s, f, p) in enumerate(order) if p and s == 0 and f), None)
+def first_promoter(attempts: list[Attempt], key: str) -> int | None:
+    """The position of the job that promotes the folder at ``key``: the first there whose step
+    promotes, whose command passed, and that uploaded files or uploads nothing."""
+    return next(
+        (
+            i
+            for i, a in enumerate(attempts)
+            if a.key == key and a.promotes and a.status == 0 and (a.has_files or not a.uploads)
+        ),
+        None,
+    )
+
+
+def last_promoted_key(attempts: list[Attempt]) -> str | None:
+    """The key the branch's latest file names: that of the folder promoted last."""
+    promoted = {k: first_promoter(attempts, k) for k in {a.key for a in attempts}}
+    found = sorted((i, k) for k, i in promoted.items() if i is not None)
+    return found[-1][1] if found else None
+
+
+def step_options(a: Attempt) -> dict:
+    """The options of the step a job of ``a`` runs: it uploads, promotes, or both."""
+    if not a.uploads:
+        return {"step": "build", "promote": {"variant": "linux"}}
+    return upload_and_promote(promotes=a.promotes, files="out/*", allow_empty=True)
 
 
 @pytest.mark.parametrize("order, backend", paired(sorted(ORDERS), BACKENDS), ids=case_id)
 def test_the_first_promote_wins(jobs, store, order):
-    """Jobs of one step at one key upload their files whatever their command did, and promote
-    only after a passed command and an upload that was not empty: the folder's manifest names
+    """Jobs of one step upload their files whatever their command did, and promote only after
+    a passed command and an upload that was not empty: the folder's manifest at a key names
     the first job that promoted it, with that job's files, and nothing is uploaded into it
-    after; without a promote it names the last job that uploaded files, captured; the branch's
-    latest file names the key exactly when a job promoted."""
+    after; without a promote it names the last job that uploaded files, captured. The branch's
+    latest file names the key of the folder promoted last: a promote that finds its folder
+    promoted leaves it, and the latest file, as they were."""
     attempts = ORDERS[order]
-    for i, (number, status, has_files, promotes) in enumerate(attempts):
-        job = jobs("widget", number)
-        if has_files:
-            job.write({"out/a.bin": f"attempt {i} of build {number}".encode()})
-        options = upload_and_promote(promotes=promotes, files="out/*", allow_empty=True)
+    for i, a in enumerate(attempts):
+        job = jobs("widget", a.build)
+        if a.has_files:
+            job.write({"out/a.bin": f"attempt {i} of build {a.build}".encode()})
         outcome = (
-            job.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(status))
-            .with_plugin({"key": PLANNED_KEY, **options})
+            job.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(a.status))
+            .with_plugin({"key": a.key, **step_options(a)})
             .run("post-command")
         )
         assert outcome.code == 0, outcome.output
 
     folder = layout.step_folder("", "widget", PLANNED_KEY, Folder("linux", "build"))
     stored = store.get(layout.manifest(folder))
-    winner = first_promoter(attempts)
-    uploaders = [i for i, (_, _, has_files, _) in enumerate(attempts) if has_files]
+    winner = first_promoter(attempts, PLANNED_KEY)
+    uploaders = [
+        i for i, a in enumerate(attempts) if a.key == PLANNED_KEY and a.uploads and a.has_files
+    ]
     holder = winner if winner is not None else (uploaders[-1] if uploaders else None)
     latest = store.get(layout.latest_file("", "widget", MASTER, Folder("linux", "build")))
+    named = last_promoted_key(attempts)
+    assert latest == (None if named is None else named.encode())
     if holder is None:
         assert stored is None
         return
     m = decode_manifest(stored)
-    number = attempts[holder][0]
+    number = attempts[holder].build
     assert (m.promoted.build.number if m.promoted else None) == (
         number if winner is not None else None
     )
     assert m.uploaded.build.number == number
     assert [f.path for f in m.files] == ["out/a.bin"]
     assert store.get(f"{folder}/out/a.bin") == f"attempt {holder} of build {number}".encode()
-    assert latest == (PLANNED_KEY.encode() if winner is not None else None)
 
 
 @pytest.mark.parametrize(
