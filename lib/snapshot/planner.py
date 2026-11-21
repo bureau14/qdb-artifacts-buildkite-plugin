@@ -707,15 +707,18 @@ def known_line(project: str, tree: Mapping[str, Member], src: Sources) -> str | 
 
 def own_line(at: Place, told: Told, first_ref: FirstRef) -> str | None:
     """The release line of a first build at ``at``, as far as this plan knows it: its branch
-    when that is a line; on the first build's branch, the first build's line when this plan
-    knows that its repository has a branch of that name, a branch of one name being taken to
-    leave one line in every repository that has it; else None, not known, and only its own
-    branch counts. At a tag no line is needed."""
+    when that is a line; on the first build's branch, the first build's line in the first
+    build's repository, whose branches gave that line, and in another repository when this
+    plan knows that it has a branch of that name, a branch of one name being taken to leave
+    one line in every repository that has it; else None, not known, and only its own branch
+    counts. At a tag no line is needed."""
     branch = branch_of(at.ref)
     if branch is None or is_release_line(branch):
         return branch
     if at.ref != told.first.ref or told.line is None:
         return None
+    if at.repository == told.first.repository:
+        return told.line
     try:
         return told.line if first_ref(at.repository, [branch_ref(told.line)]) else None
     except Untold:
