@@ -684,13 +684,11 @@ class Untold(Exception):
 
 @dataclass(frozen=True)
 class Told:
-    """What git told this plan: every ``ls-remote`` answer (``refs``, an absent ref None), the
-    files of every commit it read (``files``), the first build's place, and its release line
-    as ``known_line`` gives it (None: not known to the settled tree, also when an earlier pass
-    of the walk looked it up)."""
+    """What git told this plan: the walk's ``memory`` of git's answers and of the files read,
+    the first build's place, and its release line as ``known_line`` gives it (None: not known
+    to the settled tree, also when an earlier pass of the walk looked it up)."""
 
-    refs: Mapping[tuple[str, str], str | None]
-    files: Mapping[tuple[str, str], Mapping[str, bytes]]
+    memory: Memory
     first: Place
     line: str | None
 
@@ -735,11 +733,13 @@ def told_sources(at: Place, told: Told, src: Sources) -> Sources:
         raise Untold(f"{', '.join(refs)} of {url}")
 
     def files(url: str, commit: str) -> Mapping[str, bytes]:
-        if (url, commit) not in told.files:
+        if (url, commit) not in told.memory.files:
             raise Untold(f"{commit} of {url}")
-        return told.files[(url, commit)]
+        return told.memory.files[(url, commit)]
 
-    first_ref = first_ref_asked_once(untold, dict(told.refs))
+    # ``untold`` raises before an answer could join the memory, so the plan's stays as git
+    # told it.
+    first_ref = first_ref_asked_once(untold, told.memory.refs)
     line = functools.cache(lambda: own_line(at, told, first_ref))
     return Sources(src.pipeline, first_ref, files, line)
 
@@ -792,7 +792,7 @@ def make_plan(
     tree = tree_of(settled_walk(root.project, first, src))
     order = bottom_up(tree, root.project)
     below = compute_below(tree, order)
-    told = Told(memory.refs, memory.files, first.place, known_line(root.project, tree, src))
+    told = Told(memory, first.place, known_line(root.project, tree, src))
     writes = {p: p == root.project or writes_latest_file(p, tree, below, told, src) for p in order}
     unkeyed = Plan(
         id=root.build_id,
