@@ -255,8 +255,9 @@ def test_a_platform_nobody_downloads_is_built_once_a_consumer_starts_to(
 
 def test_a_key_missing_a_step_builds_only_that_step_of_that_platform(worlds, graph_node, shape):
     """After a chain in which one step of one platform of a node failed, the next chain
-    compiles that step of that platform alone of that node, and every download takes the
-    build that made its folder."""
+    compiles that step of that platform alone of that node, and runs no other job of it, also
+    none of a step that only promotes; every download takes the build that made its
+    folder."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = MATRICES["three"], shape[1]
     world = worlds(graph, matrix, step_ids)
@@ -264,13 +265,14 @@ def test_a_key_missing_a_step_builds_only_that_step_of_that_platform(worlds, gra
     world.broken.add((node, failed))
     world.build(root)
     world.broken.clear()
-    done, fetched = len(world.compiled), len(world.downloads)
+    done, ran, fetched = len(world.compiled), len(world.ran), len(world.downloads)
 
     again = world.build(root)
 
     made = makers(world, again, tree(graph, root), folders(matrix, step_ids))
     assert again.state == "passed"
     assert {f for p, f in compiled_since(world, done) if p == node} == {failed}
+    assert {c.folder for c in world.ran[ran:] if c.build.project == node} == {failed}
     assert all(
         d.made_by == made[(d.project, d.folder)].promoted.build.id
         for d in world.downloads[fetched:]

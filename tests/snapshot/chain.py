@@ -380,6 +380,7 @@ class World:
         self.broken: set[tuple[str, Folder]] = set()
         self.builds: list[Build] = []
         self.compiled: list[Compiled] = []
+        self.ran: list[Compiled] = []  # each folder a job makes, also one that only promotes
         self.downloads: list[Download] = []
         self.now = T0
         self.ids = itertools.count(1)
@@ -594,6 +595,7 @@ class World:
             return "hard_failed"
         if uploads is not None:
             self.compiled.append(Compiled(build, uploads))
+        self.ran.extend(Compiled(build, f) for f in (uploads, promotes) if f is not None)
         if promotes is not None and held is None:
             # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
             promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
