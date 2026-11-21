@@ -681,12 +681,14 @@ def make_plan(
     writers = pin_writers(tree)
     as_itself = {p: runs_as_itself(p, tree, below, writers, first.place) for p in order}
     branches = {p: runs_under(p, as_itself[p], tree, root.branch) for p in order}
-    read = {root.project: latest}
     unkeyed = Plan(
         id=root.build_id,
         context=root.branch,
         rebuild=root.rebuild,
         first=First(root.project, root.build_number),
-        projects={p: planned_node(tree[p], branches[p], read.get(p, ())) for p in order},
+        projects={
+            p: planned_node(tree[p], branches[p], latest if p == root.project else ())
+            for p in order
+        },
     )
     return keyed(unkeyed)

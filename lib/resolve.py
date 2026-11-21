@@ -18,7 +18,8 @@ patterns and no exclude (``selected``): a download lists nothing. The plugin's
 download and a caller of the library resolve through these same functions,
 and fetch the objects each its own way; the plan step of a first build reads
 its latest successful downloads through the walk's own finders
-(``first_named``, ``first_newest``), and says itself what it did not find.
+(``named_on_first_ref``, ``newest_on_first_ref``), and says itself what it did
+not find.
 """
 
 from __future__ import annotations
@@ -150,7 +151,7 @@ def newest_steps_at(
     return sorted((s for s in found if s is not None), key=lambda s: s.folder.step)
 
 
-def first_named(
+def named_on_first_ref(
     store, prefix: str, project: str, refs: Sequence[str], folder: Folder
 ) -> ResolvedStep | None:
     """The step ``folder`` of the latest successful build of ``project`` that made it, on the
@@ -159,7 +160,7 @@ def first_named(
     return next((s for s in found if s is not None), None)
 
 
-def first_newest(
+def newest_on_first_ref(
     store, prefix: str, project: str, refs: Sequence[str], platform: str
 ) -> list[ResolvedStep]:
     """Every made step of the newest key of ``platform``, on the first of ``refs`` that has
@@ -174,7 +175,7 @@ def walk_named(
     """The step ``folder`` of the latest successful build of ``project`` that made it,
     on the first branch of the walk that has one."""
     refs = walked_refs(ref, strict)
-    found = first_named(store, prefix, project, refs, folder)
+    found = named_on_first_ref(store, prefix, project, refs, folder)
     if found is not None:
         return found
     tried = ", ".join(layout.latest_file(prefix, project, r, folder) for r in refs)
@@ -190,7 +191,7 @@ def walk_newest(
     """Every made step of the newest key of ``platform``, on the first branch of the walk
     that has one."""
     refs = walked_refs(ref, strict)
-    found = first_newest(store, prefix, project, refs, platform)
+    found = newest_on_first_ref(store, prefix, project, refs, platform)
     if found:
         return found
     tried = ", ".join(layout.latest_files(prefix, project, r, platform) for r in refs)
