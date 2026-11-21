@@ -210,10 +210,9 @@ def download_requested():
     return bool(os.environ.get(f"{PREFIX}DOWNLOAD_PROJECTS_0_VARIANT"))
 
 
-def step_id(platform, act):
-    """The step id of a step that ``act`` (uploads or promotes) ``platform``: the top-level
-    option ``step``. A missing or malformed one fails the job."""
-    value = os.environ.get(f"{PREFIX}STEP")
+def checked_step_id(value, platform, act):
+    """``value`` as the step id of a step that ``act`` (uploads or promotes) ``platform``. A
+    missing or malformed one fails the job."""
     if not value:
         raise ArtifactsError(
             f"This step {act} {platform}, and its configuration of {PLUGIN} names no step id. "
@@ -229,12 +228,24 @@ def step_id(platform, act):
     return value
 
 
+def upload_step_id(platform):
+    """The step id a step uploads ``platform`` as: the top-level option ``step``."""
+    return checked_step_id(os.environ.get(f"{PREFIX}STEP"), platform, "uploads")
+
+
+def promote_step_id(platform):
+    """The step id a step promotes of ``platform``: the ``step`` of its promote block, which
+    names what another step of the pipeline uploaded, else the top-level option ``step``."""
+    value = os.environ.get(f"{PREFIX}PROMOTE_STEP") or os.environ.get(f"{PREFIX}STEP")
+    return checked_step_id(value, platform, "promotes")
+
+
 def check_step_id():
-    """The step id of a step that uploads or promotes, checked before its command."""
+    """The step ids of a step that uploads or promotes, checked before its command."""
     if upload_requested():
-        step_id(os.environ.get(f"{PREFIX}UPLOAD_VARIANT"), "uploads")
-    elif promote_requested():
-        step_id(os.environ.get(f"{PREFIX}PROMOTE_VARIANT"), "promotes")
+        upload_step_id(os.environ.get(f"{PREFIX}UPLOAD_VARIANT"))
+    if promote_requested():
+        promote_step_id(os.environ.get(f"{PREFIX}PROMOTE_VARIANT"))
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +266,7 @@ def upload_arguments():
     return {
         "project": job_pipeline(),
         "key_of_build": own_key,
-        "folder": Folder(variant, step_id(variant, "uploads")),
+        "folder": Folder(variant, upload_step_id(variant)),
         "uploaded": Uploaded(job_branch(), job_build()),
         "patterns": upload_config["files"],
         "parallel": int(upload_config.get("parallel") or "4"),
@@ -273,7 +284,7 @@ def promote_arguments():
     return {
         "project": job_pipeline(),
         "key": own_key().key,
-        "folder": Folder(variant, step_id(variant, "promotes")),
+        "folder": Folder(variant, promote_step_id(variant)),
         "branch": job_branch(),
         "build": job_build(),
     }

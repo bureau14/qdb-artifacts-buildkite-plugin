@@ -13,7 +13,8 @@ build's own uploads, promotes and downloads use.
 
 What a step makes is a folder of the key: a platform (the option ``variant``
 of an upload or promote block) and the step id the configuration names at its
-top (``step``).
+top (``step``), or that a promote block names, to promote what another step of
+the pipeline uploaded.
 
 Values in, values out: nothing here talks to the bucket, to git, to Buildkite
 or to the agent. The caller hands in the facts as plain values (``Rewrite``,
@@ -48,11 +49,11 @@ from .configuration import (
     STRICT_REF_MATCH,
     UPLOAD,
     VARIANT,
+    block_step,
     download_entries,
     entry_steps,
     is_plugin_key,
     mappings,
-    named_step,
     option_value,
     plugin_block,
     plugin_configurations,
@@ -180,21 +181,22 @@ def taken_folders(entry: Mapping[Any, Any], steps: Sequence[str]) -> frozenset[F
 
 def own_folders(step: Any, block: str) -> list[Folder]:
     """The folders the ``upload`` or ``promote`` blocks of ``step`` name: the block's platform
-    and the step id of its configuration, both named; in order. A block makes a folder of the
-    pipeline's own project, as the job reads it."""
+    and the step id it makes (``block_step``), both named; in order. A block makes a folder of
+    the pipeline's own project, as the job reads it."""
     found = []
     for config in plugin_configurations(step):
         b = plugin_block(config, block)
         if b is None:
             continue
-        platform, step_id = named_variant(b), named_step(config)
+        platform, step_id = named_variant(b), block_step(config, block)
         if platform is not None and step_id is not None:
             found.append(Folder(platform, step_id))
     return found
 
 
 def made_folders(step: Any) -> frozenset[Folder]:
-    """What ``step`` makes: every folder its upload or promote blocks name."""
+    """What ``step`` makes: every folder its upload or promote blocks name. A step that promotes
+    what another step uploaded makes that folder with it, so completion replaces both."""
     return frozenset(own_folders(step, UPLOAD) + own_folders(step, PROMOTE))
 
 

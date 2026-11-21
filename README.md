@@ -19,7 +19,7 @@ Artifacts are scoped by project, key, platform and step id: the key says what a 
 
 ## Usage
 
-A step that uploads or promotes names its step id at the top of its configuration, as `step`: what it makes for its platform, the same on every platform (`build`, `api`). A `pipeline.py` writes `step_id: <id>` in the step's template in place of its key, and the runner's `load_template` (qdb-cicd-tools) makes the key and writes this option; a pipeline written in YAML by hand writes `step` itself. A step id is lower-case letters, digits and `_`, and starts with a letter. A step that uploads or promotes without one fails before its command.
+A step that uploads or promotes names its step id at the top of its configuration, as `step`: what it makes for its platform, the same on every platform (`build`, `api`). A `pipeline.py` writes `step_id: <id>` in the step's template in place of its key, and the runner's `load_template` (qdb-cicd-tools) makes the key and writes this option; a pipeline written in YAML by hand writes `step` itself. A step that promotes what another step uploaded names that step id in its promote block instead (see [Promote what another step uploaded](#promote-what-another-step-uploaded)). A step id is lower-case letters, digits and `_`, and starts with a letter. A step that uploads or promotes without one fails before its command.
 
 ### Upload (build step)
 
@@ -221,6 +221,32 @@ plugins:
         variant: "linux-amd64-release"
 ```
 
+### Promote what another step uploaded
+
+A promote promotes its own step id by default. A step that checks what another
+step of the same pipeline uploaded names that step id in its promote block, and
+promotes it once its own command passed; it names no step id of its own. The
+step that uploads then has no `promote`, and its files stay captured until the
+check promotes them. The runner (qdb-cicd-tools) makes the checking step wait
+for the step that uploads.
+
+```yaml
+steps:
+  - label: ":mag: Check"
+    key: check-linux-amd64-release
+    command: ./check.sh
+    plugins:
+      - bureau14/qdb-artifacts#v1.0.0:
+          download:
+            projects:
+              - variant: "linux-amd64-release"
+                step: build
+                files: ["*.tar.zst"]
+          promote:
+            variant: "linux-amd64-release"
+            step: build
+```
+
 ## Configuration reference
 
 ### Top-level keys
@@ -231,7 +257,7 @@ plugins:
 | `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                               |
 | `upload`   | object  | Upload configuration block.                                                                                                                                                                                                           |
 | `download` | object  | Download configuration block.                                                                                                                                                                                                         |
-| `promote`  | object  | Makes the step's upload of its platform official, and moves the branch's latest file.                                                                                                                                                 |
+| `promote`  | object  | Makes an upload of its platform official, of this step's id or of the one its `step` names, and moves the branch's latest file.                                                                                                       |
 | `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                    |
 | `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
 | `resume`   | string  | Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                 |
@@ -255,9 +281,10 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 ### `promote` object keys
 
-| Key       | Type   | Required | Description                                              |
-| --------- | ------ | -------- | -------------------------------------------------------- |
-| `variant` | string | yes      | The platform whose upload of this step to make official. |
+| Key       | Type   | Required | Description                                                                                                                                                    |
+| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `variant` | string | yes      | The platform whose upload of this step to make official.                                                                                                       |
+| `step`    | string |          | The step id to promote, when it is not this step's own: what another step of the same pipeline uploaded for the platform. See [Promote what another step uploaded](#promote-what-another-step-uploaded). |
 
 ### `download` object keys
 
@@ -456,9 +483,10 @@ planned all the same; no project can take it as a snapshot dependency.
   `.buildkite/pipeline.py | buildkite-agent pipeline upload`: the plan step
   looks for that text in it.
 - Every template of a step that uploads writes `step_id: <id>` in place of
-  its key. The step ids of a commit are those of its templates' steps that
-  promote; a `step_id` that is not a step id fails the plan step like a
-  template that does not parse.
+  its key. The step ids of a commit are those its templates' steps promote
+  (a promote block's `step`, else the step's own `step_id`) that some
+  template writes as `step_id`; a `step_id` that is not a step id fails the
+  plan step like a template that does not parse.
 - Every download of another project that its generated pipeline makes is in a
   committed template, with the same type; the `git_ref` of a snapshot download
   is the build's own ref or a pin written in a committed template; and no key

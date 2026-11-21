@@ -133,11 +133,18 @@ def plugin_block(config: Any, block: str) -> dict[str, Any] | None:
     return found if isinstance(found, dict) else None
 
 
-def named_step(config: Any) -> str | None:
-    """The step id an artifacts configuration names at its top (``step``), as text; None
-    when it names none."""
-    v = option_value(config, STEP) if isinstance(config, dict) else None
+def named_step(options: Any) -> str | None:
+    """The step id a mapping of options names (``step``), as text; None when it names none."""
+    v = option_value(options, STEP) if isinstance(options, dict) else None
     return v if isinstance(v, str) and v else None
+
+
+def block_step(config: Any, block: str) -> str | None:
+    """The step id the ``upload`` or ``promote`` block of an artifacts configuration makes: a
+    promote block's own ``step``, which names what another step uploaded, else the step id the
+    configuration names at its top."""
+    own = named_step(plugin_block(config, block)) if block == PROMOTE else None
+    return own or named_step(config)
 
 
 def entry_steps(entry: Mapping[Any, Any]) -> tuple[str, ...]:

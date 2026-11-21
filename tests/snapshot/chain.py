@@ -5,9 +5,11 @@ of ``fakes.py``.
 Every project is a repository with a step template and a ``pipeline.py`` of the
 runner's shape. Its template has, per platform, one step per step id, which writes
 ``step_id``, downloads the same platform of each snapshot dependency without naming a
-step, uploads and promotes; a test may add a step that promotes a folder again
-(``Project.packaged``). The project's generator does what the runner's
-``load_template`` does: the key ``<step id>-<platform>``, and the plugin's ``step``.
+step, and uploads. The step of the first step id promotes what it uploaded; each other
+is promoted by a check step that waits for it and names it in its promote block. A test
+may add a step that promotes a folder again (``Project.packaged``). The project's
+generator does what the runner's ``load_template`` does: the key
+``<step id>-<platform>``, and the plugin's ``step``.
 
 A build starts with the runner's gate. The gate steps run the library's own
 decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
@@ -15,9 +17,9 @@ over its ``Edge``. A trigger step starts the build it asks for, with its branch,
 commit and environment, and plays it to its end. A command step is a simulated
 job of the plugin, through the library's own functions: it reads its download entries
 (``options.download_entry``), finds the steps each takes (``download.resolved_steps``),
-compiles (or fails, when the test broke that step), captures its files
-(``upload.capture_step``) and promotes after a passed command
-(``promote.promote_folder``), unless it found the folder promoted.
+compiles and captures its files when it uploads (``upload.capture_step``), and promotes
+after a passed command (``promote.promote_folder``), unless its upload found the folder
+promoted. The job of the step that promotes a folder the test broke fails.
 """
 
 from __future__ import annotations
@@ -154,11 +156,20 @@ def entry(
 
 
 def build_step(
-    project: str, variant: str, entries: list, spelling="snake", step="build", plugin=PLUGIN
+    project: str,
+    variant: str,
+    entries: list,
+    spelling="snake",
+    step="build",
+    plugin=PLUGIN,
+    promotes=True,
 ) -> dict:
     """The template step of step id ``step`` that builds ``variant`` from ``entries``, uploads
-    and promotes it, with the plugin's options under the name ``plugin``."""
-    options = {"upload": {"variant": variant, "files": "out/*"}, "promote": {"variant": variant}}
+    it and, when ``promotes``, promotes it, with the plugin's options under the name
+    ``plugin``."""
+    options = {"upload": {"variant": variant, "files": "out/*"}}
+    if promotes:
+        options = {**options, "promote": {"variant": variant}}
     if entries:
         options = {"download": {"projects": entries}, **options}
     return {
@@ -166,6 +177,18 @@ def build_step(
         "step_id": step,
         "command": "make",
         "plugins": [{f"{plugin}#master": options}],
+    }
+
+
+def check_step(project: str, variant: str, step: str) -> dict:
+    """The template step that checks what the step of step id ``step`` uploaded for ``variant``,
+    after it, and promotes it: a step of a key of its own, which names no step id of its own."""
+    return {
+        "label": f"{project} check {step} {variant}",
+        "key": f"check-{step}-{variant}",
+        "depends_on": f"{step}-{variant}",
+        "command": "check",
+        "plugins": [{f"{PLUGIN}#master": {"promote": {"variant": variant, "step": step}}}],
     }
 
 
@@ -382,9 +405,15 @@ class World:
             extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
             return deps + extra + [entry(t, v, latest=True) for t in p.latest]
 
-        built = [build_step(name, v, entries(v), step=s) for v in p.variants for s in p.steps]
+        first, *checked = p.steps
+        built = [
+            build_step(name, v, entries(v), step=s, promotes=s == first)
+            for v in p.variants
+            for s in p.steps
+        ]
+        checks = [check_step(name, v, s) for v in p.variants for s in checked]
         packaged = [promoted_again(name, v, entries(v)) for v in p.packaged]
-        return {"steps": built + packaged}
+        return {"steps": built + checks + packaged}
 
     def commit(self, name: str, branch: str = "master") -> str:
         """A new commit of the project's repository as its ``Project`` says, on ``branch``."""
@@ -525,10 +554,24 @@ class World:
         stands_for = KeyJson(build.project, build.commit, (), build.id)
         return OwnKey(key_of(stands_for), stands_for)
 
+    def capture(self, build: Build, own: OwnKey, folder: Folder) -> Manifest | None:
+        """Capture what a job of ``build`` compiled for ``folder``; the promoted manifest that
+        held the folder, else None."""
+        location = layout.step_folder("", build.project, own.key, folder)
+        name = f"out/{folder.platform}.bin"
+
+        def write_files() -> None:
+            if own.stands_for is not None:
+                create_key_json(self.store, "", own.key, own.stands_for)
+            self.store.put(f"{location}/{name}", build.id.encode(), "application/octet-stream")
+
+        uploaded = captured([(name, len(build.id))], Uploaded(build.branch, build.info))
+        return capture_step(self.store, location, write_files, uploaded)
+
     def job(self, build: Build, options: dict | None) -> str:
-        """A job of the plugin: download, compile, capture its files, then promote after a
-        passed command, unless the folder was promoted already, which makes the upload
-        empty."""
+        """A job of the plugin: download; compile and capture its files when it uploads; then
+        promote after a passed command, unless its upload found the folder promoted already,
+        which makes it empty."""
         if options is None:  # a step completion put in place of one whose folders are made
             return "passed"
         own = self.own_key(build, options)
@@ -537,25 +580,22 @@ class World:
             for s in resolved_steps(self.store, "", found, f"{build.project} {found.variant}"):
                 made = made_by(s.manifest)
                 self.downloads.append(Download(build, s.project, s.folder, s.key, made))
-        variant = (options.get("UPLOAD") or options["PROMOTE"])["VARIANT"]
-        folder = Folder(variant, options["STEP"])
-        location = layout.step_folder("", build.project, own.key, folder)
-        name = f"out/{variant}.bin"
-
-        def write_files() -> None:
-            if own.stands_for is not None:
-                create_key_json(self.store, "", own.key, own.stands_for)
-            self.store.put(f"{location}/{name}", build.id.encode(), "application/octet-stream")
-
-        uploaded = captured([(name, len(build.id))], Uploaded(build.branch, build.info))
-        held = capture_step(self.store, location, write_files, uploaded)
-        if (build.project, folder) in self.broken:
+        upload, promote = options.get("UPLOAD"), options.get("PROMOTE")
+        uploads = None if upload is None else Folder(upload["VARIANT"], options["STEP"])
+        promotes = (
+            None
+            if promote is None
+            else Folder(promote["VARIANT"], promote.get("STEP") or options["STEP"])
+        )
+        held = None if uploads is None else self.capture(build, own, uploads)
+        if (build.project, promotes) in self.broken:
             return "hard_failed"
-        self.compiled.append(Compiled(build, folder))
-        if held is None:
+        if uploads is not None:
+            self.compiled.append(Compiled(build, uploads))
+        if promotes is not None and held is None:
             # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
             promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
-            promote_folder(self.store, "", build.project, own.key, folder, promotion)
+            promote_folder(self.store, "", build.project, own.key, promotes, promotion)
         return "passed"
 
     # -- what a test reads -------------------------------------------------

@@ -474,7 +474,8 @@ class Attempt(NamedTuple):
 
 # Orders of jobs of one step of one platform: a job retried after it failed or passed, another
 # build of the key, a job without files, a step that only uploads, and a step that only
-# promotes, after a build of another key moved the branch's latest file.
+# promotes what another step uploaded: after its build step, from a later build, and after a
+# build of another key moved the branch's latest file.
 ORDERS = {
     "one-passes": [Attempt(1, 0, True, True)],
     "retried-after-a-failure": [Attempt(1, 1, True, True), Attempt(1, 0, True, True)],
@@ -490,6 +491,11 @@ ORDERS = {
         Attempt(1, 0, True, True),
         Attempt(2, 0, True, True, key=OTHER_KEY),
         Attempt(3, 0, False, True, uploads=False),
+    ],
+    "a-check-promotes-what-its-build-uploaded": [
+        Attempt(1, 0, True, False),
+        Attempt(1, 0, False, True, uploads=False),
+        Attempt(2, 0, False, True, uploads=False),
     ],
 }
 
@@ -515,9 +521,11 @@ def last_promoted_key(attempts: list[Attempt]) -> str | None:
 
 
 def step_options(a: Attempt) -> dict:
-    """The options of the step a job of ``a`` runs: it uploads, promotes, or both."""
+    """The options of the step a job of ``a`` runs: it uploads, promotes, or both. A step that
+    only promotes names in its promote block the step id it promotes, which another step
+    uploaded."""
     if not a.uploads:
-        return {"step": "build", "promote": {"variant": "linux"}}
+        return {"promote": {"variant": "linux", "step": "build"}}
     return upload_and_promote(promotes=a.promotes, files="out/*", allow_empty=True)
 
 
@@ -525,10 +533,11 @@ def step_options(a: Attempt) -> dict:
 def test_the_first_promote_wins(jobs, store, order):
     """Jobs of one step upload their files whatever their command did, and promote only after
     a passed command and an upload that was not empty: the folder's manifest at a key names
-    the first job that promoted it, with that job's files, and nothing is uploaded into it
-    after; without a promote it names the last job that uploaded files, captured. The branch's
-    latest file names the key of the folder promoted last: a promote that finds its folder
-    promoted leaves it, and the latest file, as they were."""
+    the first job that promoted it, with the files of the last job that uploaded before it,
+    and nothing is uploaded into it after; without a promote it names the last job that
+    uploaded files, captured. The branch's latest file names the key of the folder promoted
+    last: a promote that finds its folder promoted leaves it, and the latest file, as they
+    were."""
     attempts = ORDERS[order]
     for i, a in enumerate(attempts):
         job = jobs("widget", a.build)
@@ -545,9 +554,11 @@ def test_the_first_promote_wins(jobs, store, order):
     stored = store.get(layout.manifest(folder))
     winner = first_promoter(attempts, PLANNED_KEY)
     uploaders = [
-        i for i, a in enumerate(attempts) if a.key == PLANNED_KEY and a.uploads and a.has_files
+        i
+        for i, a in enumerate(attempts)
+        if a.key == PLANNED_KEY and a.uploads and a.has_files and (winner is None or i <= winner)
     ]
-    holder = winner if winner is not None else (uploaders[-1] if uploaders else None)
+    holder = uploaders[-1] if uploaders else None
     latest = store.get(layout.latest_file("", "widget", MASTER, Folder("linux", "build")))
     named = last_promoted_key(attempts)
     assert latest == (None if named is None else named.encode())
@@ -557,7 +568,7 @@ def test_the_first_promote_wins(jobs, store, order):
     m = decode_manifest(stored)
     number = attempts[holder].build
     assert (m.promoted.build.number if m.promoted else None) == (
-        number if winner is not None else None
+        None if winner is None else attempts[winner].build
     )
     assert m.uploaded.build.number == number
     assert [f.path for f in m.files] == ["out/a.bin"]

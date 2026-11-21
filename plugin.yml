@@ -54,6 +54,10 @@ configuration:
         variant:
           type: string
           description: "The platform whose upload of this step the promote makes official (e.g linux-amd64-release)"
+        step:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "The step id to promote, when it is not this step's own: what another step of the same pipeline uploaded for the platform (e.g. 'build' from a step that checks it)"
       required:
         - variant
     download:

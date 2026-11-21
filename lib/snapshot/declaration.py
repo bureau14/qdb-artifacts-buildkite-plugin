@@ -5,7 +5,9 @@ download entry of the artifacts plugin with a literal project id of another
 pipeline gives one entry ``(project, type, pin)``. An entry that takes the
 latest successful build (``latest: true``) is a **latest successful**
 dependency, any other a **snapshot** dependency. The same templates give the
-pipeline's step ids: the ``step_id`` of every template step that promotes.
+pipeline's step ids: what every template step that promotes promotes, its
+promote block's ``step`` or else its own ``step_id``, when some template
+writes that id as ``step_id``.
 ``read_declaration`` reads both from the files of one commit without running
 anything, for the build's own checkout and for another repository's commit
 alike; reading the files is the caller's business. ``rule_violations``
@@ -36,6 +38,7 @@ from .configuration import (
     PROMOTE,
     download_entries,
     misnamed_plugins,
+    named_step,
     option_value,
     plugin_block,
     plugin_configurations,
@@ -281,11 +284,6 @@ def template_steps(doc: Any) -> list[dict[str, Any]]:
     return [doc, *(s for s in listed if isinstance(s, dict))]
 
 
-def promotes(step: Mapping[str, Any]) -> bool:
-    """True for a step one of whose artifacts configurations has a ``promote`` block."""
-    return any(plugin_block(c, PROMOTE) is not None for c in plugin_configurations(step))
-
-
 def step_id_of(own: str, path: str, step: Mapping[str, Any]) -> str | None:
     """The ``step_id`` a template step writes, None when it writes none; one that is not a
     step id raises ``TemplateError``, as a template that does not parse does."""
@@ -298,12 +296,35 @@ def step_id_of(own: str, path: str, step: Mapping[str, Any]) -> str | None:
     )
 
 
-def read_template(path: str, content: str | bytes, own: str) -> tuple[list[Entry], list[str]]:
-    """The entries of one template that mentions the plugin, and the step ids it promotes."""
+def promoted_ids(step: Mapping[str, Any], step_id: str | None) -> list[str]:
+    """The step ids a template step promotes, whose ``step_id`` is ``step_id``: of each promote
+    block of its artifacts configurations, the block's own ``step``, which names what another
+    step uploaded, else ``step_id``."""
+    blocks = (plugin_block(c, PROMOTE) for c in plugin_configurations(step))
+    named = (named_step(b) or step_id for b in blocks if b is not None)
+    return [i for i in named if i]
+
+
+@dataclass(frozen=True)
+class TemplateRead:
+    """What one template that mentions the plugin declares: its entries, the step ids its steps
+    promote, and the step ids its steps write as ``step_id``."""
+
+    entries: tuple[Entry, ...]
+    promoted: tuple[str, ...]
+    written: tuple[str, ...]
+
+
+def read_template(path: str, content: str | bytes, own: str) -> TemplateRead:
+    """What one template that mentions the plugin declares."""
     doc = parse_template(own, path, content)
     found = (read_entry(path, e, own) for e in download_entries(doc))
-    ids = ((step_id_of(own, path, s), s) for s in template_steps(doc))
-    return [x for x in found if x is not None], [i for i, s in ids if i and promotes(s)]
+    steps = [(step_id_of(own, path, s), s) for s in template_steps(doc)]
+    return TemplateRead(
+        tuple(x for x in found if x is not None),
+        tuple(p for i, s in steps for p in promoted_ids(s, i)),
+        tuple(i for i, _ in steps if i),
+    )
 
 
 def _entry_order(e: Entry) -> tuple[str, str, str]:
@@ -322,17 +343,20 @@ def read_declaration(files: Mapping[str, str | bytes], own: str) -> Declaration:
     build (``takes_latest``), else a snapshot one. Entries of ``own`` and
     entries without a project id are dropped. Files are read in path order;
     entries are kept once each, sorted, with the first file each was found
-    in. Every step that promotes gives its ``step_id``, kept once each, sorted:
-    the step ids a build of this commit makes, never a Buildkite key or the
-    plugin's ``step`` of a pipeline written in YAML by hand.
+    in. Every step that promotes gives the step id it promotes
+    (``promoted_ids``), which counts when some template writes it as
+    ``step_id``; kept once each, sorted: the step ids a build of this commit
+    makes, never a Buildkite key or the plugin's top-level ``step`` of a
+    pipeline written in YAML by hand.
     """
     read = [
         read_template(path, files[path], own)
         for path in sorted(files)
         if is_template_path(path) and mentions_plugin(files[path])
     ]
-    entries = [e for found, _ in read for e in found]
-    steps = {s for _, ids in read for s in ids}
+    entries = [e for r in read for e in r.entries]
+    written = {i for r in read for i in r.written}
+    steps = {i for r in read for i in r.promoted if i in written}
     return Declaration(
         tuple(sorted(dict.fromkeys(entries), key=_entry_order)), tuple(sorted(steps))
     )
