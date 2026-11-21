@@ -483,12 +483,13 @@ and the file.
    commit passes the gate at a time.
 2. Enter: its command generates the pipeline, then the plugin plans. A root
    makes the plan and keeps it as meta-data of its own build; a chain node
-   reads its root's. Then it creates the `key.json` of its key. A build whose
-   pipeline promotes at least one step, and whose every step and platform
-   asked for is made at its key, is reused and builds nothing. Else the
-   dependencies that lack a step are triggered, with a resume step that
-   carries `resume`. Else the pipeline is uploaded with the key of every step
-   a snapshot download takes, and its own key, written into it.
+   reads its root's. Then a build that has a key creates its `key.json`, from
+   the plan alone. A build whose pipeline promotes at least one step, and
+   whose every step and platform asked for is made at its key, is reused and
+   builds nothing. Else the dependencies that lack a step are triggered, with
+   a resume step that carries `resume`. Else the pipeline is uploaded with the
+   key of every step a snapshot download takes, and its own key, written into
+   it.
 3. Resume: once the triggered builds have ended, it uploads the pipeline, or
    fails and names the dependency that failed.
 4. The jobs run as ever. A step that promotes makes its folder at the key
