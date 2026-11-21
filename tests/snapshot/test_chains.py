@@ -389,12 +389,25 @@ def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_starte
     assert again == ([failed] if WHEN[when] else [])
 
 
+def runs_under_a_pin(graph: dict, p: str, node: str, consumer: str, name: str) -> str:
+    """The name a started build of ``p`` runs under when ``consumer`` pins ``node`` to the
+    release line 3.14.x and the chain takes every other project at the root's name ``name``:
+    the node under 3.14.x when nothing lies below it; any other project under the root's name
+    when the node is not below it or the pin is written in its tree; else under
+    snapshot/<name>."""
+    inside = below(graph, p) | {p}
+    if p == node:
+        return "3.14.x" if not below(graph, node) else f"snapshot/{name}"
+    return name if node not in inside or consumer in inside else f"snapshot/{name}"
+
+
 @pytest.mark.parametrize("name", ["master", TAG])
 def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape, name):
     """A literal git ref in one consumer's template pins a node: the chain builds it once, at
     the head of that ref, also under a root at a tag that every project carries, and every
     download of it in the chain, on every platform and of every step, takes what that build
-    made."""
+    made. A started build runs under the name of its ref only when no node below it was placed
+    by the pin written outside its tree, else under snapshot/<root's name>."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds(graph, *shape)
     pinned = world.commit(node, branch="3.14.x")
@@ -408,9 +421,11 @@ def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape,
     top = world.build(root, name)
 
     (built,) = world.builds_of(node)
+    names = {b.project: b.branch for b in top.chain()[1:]}
     assert top.state == "passed"
     assert built.commit == pinned
     assert {d.made_by for d in world.downloads if d.project == node} == {built.id}
+    assert names == {p: runs_under_a_pin(graph, p, node, consumer, name) for p in names}
 
 
 def entries_of(document: str, project: str) -> list[dict]:
@@ -688,26 +703,27 @@ def latest_refs(world, project: str) -> set[str]:
 
 # The names a root builds under, and what carries each: a branch that a node and every node
 # above it have, once also beside a tag of the same name that every project carries, which
-# the branch wins over; or a tag alone, that every project carries.
+# the branch wins over; or a tag that every project carries, alone, or beside a branch of the
+# same name on other commits in every project but the root, which the tag wins over.
 CARRIED = {
     "master": ("branch",),
     "feature": ("branch", "tag"),
     "3.14.x": ("branch",),
     TAG: ("tag",),
+    "v2.0.0": ("tag", "dependency-branches"),
 }
 
 
 @pytest.mark.parametrize("root_name", sorted(CARRIED))
-def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
-    worlds, graph_node, shape, root_name
-):
+def test_a_node_runs_under_its_own_name_only_as_its_own_build(worlds, graph_node, shape, root_name):
     """When a root builds a branch that a node and every node above it also have, each
     triggered build runs under the branch the rule gives, at the head of its branch: its own
     when it is the build its own pipeline would make, and then its promotes write that
     branch's latest files on every platform; else snapshot/<root branch>, and then they write
     none. A tag of the same name changes none of it. When a root builds at a tag every project
     carries, each triggered build runs at the tag's commit under the tag's name, and writes
-    latest files under it only."""
+    latest files under it only; a branch of that name in the dependencies changes none of
+    it."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     world = worlds(graph, *shape)
     branched = ({node} | above(graph, node)) & tree(graph, root)
@@ -715,6 +731,9 @@ def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
     tagged = {p: world.tag(p, root_name) for p in sorted(graph)} if "tag" in carried else {}
     if "branch" in carried:
         for p in sorted(branched):
+            world.commit(p, branch=root_name)
+    if "dependency-branches" in carried:
+        for p in sorted(graph.keys() - {root}):
             world.commit(p, branch=root_name)
 
     top = world.build(root, branch=root_name)
