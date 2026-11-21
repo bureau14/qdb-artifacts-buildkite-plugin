@@ -125,18 +125,17 @@ def download_artifacts(
     project_id,
     variant,
     step,
+    build,
     patterns,
-    git_ref=None,
-    key=None,
     exclude_patterns=None,
     output_dir=".",
     extract=False,
-    require_strict_ref_match=False,
     parallel=4,
     concurrency=32,
 ):
-    """Find one step of a project's platform, as ``resolve_artifacts`` does, and download its
-    matching artifacts into ``output_dir``, extracting archives with ``extract``.
+    """Find one step of a project's platform in ``build``, a ``Branch`` or a ``Key``, as
+    ``resolve_artifacts`` does, and download its matching artifacts into ``output_dir``,
+    extracting archives with ``extract``.
 
     Uses explicit cfg and auth; no Buildkite environment or SSM configuration
     is required. It creates the output directory if needed but does not clean
@@ -149,11 +148,9 @@ def download_artifacts(
         project_id=project_id,
         variant=variant,
         step=step,
+        build=build,
         patterns=patterns,
-        git_ref=git_ref,
-        key=key,
         exclude_patterns=exclude_patterns,
-        require_strict_ref_match=require_strict_ref_match,
     )
     fetch(cfg, auth, bucket, objects, output_dir, extract, parallel, concurrency)
     return bucket, resolved, objects

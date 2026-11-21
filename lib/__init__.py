@@ -2,8 +2,9 @@
 
 The library has two callers: the plugin's hooks, through `cli`, and a program
 outside Buildkite that imports the names below to find and fetch what a
-download would. Both resolve "which key holds this step of this platform"
-through the same functions, independent of Buildkite hooks.
+download would, one step of a platform in a `Branch` or at a `Key`. Both
+resolve "which key holds this step of this platform" through the same
+functions, independent of Buildkite hooks.
 
 Each module has one duty and imports only modules listed above it, so that a
 module can be read, and tested, with nothing below it:
@@ -40,10 +41,12 @@ from .config import StoreConfig, load_store_config
 from .download import download_artifacts
 from .errors import ArtifactsError
 from .manifest import read_manifest
-from .resolve import ResolvedArtifact, ResolvedStep, resolve_artifacts
+from .resolve import Branch, Key, ResolvedArtifact, ResolvedStep, resolve_artifacts
 
 __all__ = [
     "ArtifactsError",
+    "Branch",
+    "Key",
     "ObjectAuth",
     "ResolvedArtifact",
     "ResolvedStep",

@@ -269,36 +269,43 @@ def log_step(name: str, step: ResolvedStep) -> None:
 # ---------------------------------------------------------------------------
 
 
-def resolve_artifacts(
-    cfg,
-    auth,
-    project_id,
-    variant,
-    step,
-    patterns,
-    git_ref=None,
-    key=None,
-    exclude_patterns=None,
-    require_strict_ref_match=False,
-):
+@dataclass(frozen=True)
+class Branch:
+    """The latest successful build of a step on a branch: through the latest file of
+    ``git_ref``, a full ref, then of master and main unless ``strict``."""
+
+    git_ref: str
+    strict: bool = False
+
+
+@dataclass(frozen=True)
+class Key:
+    """The build of a step at ``key``."""
+
+    key: str
+
+
+def library_step(store, prefix: str, project: str, folder: Folder, build, name: str):
+    """The step ``folder`` of ``project`` in ``build``, a ``Branch`` or a ``Key``."""
+    if isinstance(build, Key):
+        return keyed_step(store, prefix, project, build.key, folder, name)
+    return walk_named(store, prefix, project, build.git_ref, build.strict, folder)
+
+
+def resolve_artifacts(cfg, auth, project_id, variant, step, build, patterns, exclude_patterns=None):
     """Find one step of a project's platform and select its artifacts, without downloading.
 
     Takes explicit StoreConfig and ObjectAuth; no Buildkite environment or
-    output directory is required. A ``key`` gives the step at that key; else
-    ``git_ref`` gives the latest successful build of the step, through the
-    walk over the latest files of that ref, then of master and main unless
-    ``require_strict_ref_match``. ``patterns`` use the plugin's
-    archive_glob[!entry_filter] syntax. Returns (bucket, ResolvedStep,
-    objects), objects a list of ResolvedArtifact. A step that cannot be found,
-    or that gives no file, raises ArtifactsError.
+    output directory is required. ``build`` says which build of the step: a
+    ``Branch``, its latest successful build there, or a ``Key``.
+    ``patterns`` use the plugin's archive_glob[!entry_filter] syntax. Returns
+    (bucket, ResolvedStep, objects), objects a list of ResolvedArtifact. A
+    step that cannot be found, or that gives no file, raises ArtifactsError.
     """
     store, prefix = destination_store(cfg, auth)
     folder = Folder(variant, step)
     name = f"The download of {project_id} ({variant})"
-    if key is not None:
-        resolved = keyed_step(store, prefix, project_id, key, folder, name)
-    else:
-        resolved = walk_named(store, prefix, project_id, git_ref, require_strict_ref_match, folder)
+    resolved = library_step(store, prefix, project_id, folder, build, name)
     objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
         raise nothing_matched(name, patterns, exclude_patterns, [resolved])
