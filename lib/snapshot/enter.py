@@ -254,8 +254,8 @@ def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
 def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[Folder]:
     """5. ``D``, the folders this pipeline promotes; a folder promoted twice fails, as the rule.
 
-    Two steps that promote one folder break a rule the plan step holds a
-    pipeline that has a snapshot to, so the record's reason is ``rule``.
+    Two steps that promote one folder break a rule the plan step holds every
+    pipeline to, so the record's reason is ``rule``.
     """
     try:
         return frozenset(promotions(generated.doc))

@@ -283,7 +283,7 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 | Key       | Type   | Required | Description                                                                                                                                                                                              |
 | --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `variant` | string | yes      | The platform whose upload of this step to make official.                                                                                                                                                 |
+| `variant` | string | yes      | The platform whose upload to make official: this step's, or that of the step id `step` names.                                                                                                            |
 | `step`    | string |          | The step id to promote, when it is not this step's own: what another step of the same pipeline uploaded for the platform. See [Promote what another step uploaded](#promote-what-another-step-uploaded). |
 
 ### `download` object keys
@@ -514,8 +514,11 @@ root.
 - A project that others take as a snapshot dependency holds no latest
   successful dependency itself.
 
-The plan step fails a build that breaks one of these, with a failure record of
-reason `rule`, before anything is built.
+A build that breaks one of these fails before anything is built. A build
+started for a dependency also writes a failure record of reason `rule` under
+its key; a root writes one only for what its plan step checks once the plan
+has given it its key: the step ids its pipeline promotes and its downloads
+without `step`.
 
 A dependency that cannot give a snapshot fails the plan of the root before
 anything is triggered. The message names who needs it, which condition failed

@@ -53,7 +53,7 @@ configuration:
       properties:
         variant:
           type: string
-          description: "The platform whose upload of this step the promote makes official (e.g linux-amd64-release)"
+          description: "The platform whose upload the promote makes official: this step's, or that of the step id step names (e.g linux-amd64-release)"
         step:
           type: string
           pattern: "^[a-z][a-z0-9_]*$"
