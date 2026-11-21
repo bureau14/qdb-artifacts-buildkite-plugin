@@ -1,4 +1,4 @@
-"""The forms of a branch's ref and of a time, as the jobs and the plan step write them.
+"""The forms of a ref and of a time, as the jobs and the plan step write them.
 
 This is ordinary job code, as the manifest is: nothing here imports ``snapshot``.
 """
@@ -13,6 +13,15 @@ TAG_PREFIX = "refs/tags/"
 # dependency and it is not the build its own branch would make: no branch has that
 # name, so the build writes no latest file.
 SNAPSHOT_BRANCH_PREFIX = "snapshot/"
+
+
+def name_of(ref: str) -> str:
+    """The name of a full ref of a branch or a tag, as Buildkite names a build of it: the ref
+    without ``refs/heads/`` or ``refs/tags/``."""
+    for prefix in (BRANCH_PREFIX, TAG_PREFIX):
+        if ref.startswith(prefix):
+            return ref[len(prefix) :]
+    return ref
 
 
 def iso_utc(epoch: float) -> str:

@@ -97,11 +97,19 @@ from .edge import (
     stored_records,
 )
 from .failing import Refusal, gated
-from .git import Git, RealGit, branch_ref
+from .git import Git, RealGit, branch_ref, is_tag
 from .job import Job, is_chain_node, job_of
 from .latest import read_latest
 from .plan import Plan, PlanError, encode_plan
-from .planner import Pipelines, Root, make_plan, rebuild_setting
+from .planner import (
+    Pipelines,
+    Root,
+    make_plan,
+    name_refs,
+    named_ref,
+    rebuild_setting,
+    root_ref,
+)
 from .records import (
     GENERATOR_FAILED,
     NOT_DECLARED,
@@ -129,10 +137,10 @@ TEMPLATE_DIRECTORY = ".buildkite"
 class PlanEdge(Edge):
     """The edge of enter and resume: every gate step's, and what only the plan step reaches.
 
-    ``git``: other repositories, and the newest commit of the build's own
-    branch. ``pipelines``: Buildkite's facts of a
-    pipeline slug. ``plugin_commit``: the commit of the plugin's own checkout,
-    which the plan step writes into what it uploads.
+    ``git``: other repositories, and the commit of the ref the build is taken
+    from. ``pipelines``: Buildkite's facts of a pipeline slug.
+    ``plugin_commit``: the commit of the plugin's own checkout, which the plan
+    step writes into what it uploads.
     """
 
     git: Git
@@ -209,46 +217,86 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
     return Generated(doc, declaration)
 
 
-def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
-    """3, a root: read the keys of its latest successful downloads, make the plan (sections 3
-    and 4), write it, annotate the build with it.
+def shown_name(name: str, repository: str, refs: Mapping[str, str]) -> str:
+    """What git said of the refs of a root's name (``planner.name_refs``), as the plan step
+    logs it."""
+    ref = named_ref(name, refs)
+    if ref not in refs:
+        return (
+            f"{name} is neither a branch nor a tag of {repository}: it is planned as a branch, "
+            "and writes no latest file of a step it finds made"
+        )
+    if is_tag(ref):
+        return (
+            f"{name} is a tag of {repository}, of commit {refs[ref]}: every dependency without a "
+            "pin is taken from that tag"
+        )
+    return f"{name} is a branch of {repository}, at {refs[ref]}"
+
+
+def asked_name(job: Job, edge: PlanEdge) -> Mapping[str, str]:
+    """3, a root: ask git once whether its name is a branch or a tag of its repository, with
+    the commit of each, a tag peeled; log the answer."""
+    refs = edge.git.commits_of(job.repository, name_refs(job.branch))
+    edge.log(shown_name(job.branch, job.repository, refs))
+    return refs
+
+
+@dataclass(frozen=True)
+class Placed:
+    """Step 3's outcome: the plan of the build's chain, and git's answer for the refs of a
+    root's name (``asked_name``); None where git was not asked: in a chain node, which asks
+    when it needs to, and in resume."""
+
+    plan: Plan
+    named: Mapping[str, str] | None
+
+
+def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
+    """3, a root: ask git where its name is, read the keys of its latest successful downloads,
+    make the plan (sections 3 and 4), write it, annotate the build with it.
 
     A download that finds no latest file, and a plan that cannot be made, fail
     the build with their message, before anything runs.
     """
+    named = asked_name(job, edge)
     try:
         root = Root(
             project=job.project,
-            branch=job.branch,
+            name=job.branch,
             commit=edge.checkout.head_commit(),
+            refs=named,
             build_id=job.build.id,
             build_number=job.build.number,
             rebuild=rebuild_setting(job.rebuild),
         )
+        at_tag = is_tag(root_ref(root))
         downloads = [d for d, _ in latest_dependencies(generated.doc, job.project)]
-        latest = read_latest(edge.store, edge.prefix, downloads, generated.declaration)
+        latest = read_latest(edge.store, edge.prefix, downloads, generated.declaration, at_tag)
         p = make_plan(root, generated.declaration, latest, edge.git, edge.pipelines)
     except PlanError as exc:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
     edge.agent.meta_data_set(PLAN, encode_plan(p))
     edge.agent.annotate(plan_annotation(p, job.project), "info", PLAN_CONTEXT)
-    return p
+    return Placed(p, named)
 
 
 # How step 3 comes to the plan: in enter (``entered_plan``) or in resume (``resumed_plan``).
-PlanOf = Callable[[Job, PlanEdge, Generated], Plan]
+PlanOf = Callable[[Job, PlanEdge, Generated], Placed]
 
 
-def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
+def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     """3, enter. A chain node loads the plan of its chain; a root makes it."""
-    return chain_plan(job, edge) if is_chain_node(job) else root_plan(job, edge, generated)
+    if is_chain_node(job):
+        return Placed(chain_plan(job, edge), None)
+    return root_plan(job, edge, generated)
 
 
-def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
+def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     """3, resume. Every build loads the plan of its chain, a root its own: the plan its enter
     made, which names the commits the triggered builds built."""
-    return chain_plan(job, edge)
+    return Placed(chain_plan(job, edge), None)
 
 
 def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[Folder]:
@@ -305,34 +353,50 @@ def check_declared(
         raise Refusal(message, annotation, record)
 
 
+@dataclass(frozen=True)
+class Prepared:
+    """What steps 1 to 5 found: the pipeline, the plan and git's answer of step 3
+    (``Placed``), the origin of the own records (which holds the own key), ``D`` and ``N``."""
+
+    generated: Generated
+    plan: Plan
+    named: Mapping[str, str] | None
+    origin: Origin
+    d: frozenset[Folder]
+    n: frozenset[Folder]
+
+
 # ---------------------------------------------------------------------------
 # Steps 6 and 7, of enter
 # ---------------------------------------------------------------------------
 
 
-def newest_commit(job: Job, edge: PlanEdge) -> str | None:
-    """The newest commit of the branch the build runs under, asked of git now; None when its
-    repository has no such branch."""
-    ref = branch_ref(job.branch)
-    return edge.git.commits_of(job.repository, [ref]).get(ref)
+def newest_commit(job: Job, edge: PlanEdge, p: Plan, named: Mapping[str, str] | None) -> str | None:
+    """The commit git names for the ref the plan takes this build from: its branch's newest,
+    or its tag's, peeled; None when its repository has no such ref. A root has git's answer
+    from step 3 (``named``); a chain node asks git now, not the plan: it can run long after
+    the chain began, while its ref moved."""
+    ref = p.projects[job.project].ref
+    answer = named if named is not None else edge.git.commits_of(job.repository, [ref])
+    return answer.get(ref)
 
 
-def point_latest_files(job: Job, edge: PlanEdge, key: str, made: Mapping[Folder, Manifest]) -> None:
-    """6. Point the latest file of every step made at ``key`` at it, under the branch the build
-    runs under, when git names the build's commit as that branch's newest: so a branch cut at
-    built commits gets its latest files at its first build, and an older build that runs
-    again does not move them back. A build under a ``snapshot/`` name writes none.
-
-    Git is asked now, not the plan: a started build can run long after the
-    chain began, while its branch moved.
+def point_latest_files(
+    job: Job, edge: PlanEdge, prepared: Prepared, made: Mapping[Folder, Manifest]
+) -> None:
+    """6. Point the latest file of every step made at the build's key at it, under the name the
+    build runs under, when git names the build's commit as its ref's: so a branch cut at, or a
+    tag put on, built commits gets its latest files at its first build, and an older build
+    that runs again does not move them back. A build under a ``snapshot/`` name writes none.
     """
     if not made or not writes_latest(job.branch):
         return
-    newest = newest_commit(job, edge)
+    key = prepared.origin.key
+    newest = newest_commit(job, edge, prepared.plan, prepared.named)
     if newest != edge.checkout.head_commit():
         edge.log(
-            f"{job.branch} is at {newest or 'no commit'}, not at this build's commit: no latest "
-            f"file moves to {key}"
+            f"git names {newest or 'no commit'} for {job.branch}, not this build's commit: no "
+            f"latest file moves to {key}"
         )
         return
     for f in sorted(made):
@@ -546,18 +610,6 @@ def build_pipeline(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Prepared:
-    """What steps 1 to 5 found: the pipeline, the plan, the origin of the own records (which
-    holds the own key), ``D`` and ``N``."""
-
-    generated: Generated
-    plan: Plan
-    origin: Origin
-    d: frozenset[Folder]
-    n: frozenset[Folder]
-
-
 def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     """Steps 1 to 5, the same in enter and resume but for how step 3 comes to the plan.
 
@@ -566,13 +618,14 @@ def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     """
     check_command(job, edge)
     generated = generated_pipeline(job, edge)
-    p = plan_of(job, edge, generated)
+    placed = plan_of(job, edge, generated)
+    p = placed.plan
     origin = create_own_key_json(job, edge, p)
     d = promoted(job, edge, generated, origin)
     check_step_ids(job, edge, generated, p, origin)
     n = asked(job, d)
     check_declared(job, edge, n, d, origin)
-    return Prepared(generated, p, origin, d, n)
+    return Prepared(generated, p, placed.named, origin, d, n)
 
 
 def own_manifests(job: Job, edge: Edge, prepared: Prepared) -> dict[Folder, Manifest | None]:
@@ -584,7 +637,7 @@ def enter_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge, entered_plan)
     found = own_manifests(job, edge, prepared)
     made = made_only(found)
-    point_latest_files(job, edge, prepared.origin.key, made)
+    point_latest_files(job, edge, prepared, made)
     m = frozenset(found) - frozenset(made)
     if is_reused(prepared.d, prepared.n, m):
         reuse(job, edge, prepared.plan, made, prepared.n)
@@ -619,19 +672,21 @@ def enter(job: Job, edge: PlanEdge) -> int:
     1. The command failed: record ``generator_failed`` when a chain node; fail.
     2. The generated pipeline breaks the rule of section 2: record ``rule``
        when a chain node; fail.
-    3. A chain node loads the plan and checks its commit; a root reads the
-       keys of its latest successful downloads, makes the plan, writes it and
-       annotates the build with it. A download that finds no latest file, and
-       a plan that cannot be made, fail the build with their message. Then
-       ``key.json`` of the own key.
+    3. A chain node loads the plan and checks its commit; a root asks git
+       once whether its name is a branch or a tag of its repository, reads
+       the keys of its latest successful downloads, makes the plan, writes it
+       and annotates the build with it. A download that finds no latest file,
+       and a plan that cannot be made, fail the build with their message.
+       Then ``key.json`` of the own key.
     5. ``D`` is what this pipeline promotes, a folder promoted twice failing;
        a step id no template of the commit writes, or a download without a
        step of a dependency that has no step ids: record ``rule``; fail.
        ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A folder of
        ``N`` not in ``D``: record ``not_declared`` with what it refuses; fail.
     6. The latest files of the folders of ``D`` made at ``K`` name ``K``,
-       when git names the build's commit as its branch's newest. ``D`` is not
-       empty and every folder of ``N`` is made at ``K``: mode reused; done.
+       when git names the build's commit as its ref's: its branch's newest,
+       or its tag's. ``D`` is not empty and every folder of ``N`` is made at
+       ``K``: mode reused; done.
     7. Another build of ``K`` failed on the wanted folders after the chain's
        root arrived at the gate: record its failure as shared; fail.
     8. For each direct snapshot dependency, the folders the kept steps take,

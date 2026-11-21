@@ -27,6 +27,7 @@ from chain import (
     roots,
     tree,
 )
+from fakes import url
 from world import GIT_IDENTITY, git
 
 from lib.snapshot.declaration import (
@@ -46,7 +47,7 @@ from lib.snapshot.document import (
 )
 from lib.snapshot.git import RealGit, run_command
 from lib.snapshot.lines import release_line
-from lib.snapshot.planner import Root, make_plan
+from lib.snapshot.planner import Root, make_plan, name_refs
 
 MASTER = "refs/heads/master"
 KEY = "0" * 40 + "-" + "0" * 32
@@ -62,7 +63,8 @@ def plans(world, number: int) -> list:
     found = []
     for r in roots({p: n.deps for p, n in world.projects.items()}):
         commit = world.hosting.head(r)
-        root = Root(r, "master", commit, f"01890000-0000-7000-8000-{number:012d}", number)
+        refs = world.git.commits_of(url(r), name_refs("master"))
+        root = Root(r, "master", commit, refs, f"01890000-0000-7000-8000-{number:012d}", number)
         declaration = read_declaration(world.hosting.trees[commit], r)
         found.append(make_plan(root, declaration, (), world.git, world.pipelines))
     return found

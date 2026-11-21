@@ -3,8 +3,9 @@
 - ``MemoryStore``: ``objects.Store`` (get, put, create once, list one level in key
   order), each object with the time it was last written, one millisecond after
   the write before.
-- ``Hosting``: repositories as commits of files. ``FakeGit`` asks it what
-  ``git.Git`` asks git; ``FakeCheckout`` is one commit of it, as ``git.Checkout``.
+- ``Hosting``: repositories as commits of files, branches and tags. ``FakeGit`` asks
+  it what ``git.Git`` asks git; ``FakeCheckout`` is one commit of it, as
+  ``git.Checkout``.
 - ``BuildAgent``: ``agent.Agent`` of one build, over ``AgentState``, the
   meta-data, step outcomes, uploads and annotations of every build.
 - ``FakePipelines``: ``planner.Pipelines``, Buildkite's facts by slug.
@@ -22,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from lib.objects import Listed
 from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
-from lib.snapshot.git import branch_of, branch_ref
+from lib.snapshot.git import branch_of, branch_ref, tag_ref
 
 EPOCH = datetime.datetime(2026, 11, 20, tzinfo=datetime.timezone.utc)
 
@@ -68,18 +69,22 @@ def as_bytes(content: str | bytes) -> bytes:
 
 
 class Hosting:
-    """Every project's repository at ``url(project)``: its branches and the files of each commit."""
+    """Every project's repository at ``url(project)``: its branches, its tags and the files of
+    each commit."""
 
     def __init__(self) -> None:
         self.refs: dict[tuple[str, str], str] = {}
         self.trees: dict[str, dict[str, bytes]] = {}
         self.count = itertools.count(1)
 
-    def commit(self, project: str, files: Mapping[str, str | bytes], branch: str = "master") -> str:
-        """A new commit of ``files`` at the head of ``branch``; its id."""
+    def commit(
+        self, project: str, files: Mapping[str, str | bytes], branch: str | None = "master"
+    ) -> str:
+        """A new commit of ``files`` at the head of ``branch``, or on no branch; its id."""
         commit = hashlib.sha1(f"{project} {branch} {next(self.count)}".encode()).hexdigest()
         self.trees[commit] = {path: as_bytes(c) for path, c in files.items()}
-        self.refs[(url(project), branch_ref(branch))] = commit
+        if branch is not None:
+            self.refs[(url(project), branch_ref(branch))] = commit
         return commit
 
     def head(self, project: str, branch: str = "master") -> str:
@@ -88,6 +93,15 @@ class Hosting:
     def cut(self, project: str, branch: str, start: str = "master") -> None:
         """A new branch ``branch`` at the head of ``start``."""
         self.refs[(url(project), branch_ref(branch))] = self.head(project, start)
+
+    def tag(self, project: str, tag: str, commit: str) -> None:
+        """The tag ``tag`` at ``commit``, put there anew when it was elsewhere."""
+        self.refs[(url(project), tag_ref(tag))] = commit
+
+    def checked_out(self, project: str, name: str) -> str:
+        """The commit a build under ``name`` checks out: its branch's head, else its tag's."""
+        found = self.refs.get((url(project), branch_ref(name)))
+        return found or self.refs[(url(project), tag_ref(name))]
 
 
 def files_under(
@@ -113,7 +127,8 @@ class FakeGit:
         return files_under(self.hosting.trees[commit], directory, wanted)
 
     def branches(self, repository: str) -> dict[str, str]:
-        return {branch_of(r): c for (u, r), c in self.hosting.refs.items() if u == repository}
+        found = ((branch_of(r), c) for (u, r), c in self.hosting.refs.items() if u == repository)
+        return {b: c for b, c in found if b is not None}
 
     def merge_base_times(self, repository: str, commits: Sequence[str]) -> dict[str, None]:
         return {c: None for c in commits}

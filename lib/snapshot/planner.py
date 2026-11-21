@@ -2,11 +2,11 @@
 
 ``make_plan(root, own, latest, git, pipelines)`` fixes, at one instant, the
 commit every project of the root's snapshot tree is built from, its key, and
-the branch name a build of it runs under, and returns the plan
-(``plan.Plan``). It is a function of its inputs: the root's facts (``Root``),
-the declaration read from the root's own commit, the root's latest successful
-downloads with the keys its plan step read for them, and two interfaces it
-asks and never writes to:
+the name a build of it runs under, and returns the plan (``plan.Plan``). It is
+a function of its inputs: the root's facts (``Root``), with what git said of
+the refs of its name, the declaration read from the root's own commit, the
+root's latest successful downloads with the keys its plan step read for them,
+and two interfaces it asks and never writes to:
 
 - ``git.Git``: ``commits_of`` (the commits of full refs), ``read_files`` (the
   files of another repository's commit), and ``branches`` and
@@ -26,22 +26,26 @@ not asked about. The walk is breadth first from the root; each project is
 resolved once, for the first consumer that reaches it (consumers in the order
 reached, their dependencies sorted):
 
-1. The root, at its own commit and ref, with its own declaration. Its repository is Buildkite's answer for its slug. Its release line
-   (``lines.release_line`` of that repository and its branch) is found the
-   first time a dependency without a pin is placed, and only then. Its
-   declaration may hold latest successful dependencies: the keys read for
-   them are part of its key.
+1. The root, at its own commit, with its own declaration. Its repository is
+   Buildkite's answer for its slug. Its ref is the branch of its name when its
+   repository has one, else the tag of its name: a root at a tag; a name that
+   is neither is planned as the branch it names (``root_ref``). The release
+   line of a root on a branch (``lines.release_line`` of that repository and
+   its branch) is found the first time a dependency without a pin is placed,
+   and only then; that of a root at a tag never. Its declaration may hold
+   latest successful dependencies: the keys read for them are part of its key.
 2. For each snapshot dependency of a node, in this order:
 
    a. Buildkite's facts of the project, for its repository; a 404 fails the
       plan;
-   b. its ref: its pin; else the root's branch when its repository has it;
-      else the root's release line when its repository has it; else
-      ``master``; else ``main``. A pin names ``refs/heads/<branch>`` or
-      ``refs/tags/<tag>``: any other text is a ref no repository has;
+   b. its ref: its pin; else, under a root at a tag, that tag and nothing
+      else; else the root's branch when its repository has it; else the
+      root's release line when its repository has it; else ``master``; else
+      ``main``. A pin names ``refs/heads/<branch>`` or ``refs/tags/<tag>``:
+      any other text is a ref no repository has;
    c. its commit, ``git.commits_of``, a tag peeled; the root's repository and
-      branch give the root's own commit. A ref that does not exist refuses
-      the project;
+      ref give the root's own commit. A ref that does not exist refuses the
+      project;
    d. the conditions of section 3, the first that fails refusing the project
       with its own message (``first_unmet``): Buildkite's configuration runs
       ``.buildkite/pipeline.py``; that file at the commit has the runner's
@@ -63,13 +67,13 @@ reached, their dependencies sorted):
 5. A cycle fails the plan and is named. Then, dependencies first:
 
    - the branches: the name a started build runs under, whose latest files
-     its promotes write. A node runs under its own branch only when it runs
-     as itself (``runs_as_itself``): its build is the one its own pipeline
-     would make for that branch, as far as the plan shows. Any other node runs
-     under ``snapshot/<root branch>``, which no branch has, and writes no
-     latest file. The rule needs where each pin was written
-     (``pin_writers``), and the root's repository: the plan knows the release
-     line of that repository only;
+     its promotes write. A node runs under the name of its ref, a branch's or
+     a tag's, only when it runs as itself (``runs_as_itself``): its build is
+     the one its own pipeline would make under that name, as far as the plan
+     shows. Any other node runs under ``snapshot/<root name>``, which no
+     branch has, and writes no latest file. The rule needs where each pin was
+     written (``pin_writers``), and the root's repository: the plan knows the
+     release line of that repository only;
    - the keys, from the plan itself (``plan.keyed``): what a node's key stands
      for is its commit and the keys of its snapshot dependencies, for the root
      also the keys read for its latest successful downloads, with the plan id
@@ -84,7 +88,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
-from ..forms import SNAPSHOT_BRANCH_PREFIX
+from ..forms import SNAPSHOT_BRANCH_PREFIX, name_of
 from .buildkite import PipelineFacts, PipelineNotFound
 from .declaration import (
     BUILDKITE_DIR,
@@ -96,7 +100,7 @@ from .declaration import (
     is_template_path,
     read_declaration,
 )
-from .git import Git, branch_of, branch_ref
+from .git import Git, branch_of, branch_ref, is_tag, tag_ref
 from .lines import is_release_line, release_line
 from .plan import (
     REBUILD_ALL,
@@ -133,19 +137,49 @@ Pipelines = Callable[[str], PipelineFacts]
 
 @dataclass(frozen=True)
 class Root:
-    """The root build: its pipeline, branch and commit, and how its plan is identified.
+    """The root build: its pipeline, name and commit, and how its plan is identified.
 
-    ``commit`` is the commit checked out (``git rev-parse HEAD``),
-    ``build_id`` the build's uuid (the plan id), ``rebuild`` the setting
-    ``rebuild_setting`` gives.
+    ``name`` is the name it runs under (``BUILDKITE_BRANCH``), and ``refs``
+    git's answer for the refs that name may be (``name_refs``): each that its
+    repository has, with its commit, a tag peeled. ``commit`` is the commit
+    checked out (``git rev-parse HEAD``), ``build_id`` the build's uuid (the
+    plan id), ``rebuild`` the setting ``rebuild_setting`` gives.
     """
 
     project: str
-    branch: str
+    name: str
     commit: str
+    refs: Mapping[str, str]
     build_id: str
     build_number: int
     rebuild: str = REBUILD_NONE
+
+
+def name_refs(name: str) -> tuple[str, str]:
+    """The refs a root's name may be, in the order they count: its branch, then its tag. Its
+    plan step asks git for both, and for the tag peeled, in one question."""
+    return branch_ref(name), tag_ref(name)
+
+
+def named_ref(name: str, refs: Mapping[str, str]) -> str:
+    """Where a root of ``name`` is taken from, of git's answer ``refs`` for ``name_refs``: the
+    first of them its repository has; a name that is neither is planned as the branch it
+    names."""
+    return next((r for r in name_refs(name) if r in refs), branch_ref(name))
+
+
+def root_ref(root: Root) -> str:
+    """Where ``root`` is taken from (``named_ref``)."""
+    return named_ref(root.name, root.refs)
+
+
+@dataclass(frozen=True)
+class Place:
+    """Where the chain takes a project from: its repository, the full ref, and its commit."""
+
+    repository: str
+    ref: str
+    commit: str
 
 
 def rebuild_setting(value: str | None) -> str:
@@ -178,13 +212,15 @@ Commits = Callable[[str, Sequence[str]], Mapping[str, str]]
 FirstRef = Callable[[str, Sequence[str]], "tuple[str, str] | None"]
 
 
-def first_ref_asked_once(commits_of: Commits, known: Mapping[tuple[str, str], str]) -> FirstRef:
+def first_ref_asked_once(
+    commits_of: Commits, known: Mapping[tuple[str, str], str | None]
+) -> FirstRef:
     """The first of ``refs`` that ``url`` has, asking each repository for each ref at most once.
 
     A ref after the first one known to exist cannot be the answer, so it is
     not asked; the refs before it that were not asked before go into one
     call of ``commits_of``. ``known`` maps ``(repository, ref)`` to commits
-    known beforehand.
+    known beforehand, None for a ref known to be absent.
     """
     memo: dict[tuple[str, str], str | None] = dict(known)
 
@@ -207,8 +243,9 @@ class Sources:
     """What the walk asks, each question answered once, however often the walk is made.
 
     ``line`` is the root's release line, found the first time a dependency
-    without a pin asks for it: finding it lists the root's repository and
-    fetches every line's tip into the checkout.
+    without a pin asks for it, which only one under a root on a branch does:
+    finding it lists the root's repository and fetches every line's tip into
+    the checkout.
     """
 
     pipeline: Callable[[str], PipelineFacts]
@@ -217,34 +254,29 @@ class Sources:
     line: Callable[[], str]
 
 
-def asked_once(
-    git: Git, pipeline: Callable[[str], PipelineFacts], repository: str, branch: str, commit: str
-) -> Sources:
-    """``Sources`` over git and a memoised lookup, for a root on ``branch`` at ``commit``.
+def known_refs(root: Root, place: Place) -> dict[tuple[str, str], str | None]:
+    """What git said of the refs of the root's name, in its repository: each at its commit, an
+    absent one None; and the root's own ref at the root's commit, so another pipeline of that
+    repository is planned at the root's commit, also when the ref moved since."""
+    asked = {(place.repository, r): root.refs.get(r) for r in name_refs(root.name)}
+    return {**asked, (place.repository, place.ref): place.commit}
 
-    The root's branch of its ``repository`` is known to be at its commit, so
-    another pipeline of that repository is planned at the root's commit.
-    """
+
+def asked_once(
+    git: Git, pipeline: Callable[[str], PipelineFacts], root: Root, place: Place
+) -> Sources:
+    """``Sources`` over git and a memoised lookup, for ``root`` taken from ``place``."""
     return Sources(
         pipeline=pipeline,
-        first_ref=first_ref_asked_once(git.commits_of, {(repository, branch_ref(branch)): commit}),
+        first_ref=first_ref_asked_once(git.commits_of, known_refs(root, place)),
         files=functools.cache(lambda url, c: git.read_files(url, c, DIRECTORY, counts)),
-        line=functools.cache(lambda: release_line(git, repository, branch)),
+        line=functools.cache(lambda: release_line(git, place.repository, root.name)),
     )
 
 
 # ---------------------------------------------------------------------------
 # Nodes, and projects that cannot be nodes
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Place:
-    """Where the chain takes a project from: its repository, the full ref, and its commit."""
-
-    repository: str
-    ref: str
-    commit: str
 
 
 @dataclass(frozen=True)
@@ -397,9 +429,35 @@ def shown_pin(pin: Pin) -> str:
     return f"{pin.ref} (in {pin.path} of {pin.node} at {pin.commit})"
 
 
-def default_refs(context: str, line: str) -> tuple[str, ...]:
-    """The refs a dependency without a pin is taken from, in the order they are tried."""
-    return tuple(dict.fromkeys(branch_ref(b) for b in (context, line, *LAST_RESORTS)))
+def default_refs(root: str, line: Callable[[], str]) -> tuple[str, ...]:
+    """The refs a dependency without a pin is taken from, in the order they are tried.
+
+    ``root`` is the root's ref. Under a root at a tag, that tag and nothing
+    else: a release takes no dependency from another ref. Under a root on a
+    branch, that branch, its release line (``line``, looked for only here),
+    ``master`` and ``main``.
+    """
+    if is_tag(root):
+        return (root,)
+    return tuple(dict.fromkeys(branch_ref(b) for b in (name_of(root), line(), *LAST_RESORTS)))
+
+
+def unplaced(
+    project: str, repository: str, reached: Reached, root: str, refs: Sequence[str]
+) -> Refused:
+    """A project whose ``repository`` has none of ``refs``, the refs it may be taken from under
+    a root of ref ``root``."""
+    if is_tag(root):
+        tag = name_of(root)
+        return Refused(
+            f"{project} cannot be planned: {repository} has no tag {tag}, and a build at a tag "
+            f"takes every dependency from the same tag. {dependency_of(reached)} Way out: push "
+            f"the tag {tag} to {repository}."
+        )
+    return Refused(
+        f"{project} cannot be planned: {repository} has none of "
+        f"{', '.join(refs)}. {dependency_of(reached)}"
+    )
 
 
 def place_of_pin(project: str, repository: str, pin: Pin, src: Sources) -> Place | Refused:
@@ -413,20 +471,17 @@ def place_of_pin(project: str, repository: str, pin: Pin, src: Sources) -> Place
 
 
 def place_by_default(
-    project: str, repository: str, reached: Reached, context: str, src: Sources
+    project: str, repository: str, reached: Reached, root: str, src: Sources
 ) -> Place | Refused:
     """The first of ``default_refs`` that ``repository`` has; none refuses the project.
 
-    ``context`` is the root's branch. All of them are asked in one question.
+    ``root`` is the root's ref. All of them are asked in one question.
     """
-    refs = default_refs(context, src.line())
+    refs = default_refs(root, src.line)
     found = src.first_ref(repository, refs)
     if found is not None:
         return Place(repository, *found)
-    return Refused(
-        f"{project} cannot be planned: {repository} has none of "
-        f"{', '.join(refs)}. {dependency_of(reached)}"
-    )
+    return unplaced(project, repository, reached, root, refs)
 
 
 def facts_of(project: str, reached: Reached, src: Sources) -> PipelineFacts:
@@ -437,13 +492,16 @@ def facts_of(project: str, reached: Reached, src: Sources) -> PipelineFacts:
         raise PlanError(f"{exc}. {dependency_of(reached)}") from exc
 
 
-def resolve(project: str, reached: Reached, pin: Pin | None, context: str, src: Sources) -> Found:
-    """Where the chain takes ``project`` from, and whether it can give a snapshot there."""
+def resolve(project: str, reached: Reached, pin: Pin | None, root: str, src: Sources) -> Found:
+    """Where the chain takes ``project`` from, and whether it can give a snapshot there.
+
+    ``root`` is the root's ref.
+    """
     facts = facts_of(project, reached, src)
     if pin is not None:
         place = place_of_pin(project, facts.repository, pin, src)
     else:
-        place = place_by_default(project, facts.repository, reached, context, src)
+        place = place_by_default(project, facts.repository, reached, root, src)
     if isinstance(place, Refused):
         return place
     found = first_unmet(project, place, facts, src)
@@ -457,12 +515,10 @@ def resolve(project: str, reached: Reached, pin: Pin | None, context: str, src: 
 # ---------------------------------------------------------------------------
 
 
-def walk(
-    root: str, first: Member, context: str, pins: Mapping[str, Pin], src: Sources
-) -> dict[str, Found]:
+def walk(root: str, first: Member, pins: Mapping[str, Pin], src: Sources) -> dict[str, Found]:
     """Every project of the tree of ``root``, breadth first, each resolved once.
 
-    ``context`` is the root's branch. A refused project is not descended into.
+    ``first`` is the root as a node. A refused project is not descended into.
     """
     nodes: dict[str, Found] = {root: first}
     queue = [(root, first)]
@@ -471,7 +527,8 @@ def walk(
         for project, entry in snapshot_entries(node.declaration).items():
             if project in nodes:
                 continue
-            found = resolve(project, Reached(consumer, entry), pins.get(project), context, src)
+            reached = Reached(consumer, entry)
+            found = resolve(project, reached, pins.get(project), first.place.ref, src)
             nodes[project] = found
             if isinstance(found, Member):
                 queue.append((project, found))
@@ -523,7 +580,7 @@ def settled_walk(root: Root, first: Member, src: Sources) -> dict[str, Found]:
     pins = chain_pins({root.project: first})
     tried: list[dict[str, str]] = []
     while True:
-        nodes = walk(root.project, first, root.branch, pins, src)
+        nodes = walk(root.project, first, pins, src)
         found = chain_pins(nodes)
         if pin_refs(found) == pin_refs(pins):
             return nodes
@@ -597,11 +654,11 @@ def runs_as_itself(
     writers: Mapping[str, frozenset[str]],
     root: Place,
 ) -> bool:
-    """Whether a build of ``p`` is the build its own pipeline would make for its branch.
+    """Whether a build of ``p`` is the build its own pipeline would make under the name of its
+    ref, a branch's or a tag's.
 
     Its tree is ``p`` and the nodes below it; ``root`` is where the root is
-    taken from. A node at a tag never runs as itself. A node on a branch does
-    when one of these holds:
+    taken from. It does when one of these holds:
 
     1. Its ref is the root's, no node below it was placed by a pin written
        outside its tree, and every node below it that no pin written inside
@@ -609,14 +666,14 @@ def runs_as_itself(
        root's. Its own build takes a dependency without a pin from its own
        line, where the chain takes it from the root's; the two are one line
        when ``p`` is of the root's repository, or when the root's branch is a
-       line, which is then the line of both.
+       line, which is then the line of both. Under a root at a tag every node
+       that no pin placed is at that tag, as in the node's own build.
     2. Its ref is a release line, and every node below it is at that ref or
-       was placed by a pin written inside its tree.
+       was placed by a pin written inside its tree. A tag is never a line.
     """
     place = tree[p].place
     branch = branch_of(place.ref)
-    if branch is None:
-        return False
+    line = branch is not None and is_release_line(branch)
     inside = below[p] | {p}
 
     def pinned_from_inside(m: str) -> bool:
@@ -625,28 +682,25 @@ def runs_as_itself(
     def at_its_ref(m: str) -> bool:
         return tree[m].place.ref == place.ref
 
-    same_line = place.repository == root.repository or is_release_line(branch)
+    same_line = place.repository == root.repository or line
 
     def placed_as_by_itself(m: str) -> bool:
         if m in writers:
             return pinned_from_inside(m)
         return same_line or at_its_ref(m)
 
-    on_roots_branch = place.ref == root.ref and all(placed_as_by_itself(m) for m in below[p])
-    on_its_line = is_release_line(branch) and all(
-        at_its_ref(m) or pinned_from_inside(m) for m in below[p]
-    )
-    return on_roots_branch or on_its_line
+    on_roots_ref = place.ref == root.ref and all(placed_as_by_itself(m) for m in below[p])
+    on_its_line = line and all(at_its_ref(m) or pinned_from_inside(m) for m in below[p])
+    return on_roots_ref or on_its_line
 
 
-def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], context: str) -> str:
-    """The branch a build of ``p`` runs under: its own when it runs as itself, else another.
+def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], name: str) -> str:
+    """The name a build of ``p`` runs under: its ref's when it runs as itself, else another.
 
-    A node that runs as itself is on a branch (``runs_as_itself``). The other
-    is ``snapshot/<root branch>``: no branch has that name, so a build under it
-    writes no latest file.
+    The other is ``snapshot/<name>``, ``name`` being the root's: no branch has
+    that name, so a build under it writes no latest file.
     """
-    return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + context
+    return name_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + name
 
 
 def planned_node(n: Member, branch: str, latest: tuple[Latest, ...]) -> Planned:
@@ -672,18 +726,17 @@ def make_plan(
     Buildkite and of templates pass through unchanged.
     """
     pipeline = functools.cache(pipelines)
-    repository = pipeline(root.project).repository
-    first = Member(Place(repository, branch_ref(root.branch), root.commit), own)
-    src = asked_once(git, pipeline, repository, root.branch, root.commit)
+    first = Member(Place(pipeline(root.project).repository, root_ref(root), root.commit), own)
+    src = asked_once(git, pipeline, root, first.place)
     tree = tree_of(settled_walk(root, first, src))
     order = bottom_up(tree, root.project)
     below = compute_below(tree, order)
     writers = pin_writers(tree)
     as_itself = {p: runs_as_itself(p, tree, below, writers, first.place) for p in order}
-    branches = {p: runs_under(p, as_itself[p], tree, root.branch) for p in order}
+    branches = {p: runs_under(p, as_itself[p], tree, root.name) for p in order}
     unkeyed = Plan(
         id=root.build_id,
-        context=root.branch,
+        context=root.name,
         rebuild=root.rebuild,
         first=First(root.project, root.build_number),
         projects={

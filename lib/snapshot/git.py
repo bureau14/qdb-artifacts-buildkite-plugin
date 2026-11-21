@@ -86,6 +86,15 @@ def branch_ref(branch: str) -> str:
     return BRANCH_PREFIX + branch
 
 
+def tag_ref(tag: str) -> str:
+    """The full ref of ``tag``."""
+    return TAG_PREFIX + tag
+
+
+def is_tag(ref: str) -> bool:
+    return ref.startswith(TAG_PREFIX)
+
+
 def branch_of(ref: str) -> str | None:
     """The branch a full ref names; None for a tag."""
     return ref[len(BRANCH_PREFIX) :] if ref.startswith(BRANCH_PREFIX) else None

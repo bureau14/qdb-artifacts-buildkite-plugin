@@ -3,12 +3,13 @@ read once by its plan step.
 
 Such a download is not planned: the key of each step it takes is the one that
 project's latest files name, found by the walk the jobs and the library take
-(``resolve.named_on_first_ref``, ``resolve.newest_on_first_ref``). The plan
-step reads them once, before it plans, and the plan holds them, so its second
-run and every job of its build take the same keys; the build's key holds them,
-so the build is reused while the latest files name the same keys. A download
-that finds no latest file fails the plan before anything runs, rather than its
-job when it runs.
+(``resolve.named_on_first_ref``, ``resolve.newest_on_first_ref``). Under a
+first build at a tag it reads the entry's own branch alone: a release takes
+nothing from master. The plan step reads them once, before it plans, and the
+plan holds them, so its second run and every job of its build take the same
+keys; the build's key holds them, so the build is reused while the latest
+files name the same keys. A download that finds no latest file fails the plan
+before anything runs, rather than its job when it runs.
 """
 
 from __future__ import annotations
@@ -16,10 +17,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from .. import layout
+from ..forms import name_of
 from ..layout import Folder
 from ..resolve import named_on_first_ref, newest_on_first_ref, walked_refs
 from .declaration import LATEST_SUCCESSFUL, Declaration, declared_path
 from .plan import Latest, LatestDownload, PlanError
+
+
+def read_refs(d: LatestDownload, at_tag: bool) -> tuple[str, ...]:
+    """The branches the read of ``d`` tries, in order: under a first build at a tag the
+    entry's own alone, else those of the walk."""
+    return (d.ref,) if at_tag else walked_refs(d.ref, d.strict)
 
 
 def read_keys(store, prefix: str, d: LatestDownload, refs: Sequence[str]) -> dict[str, str | None]:
@@ -60,37 +68,54 @@ def missing_newest(prefix: str, d: LatestDownload, refs: Sequence[str], template
     )
 
 
+def at_tag_sentence(d: LatestDownload) -> str:
+    """What a first build at a tag adds to why ``d`` cannot be planned: the two ways out."""
+    return (
+        f" A build at a tag reads no other branch: build {d.project} under the name "
+        f"{name_of(d.ref)}, or write the branch to take as the git_ref of that entry."
+    )
+
+
 def missing_lines(
     prefix: str,
     d: LatestDownload,
     refs: Sequence[str],
     keys: Mapping[str, str | None],
     template: str,
+    at_tag: bool,
 ) -> list[str]:
     """Why ``d`` cannot be planned with the ``keys`` read on ``refs``: a line per step it names
     that has no key, or one when it names none and none was found; no line when it can be.
-    ``template`` is where its entry is written."""
+    ``template`` is where its entry is written; ``at_tag`` whether the first build is at a
+    tag."""
     if d.step is None:
-        return [] if keys else [missing_newest(prefix, d, refs, template)]
-    return [missing_named(prefix, d, s, refs, template) for s, k in keys.items() if k is None]
+        found = [] if keys else [missing_newest(prefix, d, refs, template)]
+    else:
+        found = [missing_named(prefix, d, s, refs, template) for s, k in keys.items() if k is None]
+    added = at_tag_sentence(d) if at_tag else ""
+    return [line + added for line in found]
 
 
 def read_latest(
-    store, prefix: str, downloads: Sequence[LatestDownload], declaration: Declaration
+    store,
+    prefix: str,
+    downloads: Sequence[LatestDownload],
+    declaration: Declaration,
+    at_tag: bool,
 ) -> tuple[Latest, ...]:
     """Each of ``downloads``, once, with the key of each step it takes; a download that finds
     none fails the plan, every such download named.
 
     ``declaration`` is that of the build's own commit, which names the
-    template of each download.
+    template of each download; ``at_tag`` whether the build is at a tag.
     """
-    refs = {d: walked_refs(d.ref, d.strict) for d in downloads}
+    refs = {d: read_refs(d, at_tag) for d in downloads}
     keys = {d: read_keys(store, prefix, d, r) for d, r in refs.items()}
     missing = [
         line
         for d, r in refs.items()
         for line in missing_lines(
-            prefix, d, r, keys[d], declared_path(declaration, d.project, LATEST_SUCCESSFUL)
+            prefix, d, r, keys[d], declared_path(declaration, d.project, LATEST_SUCCESSFUL), at_tag
         )
     ]
     if missing:

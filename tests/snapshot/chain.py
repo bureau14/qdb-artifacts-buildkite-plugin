@@ -417,18 +417,29 @@ class World:
         packaged = [promoted_again(name, v, entries(v)) for v in p.packaged]
         return {"steps": built + checks + packaged}
 
-    def commit(self, name: str, branch: str = "master") -> str:
-        """A new commit of the project's repository as its ``Project`` says, on ``branch``."""
+    def commit(self, name: str, branch: str | None = "master") -> str:
+        """A new commit of the project's repository as its ``Project`` says, on ``branch``, or
+        on no branch."""
         p = self.projects[name]
         text = yaml.safe_dump(self.template(name))
         files = {".buildkite/steps.yml": text, ".buildkite/pipeline.py": p.pipeline_py}
         return self.hosting.commit(name, files, branch)
 
+    def tag(self, name: str, tag: str) -> str:
+        """A new commit of the project's repository on no branch, and the tag ``tag`` put on it;
+        the commit."""
+        commit = self.commit(name, branch=None)
+        self.hosting.tag(name, tag, commit)
+        return commit
+
     # -- builds ------------------------------------------------------------
 
-    def build(self, project: str, branch: str = "master", **env: str) -> Build:
-        """A build of ``project`` started by a person, played to its end."""
-        return self.play(self.start(project, branch, None, env))
+    def build(
+        self, project: str, branch: str = "master", commit: str | None = None, **env: str
+    ) -> Build:
+        """A build of ``project`` started by a person under the name ``branch``, played to its
+        end: of ``commit``, else of the head of the branch, else of the tag, of that name."""
+        return self.play(self.start(project, branch, commit, env))
 
     def start(self, project: str, branch: str, commit: str | None, env: dict) -> Build:
         number, n = next(self.numbers[project]), next(self.ids)
@@ -438,7 +449,7 @@ class World:
             id=f"01900000-0000-7000-8000-{n:012x}",
             url=f"https://buildkite.example.test/example/{project}/builds/{number}",
             branch=branch,
-            commit=commit or self.hosting.head(project, branch),
+            commit=commit or self.hosting.checked_out(project, branch),
             env=dict(env),
             steps=[dict(ENTER), dict(LEAVE)],
         )

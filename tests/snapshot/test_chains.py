@@ -30,6 +30,7 @@ from lib.snapshot.buildkite import PipelineFacts
 from lib.snapshot.records import RULE
 
 MASTER = "refs/heads/master"
+TAG = "v1.0.0"
 
 
 def compiled_since(world, done: int) -> set[tuple[str, Folder]]:
@@ -72,21 +73,33 @@ def held_responsible(world, root_build) -> set[tuple[str, object]]:
     return found
 
 
+def taken_at(world, graph: dict, named: str) -> tuple[str, dict[str, str]]:
+    """The name a root of ``graph`` builds under, and the commit its plan takes each project at:
+    the branch master, at its head; a tag every project carries, on a commit of its own; a name
+    no repository has, as a Rebuild of a build of a deleted branch runs under, at master's
+    head."""
+    if named == "tag":
+        return TAG, {p: world.tag(p, TAG) for p in sorted(graph)}
+    heads = {p: world.hosting.head(p) for p in graph}
+    return ("master" if named == "branch" else "gone"), heads
+
+
+@pytest.mark.parametrize("named", ["branch", "tag", "neither"])
 def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
-    worlds, graph_root, shape
+    worlds, graph_root, shape, named
 ):
-    """A root's first build compiles every step of every project of its tree in one build,
-    each after its dependencies, at the commit the root planned, although every dependency
-    gets a new commit while the chain runs; every download of every node takes every step of
-    the dependency at the key the plan names, made by the build of the chain; every folder of
-    every project is made."""
+    """A root's first build, under a branch, a tag or a name that is neither, compiles every
+    step of every project of its tree in one build, each after its dependencies, at the commit
+    the root planned, although every dependency gets a new commit while the chain runs; every
+    download of every node takes every step of the dependency at the key the plan names, made
+    by the build of the chain; every folder of every project is made."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
-    heads = {p: world.hosting.head(p) for p in graph}
+    name, heads = taken_at(world, graph, named)
     world.at_gate = lambda build: world.commit(build.project)
 
-    top = world.build(root)
+    top = world.build(root, name, commit=heads[root])
 
     projects, every = tree(graph, root), folders(matrix, step_ids)
     made = makers(world, top, projects, every)
@@ -106,23 +119,39 @@ def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
     assert all(d.key == plan.projects[d.project].key for d in world.downloads)
 
 
-def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, shape):
-    """A root built again without a new commit is reused: it compiles nothing, triggers
-    nothing, uploads no pipeline and writes nothing into the bucket, and its plan names the
-    keys the first build made."""
+# The names of two builds of a root at one set of commits: a branch twice, or a branch and a
+# tag that every project carries on those commits, in either order.
+TWICE = {
+    "branch-then-branch": ("master", "master"),
+    "branch-then-tag": ("master", TAG),
+    "tag-then-branch": (TAG, "master"),
+}
+
+
+@pytest.mark.parametrize("twice", sorted(TWICE))
+def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, shape, twice):
+    """A root built again without a new commit, under the same name, or under a tag on the same
+    commits as a branch, either way round, is reused: it compiles nothing, triggers nothing,
+    uploads no pipeline, and its plan names the keys the first build made; it writes nothing
+    into the bucket but the latest files of its steps under its own name, naming its key."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
-    first = world.build(root)
+    for p in graph:
+        world.hosting.tag(p, TAG, world.hosting.head(p))
+    names = TWICE[twice]
+    first = world.build(root, names[0])
     done, stored = len(world.compiled), dict(world.store.objects)
 
-    again = world.build(root)
+    again = world.build(root, names[1])
 
     projects, every = tree(graph, root), folders(matrix, step_ids)
+    key = world.plan(again).projects[root].key.encode()
+    pointed = {layout.latest_file("", root, "refs/heads/" + names[1], f): key for f in every}
     assert again.state == "passed"
     assert (again.children, world.agents.uploads[again.id]) == ([], [])
     assert compiled_since(world, done) == set()
-    assert world.store.objects == stored
+    assert world.store.objects == {**stored, **pointed}
     assert makers(world, again, projects, every) == makers(world, first, projects, every)
 
 
@@ -359,18 +388,23 @@ def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_starte
     assert again == ([failed] if WHEN[when] else [])
 
 
-def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape):
+@pytest.mark.parametrize("name", ["master", TAG])
+def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape, name):
     """A literal git ref in one consumer's template pins a node: the chain builds it once, at
-    the head of that ref, and every download of it in the chain, on every platform and of
-    every step, takes what that build made."""
+    the head of that ref, also under a root at a tag that every project carries, and every
+    download of it in the chain, on every platform and of every step, takes what that build
+    made."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds(graph, *shape)
     pinned = world.commit(node, branch="3.14.x")
     consumer = first_consumer(lower_node)
     world.projects[consumer].pins[node] = "refs/heads/3.14.x"
     world.commit(consumer)
+    if name == TAG:
+        for p in sorted(graph):
+            world.tag(p, TAG)
 
-    top = world.build(root)
+    top = world.build(root, name)
 
     (built,) = world.builds_of(node)
     assert top.state == "passed"
@@ -390,20 +424,22 @@ def entries_of(document: str, project: str) -> list[dict]:
     return [e for e in found if e.get("project_id") == project]
 
 
-TOOLS_KEYS = {7: "7" * 40 + "-" + "7" * 32, 8: "8" * 40 + "-" + "8" * 32}
+TOOLS_KEYS = {n: str(n) * 40 + "-" + str(n) * 32 for n in (6, 7, 8)}
 
 
-def tools_made(world, wanted, number: int) -> None:
-    """tools' build ``number``, which made ``wanted`` at its key and promoted them on master."""
+def tools_made(world, wanted, number: int, ref: str = MASTER) -> None:
+    """tools' build ``number``, which made ``wanted`` at its key and promoted them under the
+    name of ``ref``."""
     key = TOOLS_KEYS[number]
     url = f"https://buildkite.example.test/example/tools/builds/{number}"
     build = Build(f"tools-build-{number}", number, url)
+    name = ref.split("/", 2)[2]
     for f in wanted:
         location = layout.step_folder("", "tools", key, f)
-        made = captured([("out/tools.bin", 5)], Uploaded("master", build))
+        made = captured([("out/tools.bin", 5)], Uploaded(name, build))
         at = "2026-11-19T00:00:00.000Z"
-        write_manifest(world.store, location, promoted_by(made, Promoted(at, "master", build)))
-        world.store.put(layout.latest_file("", "tools", MASTER, f), key.encode(), "")
+        write_manifest(world.store, location, promoted_by(made, Promoted(at, name, build)))
+        world.store.put(layout.latest_file("", "tools", ref, f), key.encode(), "")
 
 
 # Which steps of tools a root's latest successful download names: none, so it takes every
@@ -412,34 +448,45 @@ def tools_made(world, wanted, number: int) -> None:
 # builds.
 TAKEN = ("every-step", "named")
 
+# The name a root builds under, and the branch whose latest files of tools its plan step
+# reads: a branch tools lacks, whose walk goes on to master; or a tag every project carries,
+# whose read takes that name's branch alone, although master names another key of tools.
+READ_UNDER = {"feature": MASTER, TAG: "refs/heads/" + TAG}
 
-@pytest.mark.parametrize("taken", TAKEN)
+
+@pytest.mark.parametrize("taken, name", paired(TAKEN, sorted(READ_UNDER)), ids=str)
 def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_files_stay(
-    worlds, graph_root, shape, taken
+    worlds, graph_root, shape, taken, name
 ):
-    """A root on a branch that a project it takes as latest successful lacks reads, in its
-    plan step, through that project's latest files of master, the key of each step it takes:
-    without a step, of every step whose latest file names the newest key; of each step it
-    names, the key that step's own latest file names. It writes them into each of those
-    downloads and into its key.json, and its resume step and its jobs take them, although
-    the latest files move while its chain runs. Built again after they moved, it compiles
-    under a key that names the keys they name now; built once more, it is reused. Its
-    snapshot dependencies are built once."""
+    """A root that takes a project as latest successful reads, in its plan step, the key of
+    each step it takes through that project's latest files: under a branch the project lacks,
+    those of master; under a tag, those of the entry's own branch and of no other. Without a
+    step, of every step whose latest file names the newest key; of each step it names, the
+    key that step's own latest file names. It writes them into each of those downloads and
+    into its key.json, and its resume step and its jobs take them, although the latest files
+    move while its chain runs. Built again after they moved, it compiles under a key that
+    names the keys they name now; built once more, it is reused. Its snapshot dependencies
+    are built once."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     every = folders(matrix, step_ids)
     moves = every if taken == "every-step" else folders(matrix, step_ids[:1])
-    tools_made(world, every, 7)
+    tools_made(world, every, 6)
+    tools_made(world, every, 7, READ_UNDER[name])
     world.projects[root].latest = ("tools",)
     world.projects[root].latest_step = None if taken == "every-step" else list(step_ids)
     world.commit(root)
-    world.hosting.cut(root, "feature")
-    world.at_gate = lambda build: tools_made(world, moves, 8)
+    if name == TAG:
+        for p in sorted(graph):
+            world.hosting.tag(p, TAG, world.hosting.head(p))
+    else:
+        world.hosting.cut(root, name)
+    world.at_gate = lambda build: tools_made(world, moves, 8, READ_UNDER[name])
 
-    first = world.build(root, "feature")
+    first = world.build(root, name)
     world.at_gate = lambda build: None
-    moved, again = world.build(root, "feature"), world.build(root, "feature")
+    moved, again = world.build(root, name), world.build(root, name)
 
     read = {
         first: {f: TOOLS_KEYS[7] for f in every},
@@ -467,7 +514,20 @@ def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_f
     assert all(len(world.builds_of(p)) == 1 for p in below(graph, root))
 
 
-def cannot_give_a_snapshot(world, project: str, condition: str) -> None:
+def cannot_give_a_snapshot(world, at, condition: str) -> str:
+    """Make the node ``at`` names, or for a latest successful download its root, unable to give
+    what the plan needs by ``condition``; the name the root builds under."""
+    project = at.node
+    if condition == "untagged":
+        for p in sorted(world.projects.keys() - {project}):
+            world.tag(p, TAG)
+        return TAG
+    if condition == "latest-on-master-only":
+        tools_made(world, folders(("linux",), ("build",)), 7)
+        world.projects[at.root].latest = ("tools",)
+        for p in sorted(world.projects):
+            world.tag(p, TAG)
+        return TAG
     if condition == "buildkite":
         world.facts[project] = PipelineFacts(url(project), False)
     elif condition == "shape":
@@ -475,24 +535,28 @@ def cannot_give_a_snapshot(world, project: str, condition: str) -> None:
     else:
         world.projects[project].latest = ("tools",)
     world.commit(project)
+    return "master"
 
 
-CONDITIONS = ("buildkite", "shape", "latest")
+CONDITIONS = ("buildkite", "shape", "latest", "untagged", "latest-on-master-only")
 
 
 @pytest.mark.parametrize("lower_node, condition", paired(LOWER_NODES, CONDITIONS), ids=str)
 def test_a_dependency_that_cannot_give_a_snapshot_stops_the_plan(worlds, lower_node, condition):
-    """A snapshot dependency that cannot give a snapshot (Buildkite's configuration does not run
-    its pipeline.py, that file lacks the runner's call, or it takes a project as latest
-    successful) fails the root before anything is triggered: no plan, no trigger, no compile,
-    nothing stored."""
+    """A dependency that cannot give what the plan needs fails the root before anything is
+    triggered: no plan, no trigger, no compile, nothing stored. A snapshot dependency cannot
+    when Buildkite's configuration does not run its pipeline.py, that file lacks the runner's
+    call, it takes a project as latest successful, or under a root at a tag its repository
+    lacks the tag; a latest successful one, under a root at a tag, when the latest files of the
+    tag's name name no key of it, although master's do."""
     world = worlds(lower_node.graph)
-    cannot_give_a_snapshot(world, lower_node.node, condition)
+    name = cannot_give_a_snapshot(world, lower_node, condition)
+    stored = dict(world.store.objects)
 
-    top = world.build(lower_node.root)
+    top = world.build(lower_node.root, name)
 
     assert top.state == "failed"
-    assert (top.children, world.compiled, world.store.objects) == ([], [], {})
+    assert (top.children, world.compiled, world.store.objects) == ([], [], stored)
     assert "snapshot-plan" not in world.agents.meta_data[top.id]
 
 
@@ -589,27 +653,51 @@ def latest_refs(world, project: str) -> set[str]:
     return {"/".join(parts[1:-2]) for parts in found}
 
 
-@pytest.mark.parametrize("root_branch", ["master", "feature", "3.14.x"])
+# The names a root builds under, and what carries each: a branch that a node and every node
+# above it have, once also beside a tag of the same name that every project carries, which
+# the branch wins over; or a tag alone, that every project carries.
+CARRIED = {
+    "master": ("branch",),
+    "feature": ("branch", "tag"),
+    "3.14.x": ("branch",),
+    TAG: ("tag",),
+}
+
+
+@pytest.mark.parametrize("root_name", sorted(CARRIED))
 def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
-    worlds, graph_node, shape, root_branch
+    worlds, graph_node, shape, root_name
 ):
     """When a root builds a branch that a node and every node above it also have, each
-    triggered build runs under the branch the rule gives: its own when it is the build its own
-    pipeline would make, and then its promotes write that branch's latest files on every
-    platform; else snapshot/<root branch>, and then they write none."""
+    triggered build runs under the branch the rule gives, at the head of its branch: its own
+    when it is the build its own pipeline would make, and then its promotes write that
+    branch's latest files on every platform; else snapshot/<root branch>, and then they write
+    none. A tag of the same name changes none of it. When a root builds at a tag every project
+    carries, each triggered build runs at the tag's commit under the tag's name, and writes
+    latest files under it only."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     world = worlds(graph, *shape)
     branched = ({node} | above(graph, node)) & tree(graph, root)
-    for p in sorted(branched):
-        world.commit(p, branch=root_branch)
+    carried = CARRIED[root_name]
+    tagged = {p: world.tag(p, root_name) for p in sorted(graph)} if "tag" in carried else {}
+    if "branch" in carried:
+        for p in sorted(branched):
+            world.commit(p, branch=root_name)
 
-    top = world.build(root, branch=root_branch)
+    top = world.build(root, branch=root_name)
 
-    branch_of = {p: root_branch if p in branched else "master" for p in tree(graph, root)}
+    if "branch" in carried:
+        branch_of = {p: root_name if p in branched else "master" for p in tree(graph, root)}
+        expected = {
+            p: (runs_under(graph, p, branch_of, root_name), world.hosting.head(p, branch_of[p]))
+            for p in branch_of
+        }
+    else:
+        expected = {p: (root_name, tagged[p]) for p in tree(graph, root)}
     triggered = top.chain()[1:]
     assert top.state == "passed"
-    assert {b.project: b.branch for b in triggered} == {
-        b.project: runs_under(graph, b.project, branch_of, root_branch) for b in triggered
+    assert {b.project: (b.branch, b.commit) for b in triggered} == {
+        b.project: expected[b.project] for b in triggered
     }
     assert all(
         latest_refs(world, b.project)
@@ -618,47 +706,58 @@ def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
     )
 
 
-# Where a branch is cut at the commits a chain built: in every project of the tree, or in the
-# node of the failed step and the projects above it, so that the node is not the build its own
-# pipeline would make for the branch, unless nothing lies below it.
-CUTS = ("every-project", "the-node-and-above")
+# Where a name is put on the commits a chain built: a branch cut in every project of the tree,
+# or in the node of the failed step and the projects above it, so that the node is not the
+# build its own pipeline would make for the branch, unless nothing lies below it; or a tag on
+# every project of the tree.
+CUTS = {
+    "every-project": "feature",
+    "the-node-and-above": "feature",
+    "a-tag-on-every-project": TAG,
+}
 
 
-@pytest.mark.parametrize("cut", CUTS)
+@pytest.mark.parametrize("cut", sorted(CUTS))
 def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, graph_node, cut):
-    """After a chain in which one step of one platform of a node failed, a branch is cut at
-    the same commits, and the root's build on it builds that step again. Every build of that
-    chain that runs under the branch, at its newest commit, leaves the branch's latest file
-    of every step of its project naming its key, of the steps it found made as well as those
-    it promoted; one under a snapshot/ name leaves none, and neither does a project the chain
-    did not build. Once the root's branch has moved on to a newer commit and built it, a
-    build of the older commit, which is reused, leaves the root's latest files naming the
-    newer key."""
+    """After a chain in which one step of one platform of a node failed, a branch is cut, or a
+    tag put, at the same commits, and the root's build under that name builds that step
+    again. Every build of that chain that runs under the name, at the commit git names for
+    it, leaves the name's latest file of every step of its project naming its key, of the
+    steps it found made as well as those it promoted; one under a snapshot/ name leaves none,
+    and neither does a project the chain did not build. Once the root's name has moved on to a
+    newer commit and built it, a build of the older commit under the name, which is reused,
+    leaves the root's latest files naming the newer key."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = MATRICES["three"], STEP_IDS["build-notes"]
     world = worlds(graph, matrix, step_ids)
     world.broken.add((node, Folder(matrix[-1], step_ids[-1])))
     world.build(root)
     world.broken.clear()
-    projects = tree(graph, root)
-    cut_in = projects if cut == "every-project" else ({node} | above(graph, node)) & projects
+    projects, name = tree(graph, root), CUTS[cut]
+    cut_in = projects if cut != "the-node-and-above" else ({node} | above(graph, node)) & projects
     for p in cut_in:
-        world.hosting.cut(p, "feature")
+        if name == TAG:
+            world.hosting.tag(p, TAG, world.hosting.head(p))
+        else:
+            world.hosting.cut(p, name)
 
-    top = world.build(root, branch="feature")
+    top = world.build(root, branch=name)
     plan, every = world.plan(top), folders(matrix, step_ids)
-    named = {p: {f: world.latest(p, "refs/heads/feature", f) for f in every} for p in projects}
-    world.commit(root, branch="feature")
-    newer = world.build(root, branch="feature")
-    older = world.play(world.start(root, "feature", top.commit, {}))
+    named = {p: {f: world.latest(p, "refs/heads/" + name, f) for f in every} for p in projects}
+    if name == TAG:
+        world.tag(root, TAG)
+    else:
+        world.commit(root, branch=name)
+    newer = world.build(root, branch=name)
+    older = world.play(world.start(root, name, top.commit, {}))
 
     built = {b.project: b.branch for b in top.chain()}
     expected = {
-        p: {f: plan.projects[p].key if built.get(p) == "feature" else None for f in every}
+        p: {f: plan.projects[p].key if built.get(p) == name else None for f in every}
         for p in projects
     }
     snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
-    kept = {f: world.latest(root, "refs/heads/feature", f) for f in every}
+    kept = {f: world.latest(root, "refs/heads/" + name, f) for f in every}
     assert (top.state, newer.state, older.state) == ("passed", "passed", "passed")
     assert node in built
     assert named == expected

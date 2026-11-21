@@ -31,6 +31,7 @@ from typing import Any
 
 import yaml
 
+from ..forms import TAG_PREFIX
 from ..layout import is_step_id, not_a_step_id
 from .configuration import (
     GIT_REF,
@@ -406,13 +407,22 @@ def _shown_ref(value: Any) -> str:
     return "no git ref" if value is None else repr(value)
 
 
+# What a download at a tag's ref says besides: such a ref comes from Buildkite's tag field,
+# and the plan step reads the build's name alone.
+TAG_FIELD_REMEDY = (
+    ". Start a build at a tag with the tag's name in the branch field and Buildkite's tag "
+    "field empty."
+)
+
+
 def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> str | None:
     if isinstance(ref, str) and (ref == own_ref or ref in pins):
         return None
     declared = f" (declared: {', '.join(sorted(pins))})" if pins else ""
+    remedy = TAG_FIELD_REMEDY if isinstance(ref, str) and ref.startswith(TAG_PREFIX) else ""
     return (
         f"downloads {project} at {_shown_ref(ref)}, which is neither the build's own ref "
-        f"{own_ref} nor a pin declared for {project}{declared}"
+        f"{own_ref} nor a pin declared for {project}{declared}{remedy}"
     )
 
 
