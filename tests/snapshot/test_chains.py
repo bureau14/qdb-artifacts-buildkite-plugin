@@ -540,24 +540,26 @@ def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_f
 
 
 # The branches at which every step of a root's pipeline also downloads its own project, as a
-# compatibility test does, besides the build's own branch.
+# compatibility test does, besides the build's own branch; and the branch at which it pins a
+# dependency, a download of another project at another branch.
 ELSEWHERE = ("3.14.x", "runner")
+PINNED_AT = "3.13.x"
 
 
 def test_the_plan_steps_page_names_each_download_of_its_own_project_at_another_branch(
     worlds, graph_root, shape
 ):
     """When every step of a root's pipeline also downloads its own project at other branches,
-    and the root pins a dependency to another branch, the page of the root's plan step names
-    each download of its own project at another branch, with the step, its platform and that
-    branch, on a line of its own, and no other download."""
+    and the root pins a dependency to yet another branch, the page of the root's plan step
+    names each download of its own project at another branch, with the step, its platform and
+    that branch, on a line of its own, and no other download."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     world.build(root)
     pinned = graph[root][0]
-    world.commit(pinned, branch="3.14.x")
-    world.projects[root].pins[pinned] = "refs/heads/3.14.x"
+    world.commit(pinned, branch=PINNED_AT)
+    world.projects[root].pins[pinned] = branch_ref(PINNED_AT)
     world.projects[root].elsewhere = tuple((step_ids[0], branch_ref(b)) for b in ELSEWHERE)
     world.commit(root)
 
