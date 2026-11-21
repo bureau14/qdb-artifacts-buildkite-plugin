@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from ..layout import is_step_id
+from ..layout import is_step_id, not_a_step_id
 from .configuration import (
     GIT_REF,
     PLUGIN,
@@ -230,10 +230,7 @@ def step_id_problem(config: Any, block: str) -> str | None:
             "key, with the .buildkite/tools of that change (merge master)."
         )
     if not is_step_id(value):
-        return (
-            f'{value} is not a step id. A step id is lower-case letters, digits and "_", and '
-            "starts with a letter."
-        )
+        return not_a_step_id(value)
     return None
 
 

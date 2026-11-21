@@ -24,7 +24,7 @@ from pathlib import Path
 from .download import Entry
 from .errors import ArtifactsError
 from .key import KeyJson, key_of
-from .layout import Folder, is_step_id
+from .layout import Folder, is_step_id, not_a_step_id
 from .manifest import Build, Uploaded
 
 PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
@@ -221,10 +221,7 @@ def checked_step_id(value, platform, act):
             "upload."
         )
     if not is_step_id(value):
-        raise ArtifactsError(
-            f'{value} is not a step id. A step id is lower-case letters, digits and "_", and '
-            "starts with a letter."
-        )
+        raise ArtifactsError(not_a_step_id(value))
     return value
 
 

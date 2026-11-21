@@ -47,6 +47,7 @@ from .annotation import (
     refused_line,
     reused_annotation,
     shown_folders,
+    which_build,
 )
 from .buildkite import PipelineFacts, fetch_pipeline
 from .configuration import entry_steps
@@ -99,7 +100,7 @@ from .failing import Refusal, gated
 from .git import Git, RealGit, branch_ref
 from .job import Job, is_chain_node, job_of
 from .latest import read_latest
-from .plan import Plan, PlanError, encode_plan, short_commit
+from .plan import Plan, PlanError, encode_plan
 from .planner import Pipelines, Root, make_plan, rebuild_setting
 from .records import (
     GENERATOR_FAILED,
@@ -425,10 +426,7 @@ def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
     dependency that refused them, what leads to the remedy."""
     if c.template is not None:
         return refused_line(p, c, records[c.key])
-    lacks = (
-        f"{c.project} @ {short_commit(p.projects[c.project].commit)} ({c.key}) has no "
-        f"{shown_folders(c.missing)}"
-    )
+    lacks = f"{which_build(p, c)} has no {shown_folders(c.missing)}"
     if c.key in records:
         return f"{lacks}: its build {records[c.key].build.number} failed in this chain"
     return f"{lacks}: {left_no_record(p, c)}"

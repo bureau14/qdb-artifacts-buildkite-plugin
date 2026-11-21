@@ -37,6 +37,14 @@ def is_step_id(value: object) -> bool:
     return isinstance(value, str) and STEP_ID_FORM.fullmatch(value) is not None
 
 
+def not_a_step_id(value: object) -> str:
+    """Why ``value`` names no folder, as a job and the plan step say it."""
+    return (
+        f'{value} is not a step id. A step id is lower-case letters, digits and "_", and '
+        "starts with a letter."
+    )
+
+
 class Folder(NamedTuple):
     """One folder of a key: what one step made for one platform."""
 
