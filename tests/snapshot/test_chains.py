@@ -842,12 +842,14 @@ SAME, OTHER, NO_PLAN = "same", "other", "no-plan"
 
 @dataclasses.dataclass(frozen=True)
 class Own:
-    """The own build of a build started for a dependency: how it takes the projects below it,
-    and every ``(repository, ref)`` of another repository than its own whose answer it needed
-    (``answering``)."""
+    """The own build of a build started for a dependency: how it takes the projects below it;
+    every ``(repository, ref)`` of another repository than its own whose answer it needed
+    (``answering``); and whether the repository of a dependency lacked its branch, so that its
+    release line counted."""
 
     takes: str
     asked: frozenset
+    used_line: bool
 
 
 def asked_refs(questions) -> frozenset[tuple[str, str]]:
@@ -868,15 +870,18 @@ def own_build(world, graph: dict, plan, build) -> Own:
     before = len(world.git.asked)
     own = world.build(build.project, build.branch, build.commit)
     needed = [(r, answering(world.hosting, r, refs)) for r, refs in world.git.asked[before:]]
-    asked = frozenset((r, ref) for r, ref in asked_refs(needed) if r != url(build.project))
+    others = [(r, refs) for r, refs in needed if r != url(build.project)]
+    asked = asked_refs(others)
+    # Only a dependency without a pin is asked more than one ref, its branch first.
+    used_line = any(len(refs) > 1 for _, refs in others)
     if "snapshot-plan" not in world.agents.meta_data[own.id]:
-        return Own(NO_PLAN, asked)
+        return Own(NO_PLAN, asked, used_line)
     projects = world.plan(own).projects
     same = all(
         m in projects and projects[m].commit == plan.projects[m].commit
         for m in below(graph, build.project)
     )
-    return Own(SAME if same else OTHER, asked)
+    return Own(SAME if same else OTHER, asked, used_line)
 
 
 def line_of(world, project: str, planned) -> str | None:
@@ -921,8 +926,9 @@ def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_w
     a repository that has a branch of the first build's release line, which the plan then takes
     as its line, where its branch left another line. A build that leaves none has an own build
     that takes a project below it at another commit, or that cannot be planned, or whose
-    answers need what git did not tell the plan: a ref of another repository, or a release line
-    other than the one the plan takes it to have."""
+    answers need what git did not tell the plan: a ref of another repository, or, for a
+    dependency whose repository lacks its branch, a release line other than the one the plan
+    takes it to have."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = SHAPES[shaped]
     world = worlds(graph, matrix, step_ids)
@@ -952,7 +958,8 @@ def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_w
     wrong = {p for p in writes if own[p].takes != SAME}
     late = {p for p in last.keys() - writes if own[p].takes == SAME}
     accepted = {p for p in last if assumed[p] is not None and found[p] != assumed[p]}
-    untold = {p for p in last if own[p].asked - told or found[p] != assumed[p]}
+    line_untold = {p for p in last if own[p].used_line and found[p] != assumed[p]}
+    untold = {p for p in last if own[p].asked - told} | line_untold
     assert top.state == "passed"
     assert [b.branch for b in started] == [name_of(plan.projects[b.project].ref) for b in started]
     assert left == {p: latest_files(p) if p in writes else {} for p in last}
