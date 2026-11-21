@@ -95,6 +95,7 @@ from .edge import (
     made_only,
     manifests_at,
     opened_store,
+    own_planned,
     root_arrival,
     stored_records,
 )
@@ -296,10 +297,13 @@ PlanOf = Callable[[Job, PlanEdge, Generated], Placed]
 
 
 def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
-    """3, enter. A chain node loads the plan of its chain; a root makes it. Either shows it on
-    its page (``show_plan``)."""
+    """3, enter. A chain node loads the plan of its chain and checks that it plans the build at
+    the commit it checked out; a root makes it. Either shows it on its page (``show_plan``)."""
     if is_chain_node(job):
-        placed = Placed(chain_plan(job, edge), None)
+        p = chain_plan(job, edge)
+        # Before the page: a plan that does not plan this build fails it with its own message.
+        own_planned(job, edge, p)
+        placed = Placed(p, None)
     else:
         placed = root_plan(job, edge, generated)
     show_plan(job, edge, generated, placed.plan)
