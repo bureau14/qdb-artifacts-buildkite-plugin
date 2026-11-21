@@ -177,6 +177,21 @@ def which_build(plan: Plan, c: Cause) -> str:
     return f"{c.project} @ {commit} ({c.key})"
 
 
+def remedies(project: str, makes: Mapping[str, Sequence[str]]) -> list[str]:
+    """How the entry that asked ``project`` for steps it refused gets what it needs, ``makes``
+    being the step ids it makes on each refused platform: the steps made on every platform
+    that makes any, as the list to write; the download goes on a platform that makes none."""
+    some = [frozenset(ids) for ids in makes.values() if ids]
+    none = [p for p, ids in makes.items() if not ids]
+    found = []
+    if some:
+        needed = ", ".join(sorted(frozenset.intersection(*some)))
+        found.append(f"Write in it the steps it needs, as step: [{needed}].")
+    if none:
+        found.append(f"Remove the download of {project} on {', '.join(none)}.")
+    return found
+
+
 def refused_line(plan: Plan, c: Cause, r: Record) -> str:
     """What leads to the remedy of a dependency whose build ``r`` refused steps it does not
     make: what it does not make, what it makes on that platform, and the entry to change."""
@@ -184,10 +199,9 @@ def refused_line(plan: Plan, c: Cause, r: Record) -> str:
     makes = {x.folder.platform: x.promotes for x in r.refused}
     made = "; ".join(f"for {p} it makes {', '.join(ids) or 'nothing'}" for p, ids in makes.items())
     takes = "every step its templates name" if c.takes is None else ", ".join(c.takes)
-    needed = ", ".join(sorted(frozenset.intersection(*map(frozenset, makes.values()))))
     return (
         f"{which_build(plan, c)} does not make {folders}; {made}. The entry of {c.project} in "
-        f"{c.template} takes {takes}. Write in it the steps it needs, as step: [{needed}]."
+        f"{c.template} takes {takes}. {' '.join(remedies(c.project, makes))}"
     )
 
 
