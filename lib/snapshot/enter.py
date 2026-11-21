@@ -246,7 +246,7 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
     pipeline that has a snapshot to, so the record's reason is ``rule``.
     """
     try:
-        return frozenset(promotions(generated.doc, job.project))
+        return frozenset(promotions(generated.doc))
     except DocumentError as exc:
         raise reason_refusal(job, RULE, str(exc), origin, edge.clock()) from exc
 
@@ -435,7 +435,7 @@ def build_pipeline(
     out = planned(generated.doc, Rewrite(job.project, key, edge.plugin_commit(), taken, made))
     document = dump_document(out)
     if key is not None:
-        promotes = canonical_json(promote_entries(out, job.project)).decode("utf-8")
+        promotes = canonical_json(promote_entries(out)).decode("utf-8")
         edge.agent.meta_data_set(PROMOTES, promotes)
     edge.agent.meta_data_set(MODE, BUILT)
     edge.agent.pipeline_upload(document)

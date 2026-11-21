@@ -178,13 +178,14 @@ def taken_folders(entry: Mapping[Any, Any], steps: Sequence[str]) -> frozenset[F
 # ---------------------------------------------------------------------------
 
 
-def own_folders(step: Any, own: str, block: str) -> list[Folder]:
-    """The folders the own ``upload`` or ``promote`` blocks of ``step`` name: the block's
-    platform and the step id of its configuration, both named; in order."""
+def own_folders(step: Any, block: str) -> list[Folder]:
+    """The folders the ``upload`` or ``promote`` blocks of ``step`` name: the block's platform
+    and the step id of its configuration, both named; in order. A block makes a folder of the
+    pipeline's own project, as the job reads it."""
     found = []
     for config in plugin_configurations(step):
         b = plugin_block(config, block)
-        if b is None or other_project(b, own) is not None:
+        if b is None:
             continue
         platform, step_id = named_variant(b), named_step(config)
         if platform is not None and step_id is not None:
@@ -192,9 +193,9 @@ def own_folders(step: Any, own: str, block: str) -> list[Folder]:
     return found
 
 
-def made_folders(step: Any, own: str) -> frozenset[Folder]:
-    """What ``step`` makes: every folder its own upload or promote blocks name."""
-    return frozenset(own_folders(step, own, UPLOAD) + own_folders(step, own, PROMOTE))
+def made_folders(step: Any) -> frozenset[Folder]:
+    """What ``step`` makes: every folder its upload or promote blocks name."""
+    return frozenset(own_folders(step, UPLOAD) + own_folders(step, PROMOTE))
 
 
 def step_places(doc: Any) -> list[Any]:
@@ -215,7 +216,7 @@ def promoted_twice(f: Folder, first: tuple[int, Any], second: tuple[int, Any]) -
     )
 
 
-def promotions(doc: Any, own: str) -> dict[Folder, Any]:
+def promotions(doc: Any) -> dict[Folder, Any]:
     """``{folder: the step that promotes it}``; its keys are ``D``, what the pipeline makes.
 
     A folder promoted at two places is an error: the first to pass would
@@ -223,21 +224,21 @@ def promotions(doc: Any, own: str) -> dict[Folder, Any]:
     """
     found: dict[Folder, tuple[int, Any]] = {}
     for position, step in enumerate(step_places(doc), start=1):
-        for f in own_folders(step, own, PROMOTE):
+        for f in own_folders(step, PROMOTE):
             first = found.setdefault(f, (position, step))
             if first[0] != position:
                 raise promoted_twice(f, first, (position, step))
     return {f: step for f, (_, step) in found.items()}
 
 
-def promote_entries(doc: Any, own: str) -> list[dict[str, str]]:
+def promote_entries(doc: Any) -> list[dict[str, str]]:
     """``[{"step", "step_key", "variant"}]`` of the steps that promote: meta-data
     ``snapshot-promotes``, sorted.
 
     The leave step asks for a step's outcome by its key, so a step that
     promotes and has none is an error.
     """
-    keys = {f: step_key(s) for f, s in promotions(doc, own).items()}
+    keys = {f: step_key(s) for f, s in promotions(doc).items()}
     keyless = sorted(f for f, k in keys.items() if k is None)
     if keyless:
         raise DocumentError(f"the step that promotes {keyless[0]} has no key")
@@ -280,13 +281,13 @@ class Rewrite:
 # ---------------------------------------------------------------------------
 
 
-def is_replaced(step: Any, own: str, made: Mapping[Folder, Manifest]) -> bool:
+def is_replaced(step: Any, made: Mapping[Folder, Manifest]) -> bool:
     """True when ``step`` makes at least one folder and every one is made."""
-    folders = made_folders(step, own)
+    folders = made_folders(step)
     return bool(folders) and folders <= frozenset(made)
 
 
-def replaced_steps(doc: Any, own: str, made: Mapping[Folder, Manifest]) -> list[Any]:
+def replaced_steps(doc: Any, made: Mapping[Folder, Manifest]) -> list[Any]:
     """The steps of ``doc`` that completion replaces, in order.
 
     ``made`` is the manifest of each own folder made at the build's key. A
@@ -294,9 +295,9 @@ def replaced_steps(doc: Any, own: str, made: Mapping[Folder, Manifest]) -> list[
     ``D`` (``promotions``) and made (``is_replaced``); a made folder outside
     ``D`` replaces nothing.
     """
-    in_d = promotions(doc, own) if made else {}
+    in_d = promotions(doc) if made else {}
     done = {f: m for f, m in made.items() if f in in_d}
-    return [s for s in step_places(doc) if is_replaced(s, own, done)]
+    return [s for s in step_places(doc) if is_replaced(s, done)]
 
 
 # What decides whether and when a step runs; a replacement keeps them, so the
@@ -312,7 +313,7 @@ def replacement(step: Any, own: str, made: Mapping[Folder, Manifest]) -> dict[st
     for any step. The label is the step's with the builds that made its
     folders; the command says which build made each.
     """
-    folders = sorted(made_folders(step, own))
+    folders = sorted(made_folders(step))
     builds = {f: made[f].promoted.build for f in folders}
     numbers = sorted({b.number for b in builds.values()})
     by = f"build {numbers[0]}" if len(numbers) == 1 else f"builds {', '.join(map(str, numbers))}"
@@ -343,7 +344,7 @@ def needed_folders(
     ``SNAPSHOT_NEEDS``.
     """
     kept = copy.deepcopy(doc)
-    for s in replaced_steps(kept, own, made):
+    for s in replaced_steps(kept, made):
         replace_content(s, {})
     needs: dict[str, frozenset[Folder]] = {}
     for project, e in snapshot_dependencies(kept, own):
@@ -396,7 +397,7 @@ def planned(doc: Any, r: Rewrite) -> Any:
     - Every key that names the plugin names it at the plugin commit.
     """
     out = copy.deepcopy(doc)
-    for s in replaced_steps(out, r.own, r.made):
+    for s in replaced_steps(out, r.made):
         replace_content(s, replacement(s, r.own, r.made))
     for project, e in snapshot_dependencies(out, r.own):
         replace_content(e, keyed_entry(e, r.dependencies[project]))
