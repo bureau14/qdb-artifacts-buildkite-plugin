@@ -15,7 +15,7 @@ import glob
 from pathlib import Path
 
 from . import layout, transfer
-from .annotation import create_buildkite_annotation
+from .annotation import annotate_upload
 from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import ArtifactsError
@@ -197,7 +197,7 @@ def upload(
         log_promoted(folder, own.key, held)
     if annotate:
         title, shown = annotated(held, relative)
-        create_buildkite_annotation(cfg.artifacts_domain, location, shown, title)
+        annotate_upload(cfg.artifacts_domain, location, shown, title)
     else:
         log("  annotate=false; skipping Buildkite annotation")
     return held is None

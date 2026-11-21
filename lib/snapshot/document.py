@@ -73,7 +73,15 @@ from .declaration import (
     step_label,
     step_name,
 )
-from .plan import LatestDownload, Plan, Planned, dependencies_first, short_commit, trigger_label
+from .plan import (
+    LatestDownload,
+    LeftOut,
+    Plan,
+    Planned,
+    dependencies_first,
+    short_commit,
+    trigger_label,
+)
 
 RESUME_OPTION = "resume"
 
@@ -194,12 +202,12 @@ def entry_taking(
     )
 
 
-def outside_the_key(doc: Any, own: str, own_ref: str) -> list[tuple[str, str, str]]:
-    """``(step, platform, ref)`` of every download entry of ``doc`` of the pipeline's own
-    project ``own`` at a ref that is not the build's ``own_ref``, each once, in order: its job
-    reads that ref's latest build when it runs, and the key leaves it out."""
+def outside_the_key(doc: Any, own: str, own_ref: str) -> list[LeftOut]:
+    """Every download entry of ``doc`` of the pipeline's own project ``own`` at a ref that is
+    not the build's ``own_ref``, each once, in order: its job reads that ref's latest build
+    when it runs, and the key leaves it out."""
     found = (
-        (sd.step, named_variant(e), option_value(e, GIT_REF))
+        LeftOut(sd.step, named_variant(e), option_value(e, GIT_REF))
         for sd in pipeline_downloads(doc)
         for e in sd.entries
         if other_project(e, own) is None and option_value(e, GIT_REF) not in (None, "", own_ref)

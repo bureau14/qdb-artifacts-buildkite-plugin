@@ -27,7 +27,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from ..forms import name_of
 from ..layout import Folder
 from ..manifest import Build
-from .plan import Plan, short_commit, trigger_label
+from .plan import LeftOut, Plan, short_commit, trigger_label
 from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Cause, Record
 
 INDENT = "  "
@@ -79,20 +79,20 @@ def tree_lines(plan: Plan, project: str) -> list[str]:
     return lines
 
 
-def outside_line(project: str, step: str, platform: str, ref: str) -> str:
+def outside_line(project: str, o: LeftOut) -> str:
     """A download of the build's own project at another ref, which the key leaves out."""
     return (
-        f"not in the key: step {step} takes {project} {platform} of branch {name_of(ref)}; its "
-        "job reads that branch's latest build when it runs"
+        f"not in the key: step {o.step} takes {project} {o.platform} of branch "
+        f"{name_of(o.ref)}; its job reads that branch's latest build when it runs"
     )
 
 
-def plan_annotation(plan: Plan, project: str, outside: Sequence[tuple[str, str, str]]) -> str:
+def plan_annotation(plan: Plan, project: str, outside: Sequence[LeftOut]) -> str:
     """The plan as ``project`` builds it: the root's name, which Buildkite's branch field holds
     for a branch and a tag alike, and its rebuild setting; its tree; and each download of
-    ``outside``, ``(step, platform, ref)`` of the project's own at another ref."""
+    ``outside``, of the project's own at another ref."""
     context = f"branch {plan.context}, rebuild {plan.rebuild}"
-    left_out = [outside_line(project, *o) for o in outside]
+    left_out = [outside_line(project, o) for o in outside]
     lines = [context, *tree_lines(plan, project), *left_out]
     return f"{plan_heading(plan, project)}\n\n{fenced(lines)}"
 
@@ -183,13 +183,10 @@ def remedies(project: str, makes: Mapping[str, Sequence[str]]) -> list[str]:
     that makes any, as the list to write; the download goes on a platform that makes none."""
     some = [frozenset(ids) for ids in makes.values() if ids]
     none = [p for p, ids in makes.items() if not ids]
-    found = []
-    if some:
-        needed = ", ".join(sorted(frozenset.intersection(*some)))
-        found.append(f"Write in it the steps it needs, as step: [{needed}].")
-    if none:
-        found.append(f"Remove the download of {project} on {', '.join(none)}.")
-    return found
+    needed = ", ".join(sorted(frozenset.intersection(*some))) if some else ""
+    write = [f"Write in it the steps it needs, as step: [{needed}]."] if some else []
+    remove = [f"Remove the download of {project} on {', '.join(none)}."] if none else []
+    return [*write, *remove]
 
 
 def refused_line(plan: Plan, c: Cause, r: Record) -> str:

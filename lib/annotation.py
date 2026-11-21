@@ -58,7 +58,7 @@ def job_heading():
     return f"## {os.environ.get('BUILDKITE_LABEL', 'unknown job')}"
 
 
-def create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes, title):
+def annotate_upload(artifacts_domain, prefix, files_with_sizes, title):
     """Annotate the job with ``title`` and a link to every file under ``prefix``."""
     if not artifacts_domain:
         log("  Artifacts domain not configured; skipping adding Buildkite annotation")

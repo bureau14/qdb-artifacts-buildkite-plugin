@@ -429,26 +429,26 @@ def shown_pin(pin: Pin) -> str:
     return f"{pin.ref} (in {pin.path} of {pin.node} at {pin.commit})"
 
 
-def default_refs(root: str, line: Callable[[], str]) -> tuple[str, ...]:
+def default_refs(root_at: str, line: Callable[[], str]) -> tuple[str, ...]:
     """The refs a dependency without a pin is taken from, in the order they are tried.
 
-    ``root`` is the root's ref. Under a root at a tag, that tag and nothing
+    ``root_at`` is the root's ref. Under a root at a tag, that tag and nothing
     else: a release takes no dependency from another ref. Under a root on a
     branch, that branch, its release line (``line``, looked for only here),
     ``master`` and ``main``.
     """
-    if is_tag(root):
-        return (root,)
-    return tuple(dict.fromkeys(branch_ref(b) for b in (name_of(root), line(), *LAST_RESORTS)))
+    if is_tag(root_at):
+        return (root_at,)
+    return tuple(dict.fromkeys(branch_ref(b) for b in (name_of(root_at), line(), *LAST_RESORTS)))
 
 
 def unplaced(
-    project: str, repository: str, reached: Reached, root: str, refs: Sequence[str]
+    project: str, repository: str, reached: Reached, root_at: str, refs: Sequence[str]
 ) -> Refused:
     """A project whose ``repository`` has none of ``refs``, the refs it may be taken from under
-    a root of ref ``root``."""
-    if is_tag(root):
-        tag = name_of(root)
+    a root at the ref ``root_at``."""
+    if is_tag(root_at):
+        tag = name_of(root_at)
         return Refused(
             f"{project} cannot be planned: {repository} has no tag {tag}, and a build at a tag "
             f"takes every dependency from the same tag. {dependency_of(reached)} Way out: push "
@@ -471,17 +471,17 @@ def place_of_pin(project: str, repository: str, pin: Pin, src: Sources) -> Place
 
 
 def place_by_default(
-    project: str, repository: str, reached: Reached, root: str, src: Sources
+    project: str, repository: str, reached: Reached, root_at: str, src: Sources
 ) -> Place | Refused:
     """The first of ``default_refs`` that ``repository`` has; none refuses the project.
 
-    ``root`` is the root's ref. All of them are asked in one question.
+    ``root_at`` is the root's ref. All of them are asked in one question.
     """
-    refs = default_refs(root, src.line)
+    refs = default_refs(root_at, src.line)
     found = src.first_ref(repository, refs)
     if found is not None:
         return Place(repository, *found)
-    return unplaced(project, repository, reached, root, refs)
+    return unplaced(project, repository, reached, root_at, refs)
 
 
 def facts_of(project: str, reached: Reached, src: Sources) -> PipelineFacts:
@@ -492,16 +492,16 @@ def facts_of(project: str, reached: Reached, src: Sources) -> PipelineFacts:
         raise PlanError(f"{exc}. {dependency_of(reached)}") from exc
 
 
-def resolve(project: str, reached: Reached, pin: Pin | None, root: str, src: Sources) -> Found:
+def resolve(project: str, reached: Reached, pin: Pin | None, root_at: str, src: Sources) -> Found:
     """Where the chain takes ``project`` from, and whether it can give a snapshot there.
 
-    ``root`` is the root's ref.
+    ``root_at`` is the root's ref.
     """
     facts = facts_of(project, reached, src)
     if pin is not None:
         place = place_of_pin(project, facts.repository, pin, src)
     else:
-        place = place_by_default(project, facts.repository, reached, root, src)
+        place = place_by_default(project, facts.repository, reached, root_at, src)
     if isinstance(place, Refused):
         return place
     found = first_unmet(project, place, facts, src)
@@ -515,13 +515,15 @@ def resolve(project: str, reached: Reached, pin: Pin | None, root: str, src: Sou
 # ---------------------------------------------------------------------------
 
 
-def walk(root: str, first: Member, pins: Mapping[str, Pin], src: Sources) -> dict[str, Found]:
-    """Every project of the tree of ``root``, breadth first, each resolved once.
+def walk(
+    root_project: str, first: Member, pins: Mapping[str, Pin], src: Sources
+) -> dict[str, Found]:
+    """Every project of the tree of ``root_project``, breadth first, each resolved once.
 
     ``first`` is the root as a node. A refused project is not descended into.
     """
-    nodes: dict[str, Found] = {root: first}
-    queue = [(root, first)]
+    nodes: dict[str, Found] = {root_project: first}
+    queue = [(root_project, first)]
     while queue:
         consumer, node = queue.pop(0)
         for project, entry in snapshot_entries(node.declaration).items():

@@ -21,16 +21,18 @@ class Job:
     ``pipeline`` is the path of the generated pipeline that the option of
     ``plan`` and ``resume`` names; ``repository`` Buildkite's repository URL of
     the pipeline, in the form the plan step asks git with every repository
-    (``buildkite.https_repository``). ``plan_id`` is ``SNAPSHOT_PLAN`` (the
-    root build's uuid) of a chain node, None for a root; ``needs`` and
-    ``rebuild`` are ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD`` as given.
+    (``buildkite.https_repository``). ``name`` is the name the build runs
+    under (``BUILDKITE_BRANCH``), a branch's or a tag's. ``plan_id`` is
+    ``SNAPSHOT_PLAN`` (the root build's uuid) of a chain node, None for a root;
+    ``needs`` and ``rebuild`` are ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD``
+    as given.
     """
 
     pipeline: str | None
     project: str
     repository: str
     build: Build
-    branch: str
+    name: str
     command: str | None
     exit_status: int
     plan_id: str | None
@@ -51,7 +53,7 @@ def job_of(pipeline: str | None) -> Job:
         project=os.environ["BUILDKITE_PIPELINE_SLUG"],
         repository=https_repository(os.environ["BUILDKITE_REPO"]),
         build=job_build(),
-        branch=os.environ.get("BUILDKITE_BRANCH", ""),
+        name=os.environ.get("BUILDKITE_BRANCH", ""),
         command=os.environ.get("BUILDKITE_COMMAND"),
         exit_status=command_exit_status(),
         plan_id=os.environ.get("SNAPSHOT_PLAN"),

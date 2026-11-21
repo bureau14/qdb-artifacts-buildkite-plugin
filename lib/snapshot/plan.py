@@ -121,6 +121,17 @@ class Plan:
     projects: Mapping[str, Planned]
 
 
+@dataclass(frozen=True)
+class LeftOut:
+    """A download of a build's own project at another ref, which the build's key leaves out:
+    the step that downloads, the platform it takes, and the ref whose latest build its job
+    reads when it runs."""
+
+    step: str
+    platform: str
+    ref: str
+
+
 # ---------------------------------------------------------------------------
 # Writing and reading
 # ---------------------------------------------------------------------------

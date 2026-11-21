@@ -211,7 +211,7 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
         raise reason_refusal(job, RULE, str(exc), origin, edge.clock()) from exc
     downloads = pipeline_downloads(doc)
     # The build's own ref, as the generator writes it from BUILDKITE_BRANCH.
-    violations = rule_violations(downloads, declaration, job.project, branch_ref(job.branch))
+    violations = rule_violations(downloads, declaration, job.project, branch_ref(job.name))
     if violations:
         message = "\n".join(violation_message(v) for v in violations)
         origin = create_chain_key_json(job, edge)
@@ -239,8 +239,8 @@ def shown_name(name: str, repository: str, refs: Mapping[str, str]) -> str:
 def asked_name(job: Job, edge: PlanEdge) -> Mapping[str, str]:
     """3, a root: ask git once whether its name is a branch or a tag of its repository, with
     the commit of each, a tag peeled; log the answer."""
-    refs = edge.git.commits_of(job.repository, name_refs(job.branch))
-    edge.log(shown_name(job.branch, job.repository, refs))
+    refs = edge.git.commits_of(job.repository, name_refs(job.name))
+    edge.log(shown_name(job.name, job.repository, refs))
     return refs
 
 
@@ -251,7 +251,7 @@ class Placed:
     when it needs to, and in resume."""
 
     plan: Plan
-    named: Mapping[str, str] | None
+    refs_of_name: Mapping[str, str] | None
 
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
@@ -262,13 +262,13 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     A download that finds no latest file, and a plan that cannot be made, fail
     the build with their message, before anything runs.
     """
-    named = asked_name(job, edge)
+    refs_of_name = asked_name(job, edge)
     try:
         root = Root(
             project=job.project,
-            name=job.branch,
+            name=job.name,
             commit=edge.checkout.head_commit(),
-            refs=named,
+            refs=refs_of_name,
             build_id=job.build.id,
             build_number=job.build.number,
             rebuild=rebuild_setting(job.rebuild),
@@ -281,9 +281,9 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
     edge.agent.meta_data_set(PLAN, encode_plan(p))
-    outside = outside_the_key(generated.doc, job.project, branch_ref(job.branch))
+    outside = outside_the_key(generated.doc, job.project, branch_ref(job.name))
     edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
-    return Placed(p, named)
+    return Placed(p, refs_of_name)
 
 
 # How step 3 comes to the plan: in enter (``entered_plan``) or in resume (``resumed_plan``).
@@ -364,7 +364,7 @@ class Prepared:
 
     generated: Generated
     plan: Plan
-    named: Mapping[str, str] | None
+    refs_of_name: Mapping[str, str] | None
     origin: Origin
     d: frozenset[Folder]
     n: frozenset[Folder]
@@ -375,14 +375,17 @@ class Prepared:
 # ---------------------------------------------------------------------------
 
 
-def newest_commit(job: Job, edge: PlanEdge, p: Plan, named: Mapping[str, str] | None) -> str | None:
+def newest_commit(
+    job: Job, edge: PlanEdge, p: Plan, refs_of_name: Mapping[str, str] | None
+) -> str | None:
     """The commit git names for the ref the plan takes this build from: its branch's newest,
     or its tag's, peeled; None when its repository has no such ref. A root has git's answer
-    from step 3 (``named``); a chain node asks git now, not the plan: it can run long after
-    the chain began, while its ref moved."""
+    from step 3 (``refs_of_name``); a chain node asks git now, not the plan: it can run long
+    after the chain began, while its ref moved."""
     ref = p.projects[job.project].ref
-    answer = named if named is not None else edge.git.commits_of(job.repository, [ref])
-    return answer.get(ref)
+    if refs_of_name is None:
+        return edge.git.commits_of(job.repository, [ref]).get(ref)
+    return refs_of_name.get(ref)
 
 
 def point_latest_files(
@@ -393,19 +396,19 @@ def point_latest_files(
     tag put on, built commits gets its latest files at its first build, and an older build
     that runs again does not move them back. A build under a ``snapshot/`` name writes none.
     """
-    if not made or not writes_latest(job.branch):
+    if not made or not writes_latest(job.name):
         return
     key = prepared.origin.key
-    newest = newest_commit(job, edge, prepared.plan, prepared.named)
+    newest = newest_commit(job, edge, prepared.plan, prepared.refs_of_name)
     if newest != edge.checkout.head_commit():
         edge.log(
-            f"git names {newest or 'no commit'} for {job.branch}, not this build's commit: no "
+            f"git names {newest or 'no commit'} for {job.name}, not this build's commit: no "
             f"latest file moves to {key}"
         )
         return
     for f in sorted(made):
-        write_latest_file(edge.store, edge.prefix, job.project, job.branch, f, key)
-    edge.log(f"the latest files of {job.branch} name {key} for {shown_folders(sorted(made))}")
+        write_latest_file(edge.store, edge.prefix, job.project, job.name, f, key)
+    edge.log(f"the latest files of {job.name} name {key} for {shown_folders(sorted(made))}")
 
 
 def is_reused(d: frozenset[Folder], n: frozenset[Folder], m: frozenset[Folder]) -> bool:
@@ -629,7 +632,7 @@ def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     check_step_ids(job, edge, generated, p, origin)
     n = asked(job, d)
     check_declared(job, edge, n, d, origin)
-    return Prepared(generated, p, placed.named, origin, d, n)
+    return Prepared(generated, p, placed.refs_of_name, origin, d, n)
 
 
 def own_manifests(job: Job, edge: Edge, prepared: Prepared) -> dict[Folder, Manifest | None]:

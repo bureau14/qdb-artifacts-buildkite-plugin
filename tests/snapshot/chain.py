@@ -521,7 +521,7 @@ class World:
             project=build.project,
             repository=url(build.project),
             build=build.info,
-            branch=build.branch,
+            name=build.branch,
             command="generate",
             exit_status=0,
             plan_id=build.env.get("SNAPSHOT_PLAN"),
