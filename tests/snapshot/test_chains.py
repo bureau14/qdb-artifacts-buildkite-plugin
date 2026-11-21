@@ -24,7 +24,7 @@ from fakes import url
 from world import paired
 
 from lib import layout
-from lib.forms import branch_ref, name_of
+from lib.forms import branch_ref, name_of, tag_ref
 from lib.layout import Folder
 from lib.manifest import Build, Promoted, Uploaded, captured, promoted_by, write_manifest
 from lib.snapshot.buildkite import PipelineFacts
@@ -398,25 +398,12 @@ def test_a_hard_failure_fails_the_same_snapshot_in_every_chain_whose_root_starte
     assert again == ([failed] if WHEN[when] else [])
 
 
-def runs_under_a_pin(graph: dict, p: str, node: str, consumer: str, name: str) -> str:
-    """The name a started build of ``p`` runs under when ``consumer`` pins ``node`` to the
-    release line 3.14.x and the chain takes every other project at the root's name ``name``:
-    the node under 3.14.x when nothing lies below it; any other project under the root's name
-    when the node is not below it or the pin is written in its tree; else under
-    snapshot/<name>."""
-    inside = below(graph, p) | {p}
-    if p == node:
-        return "3.14.x" if not below(graph, node) else f"snapshot/{name}"
-    return name if node not in inside or consumer in inside else f"snapshot/{name}"
-
-
 @pytest.mark.parametrize("name", ["master", TAG])
 def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape, name):
     """A literal git ref in one consumer's template pins a node: the chain builds it once, at
     the head of that ref, also under a root at a tag that every project carries, and every
     download of it in the chain, on every platform and of every step, takes what that build
-    made. A started build runs under the name of its ref only when no node below it was placed
-    by the pin written outside its tree, else under snapshot/<root's name>."""
+    made. Every started build runs under the name of the ref the plan takes it from."""
     graph, node, root = lower_node.graph, lower_node.node, lower_node.root
     world = worlds(graph, *shape)
     pinned = world.commit(node, branch="3.14.x")
@@ -430,11 +417,12 @@ def test_a_pin_places_its_project_for_the_whole_chain(worlds, lower_node, shape,
     top = world.build(root, name)
 
     (built,) = world.builds_of(node)
+    plan = world.plan(top)
     names = {b.project: b.branch for b in top.chain()[1:]}
     assert top.state == "passed"
     assert built.commit == pinned
     assert {d.made_by for d in world.downloads if d.project == node} == {built.id}
-    assert names == {p: runs_under_a_pin(graph, p, node, consumer, name) for p in names}
+    assert names == {p: name_of(plan.projects[p].ref) for p in names}
 
 
 def entries_of(document: str, project: str) -> list[dict]:
@@ -692,91 +680,142 @@ def test_key_json_read_down_from_any_key_gives_every_commit_of_its_tree(worlds, 
         assert found["deps"] == sorted(found["deps"])
 
 
-RELEASE_LINES = ("master", "3.14.x")
+# The name a first build runs under: a story branch, a release line, or a tag.
+FIRST_NAMES = ("feature", "3.14.x", TAG)
+
+# Where that name lies, on a commit of its own in each project: in the projects below the
+# node and the first build's own, at master's newest commits there, so that a started build
+# lacking the name takes them under another ref than the plan; in the node and every project
+# above it; in every project; or in the projects below the node and the first build's own.
+# A project without it lacks the branch, or carries the tag on master's newest commit, since
+# a build at a tag takes every dependency from that tag.
+SPREADS = (
+    "below-the-node-at-masters-commits",
+    "the-node-and-above",
+    "every-project",
+    "below-the-node",
+)
+
+# A pin of the node by its first dependent, on a commit of its own: none, to the release line
+# 3.14.x, or to a tag.
+PIN_TAG = "v0.9.0"
+PINS = (None, "3.14.x", PIN_TAG)
+
+# Whether the first build is played once, or first with the last step of the node's last
+# platform failing and then again, so that the node's build finds its other steps made.
+PLAYED = ("once", "after-a-failed-step")
 
 
-def runs_under(graph: dict, node: str, branch_of: dict, root_branch: str) -> str:
-    """The rule of the branch for a tree without pins in which every project has a repository
-    of its own: a node runs under its own branch when its build is the one its own pipeline
-    would make for that branch, that is when its branch is the root's and that is a release
-    line or every node below it is on it too, or when its branch is a release line every node
-    below it is on; else under ``snapshot/<root branch>``."""
-    own = branch_of[node]
-    level = all(branch_of[m] == own for m in below(graph, node))
-    as_itself = (own == root_branch and (own in RELEASE_LINES or level)) or (
-        own in RELEASE_LINES and level
-    )
-    return own if as_itself else f"snapshot/{root_branch}"
-
-
-def latest_refs(world, project: str) -> set[str]:
-    """The refs under which a latest file of some folder of ``project`` was written."""
-    found = (k.split("/") for k in world.store.objects if k.startswith(f"{project}/refs/"))
-    return {"/".join(parts[1:-2]) for parts in found}
-
-
-# The names a root builds under, and what carries each: a branch that a node and every node
-# above it have, once also beside a tag of the same name that every project carries, which
-# the branch wins over; or a tag that every project carries, alone, or beside a branch of the
-# same name on other commits in every project but the root, which the tag wins over.
-CARRIED = {
-    "master": ("branch",),
-    "feature": ("branch", "tag"),
-    "3.14.x": ("branch",),
-    TAG: ("tag",),
-    "v2.0.0": ("tag", "dependency-branches"),
-}
-
-
-@pytest.mark.parametrize("root_name", sorted(CARRIED))
-def test_a_node_runs_under_its_own_name_only_as_its_own_build(worlds, graph_node, shape, root_name):
-    """When a root builds a branch that a node and every node above it also have, each
-    triggered build runs under the branch the rule gives, at the head of its branch: its own
-    when it is the build its own pipeline would make, and then its promotes write that
-    branch's latest files on every platform; else snapshot/<root branch>, and then they write
-    none. A tag of the same name changes none of it. When a root builds at a tag every project
-    carries, each triggered build runs at the tag's commit under the tag's name, and writes
-    latest files under it only; a branch of that name in the dependencies changes none of
-    it."""
-    graph, node, root = graph_node.graph, graph_node.node, graph_node.root
-    world = worlds(graph, *shape)
-    branched = ({node} | above(graph, node)) & tree(graph, root)
-    carried = CARRIED[root_name]
-    tagged = {p: world.tag(p, root_name) for p in sorted(graph)} if "tag" in carried else {}
-    if "branch" in carried:
-        for p in sorted(branched):
-            world.commit(p, branch=root_name)
-    if "dependency-branches" in carried:
-        for p in sorted(graph.keys() - {root}):
-            world.commit(p, branch=root_name)
-
-    top = world.build(root, branch=root_name)
-
-    if "branch" in carried:
-        branch_of = {p: root_name if p in branched else "master" for p in tree(graph, root)}
-        expected = {
-            p: (runs_under(graph, p, branch_of, root_name), world.hosting.head(p, branch_of[p]))
-            for p in branch_of
-        }
+def pin_the_node(world, at, pin: str) -> None:
+    """Pin the node of ``at`` to ``pin``, a branch or a tag on a commit of its own, in the
+    template of its first dependent."""
+    if pin == PIN_TAG:
+        world.tag(at.node, pin)
+        ref = tag_ref(pin)
     else:
-        expected = {p: (root_name, tagged[p]) for p in tree(graph, root)}
-    triggered = top.chain()[1:]
-    assert top.state == "passed"
-    assert {b.project: (b.branch, b.commit) for b in triggered} == {
-        b.project: expected[b.project] for b in triggered
-    }
-    assert all(
-        latest_refs(world, b.project)
-        == (set() if b.branch.startswith("snapshot/") else {branch_ref(b.branch)})
-        for b in triggered
+        world.commit(at.node, branch=pin)
+        ref = branch_ref(pin)
+    consumer = first_consumer(at)
+    world.projects[consumer].pins[at.node] = ref
+    world.commit(consumer)
+
+
+def named_projects(at, spread: str) -> frozenset[str]:
+    """The projects of the node's tree that carry the first build's name as ``spread`` says."""
+    graph, node, root = at.graph, at.node, at.root
+    if spread == "the-node-and-above":
+        return ({node} | above(graph, node)) & tree(graph, root)
+    if spread == "every-project":
+        return tree(graph, root)
+    return below(graph, node) | {root}
+
+
+def put_name(world, project: str, name: str, own_commit: bool) -> None:
+    """Put the branch or the tag ``name`` in the repository of ``project``: on a commit of its
+    own, or on master's newest commit."""
+    if name != TAG and own_commit:
+        world.commit(project, branch=name)
+    elif name != TAG:
+        world.hosting.cut(project, name)
+    elif own_commit:
+        world.tag(project, name)
+    else:
+        world.hosting.tag(project, name, world.hosting.head(project))
+
+
+def name_the_tree(world, at, name: str, spread: str) -> None:
+    """Put the first build's ``name`` on the projects of the node's tree as ``spread`` says."""
+    named = named_projects(at, spread)
+    own_commits = not spread.endswith("at-masters-commits")
+    for p in sorted(tree(at.graph, at.root)):
+        if p in named:
+            put_name(world, p, name, own_commits)
+        elif name == TAG:
+            put_name(world, p, name, False)
+
+
+def own_build_takes_the_same_commits(world, graph: dict, plan, build) -> bool:
+    """Whether a first build of the project of ``build`` at its name and commit, played now,
+    plans every project below it at the commit ``plan`` takes it at; not when that build
+    cannot be planned."""
+    own = world.build(build.project, build.branch, build.commit)
+    if "snapshot-plan" not in world.agents.meta_data[own.id]:
+        return False
+    projects = world.plan(own).projects
+    return all(
+        m in projects and projects[m].commit == plan.projects[m].commit
+        for m in below(graph, build.project)
     )
+
+
+@pytest.mark.parametrize(
+    "name, spread, pin, played", paired(FIRST_NAMES, SPREADS, PINS, PLAYED), ids=str
+)
+def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_build(
+    worlds, graph_node, shape, name, spread, pin, played
+):
+    """Every build started for a dependency runs under the name of its ref, and leaves that
+    branch's latest files, on every platform and of every step, through its promotes and
+    through its plan step for the steps it finds made, exactly when a first build of its
+    project at its ref and commit, played after, takes every project below it at the same
+    commit; else it leaves none, also when that build cannot be planned. The fakes know no
+    merge-base, so every branch leaves master, as the rule takes it. Every case is one in
+    which the plan was told all that the own build asks: a pin to a branch neither the first
+    build's nor a release line, or one that moves a project with dependencies off the first
+    build's name, is not generated, as the rule counts what it was not told as no."""
+    graph, node, root = graph_node.graph, graph_node.node, graph_node.root
+    matrix, step_ids = shape
+    world = worlds(graph, matrix, step_ids)
+    if pin is not None and node != root:
+        pin_the_node(world, graph_node, pin)
+    name_the_tree(world, graph_node, name, spread)
+    if played == "after-a-failed-step":
+        world.broken.add((node, Folder(matrix[-1], step_ids[-1])))
+        world.build(root, name)
+        world.broken.clear()
+
+    top = world.build(root, name)
+
+    plan, every = world.plan(top), folders(matrix, step_ids)
+    started = [b for b in world.builds if "SNAPSHOT_PLAN" in b.env]
+    last = {b.project: b for b in started}
+    left = {p: world.objects(f"{p}/refs/") for p in last}
+    speaks = {p: own_build_takes_the_same_commits(world, graph, plan, b) for p, b in last.items()}
+
+    def latest_files(p: str) -> dict[str, bytes]:
+        ref, key = branch_ref(name_of(plan.projects[p].ref)), plan.projects[p].key
+        return {layout.latest_file("", p, ref, f): key.encode() for f in every}
+
+    assert top.state == "passed"
+    assert [b.branch for b in started] == [name_of(plan.projects[b.project].ref) for b in started]
+    assert left == {p: latest_files(p) if speaks[p] else {} for p in last}
 
 
 # Where a name is put on the commits a chain built: a branch cut in every project of the tree,
-# or in the node of the failed step and the projects above it, so that the node is not the
-# build its own pipeline would make for the branch, unless nothing lies below it; or a tag put
-# on every project of the tree, which, once, moves off the node's commit while the node's
-# build waits at its gate, and is put back after the chain.
+# or in the node of the failed step and the projects above it, whose own builds take the
+# projects below from master, at the same commits; or a tag put on every project of the tree,
+# which, once, moves off the node's commit while the node's build waits at its gate, and is
+# put back after the chain.
 PUT_ON = {
     "every-project": ("feature", False),
     "the-node-and-above": ("feature", False),
@@ -789,11 +828,11 @@ PUT_ON = {
 def test_a_build_at_its_names_commit_points_its_latest_files_at_its_key(worlds, graph_node, put_on):
     """After a chain in which one step of one platform of a node failed, a branch is cut, or a
     tag put, at the same commits, and the root's build under that name builds that step
-    again. Every build of that chain that runs under the name leaves the name's latest file of
-    every step it promoted naming its key, and of every step it found made when git names its
-    commit for the name as it starts, and not when the name moved off its commit while it
-    waited; one under a snapshot/ name leaves none, and neither does a project the chain did
-    not build. Once the root's name has moved on to a newer commit and built it, a build of
+    again. Every build of that chain that runs under the name and writes its branch's latest
+    files leaves the name's latest file of every step it promoted naming its key, and of every
+    step it found made when git names its commit for the name as it starts, and not when the
+    name moved off its commit while it waited; a project the chain did not build leaves
+    none. Once the root's name has moved on to a newer commit and built it, a build of
     the older commit under the name, which is reused, leaves the root's latest files naming
     the newer key."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
@@ -827,21 +866,18 @@ def test_a_build_at_its_names_commit_points_its_latest_files_at_its_key(worlds, 
     older = world.play(world.start(root, name, top.commit, {}))
 
     built = {b.project: b.branch for b in top.chain()}
+    writes = {p for p in built if built[p] == name and plan.projects[p].writes_latest_file}
     waited = {node} - {root} if moves else set()
     expected = {
         p: {
-            f: plan.projects[p].key
-            if built.get(p) == name and (p not in waited or f == failed)
-            else None
+            f: plan.projects[p].key if p in writes and (p not in waited or f == failed) else None
             for f in every
         }
         for p in projects
     }
-    snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
     kept = {f: world.latest(root, branch_ref(name), f) for f in every}
     assert (top.state, newer.state, older.state) == ("passed", "passed", "passed")
     assert node in built
     assert named == expected
-    assert snapshot_refs == set()
     assert (older.children, world.agents.uploads[older.id]) == ([], [])
     assert kept == {f: world.plan(newer).projects[root].key for f in every}

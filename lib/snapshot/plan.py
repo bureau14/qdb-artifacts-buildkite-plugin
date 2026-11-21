@@ -20,8 +20,7 @@ The document holds what the builds of the chain read::
     {"context": "<first build's name, a branch's or a tag's>",
      "first": {"build_number": <n>, "project": "<slug>"},
      "id": "<first build's uuid>",
-     "projects": {"<project>": {"branch": "<branch its started build runs under>",
-                                "deps": ["<project>", ...], "key": "<key>",
+     "projects": {"<project>": {"deps": ["<project>", ...], "key": "<key>",
                                 "latest": [{"keys": {"<step id>": "<key>"},
                                             "project": "<slug>",
                                             "ref": "refs/heads/<branch>",
@@ -29,7 +28,8 @@ The document holds what the builds of the chain read::
                                             "strict": true or false,
                                             "variant": "<platform>"}],
                                 "ref": "refs/heads/<branch>" or "refs/tags/<tag>",
-                                "steps": ["<step id>", ...]}},
+                                "steps": ["<step id>", ...],
+                                "writes_latest_file": true or false}},
      "rebuild": "none" or "one" or "all"}
 
 ``steps`` are the step ids the project's templates promote at its commit, so
@@ -94,17 +94,19 @@ class Planned:
     """A project of the chain: every build of the chain uses its build at ``key``.
 
     ``ref`` is the full ref its commit was taken from (``refs/heads/<branch>``
-    or ``refs/tags/<tag>``), ``branch`` the name a build of it that the chain
-    starts runs under, ``deps`` its direct snapshot dependencies (projects of
-    the same plan), ``steps`` the step ids its templates promote, ``latest``
-    its downloads that take the latest successful build, which only the first
-    build has. ``key`` is None only while ``make_plan`` has not keyed it.
+    or ``refs/tags/<tag>``), whose name a build of it runs under;
+    ``writes_latest_file`` whether that build writes its branch's latest
+    files, true for the first build; ``deps`` its direct snapshot dependencies
+    (projects of the same plan), ``steps`` the step ids its templates promote,
+    ``latest`` its downloads that take the latest successful build, which only
+    the first build has. ``key`` is None only while ``make_plan`` has not
+    keyed it.
     """
 
     ref: str
     commit: str
     key: str | None
-    branch: str
+    writes_latest_file: bool
     deps: tuple[str, ...] = ()
     steps: tuple[str, ...] = ()
     latest: tuple[Latest, ...] = ()
@@ -151,12 +153,12 @@ def latest_document(r: Latest) -> dict[str, Any]:
 
 def planned_document(n: Planned) -> dict[str, Any]:
     return {
-        "branch": n.branch,
         "deps": list(n.deps),
         "key": n.key,
         "latest": [latest_document(r) for r in n.latest],
         "ref": n.ref,
         "steps": list(n.steps),
+        "writes_latest_file": n.writes_latest_file,
     }
 
 
@@ -186,7 +188,7 @@ def planned_of(d: Mapping[str, Any]) -> Planned:
         d["ref"],
         commit_of(d["key"]),
         d["key"],
-        d["branch"],
+        d["writes_latest_file"],
         tuple(d["deps"]),
         tuple(d["steps"]),
         tuple(latest_of(r) for r in d["latest"]),

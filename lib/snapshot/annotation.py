@@ -3,9 +3,10 @@
 Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 
 - the plan (``plan_annotation``): the tree of a node, each node with its
-  commit, ref, key and the branch it runs under, and each download of the
-  node's own project at another ref, which its key leaves out; for a build
-  that is reused, also the builds that made its steps (``reused_annotation``);
+  commit, ref, key and whether it writes its branch's latest files, and
+  each download of the node's own project at another ref, which its key
+  leaves out; for a build that is reused, also the builds that made its
+  steps (``reused_annotation``);
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
@@ -54,11 +55,15 @@ def plan_heading(plan: Plan, project: str) -> str:
 
 
 def node_line(plan: Plan, project: str, depth: int) -> str:
-    """One node: its commit, ref and key, and the branch a build of it runs under."""
+    """One project: its commit, ref and key, and whether a build of it writes its branch's
+    latest files."""
     n = plan.projects[project]
-    return (
-        f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {n.key} runs as {n.branch}"
+    written = (
+        f"writes the latest files of {name_of(n.ref)}"
+        if n.writes_latest_file
+        else "writes no latest file"
     )
+    return f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {n.key} {written}"
 
 
 def tree_lines(plan: Plan, project: str) -> list[str]:

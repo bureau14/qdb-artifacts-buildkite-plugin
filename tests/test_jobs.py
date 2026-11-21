@@ -760,9 +760,9 @@ def chain_plan(widget_commit: str) -> Plan:
     """The plan of a root build of app: app takes widget, widget takes engine, each of one
     step id, with the keys their commits give."""
     projects = {
-        "app": Planned(MASTER, "a" * 40, None, "master", ("widget",), ("build",)),
-        "widget": Planned(MASTER, widget_commit, None, "master", ("engine",), ("build",)),
-        "engine": Planned(MASTER, ENGINE_COMMIT, None, "master", (), ("build",)),
+        "app": Planned(MASTER, "a" * 40, None, True, ("widget",), ("build",)),
+        "widget": Planned(MASTER, widget_commit, None, True, ("engine",), ("build",)),
+        "engine": Planned(MASTER, ENGINE_COMMIT, None, True, (), ("build",)),
     }
     return keyed(Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects))
 

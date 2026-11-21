@@ -36,7 +36,7 @@ from typing import Any
 
 import yaml
 
-from ..forms import SNAPSHOT_BRANCH_PREFIX
+from ..forms import name_of
 from ..layout import Folder, folder_document
 from ..manifest import Manifest
 from ..options import BRANCH_BUILD, read_bool
@@ -541,7 +541,6 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Seque
     colour of its build.
     """
     planned_project = plan.projects[project]
-    speaks = not planned_project.branch.startswith(SNAPSHOT_BRANCH_PREFIX)
     message = f"snapshot dependency of {plan.first.project} build {plan.first.build_number}"
     step: dict[str, Any] = {
         "label": trigger_label(plan, project),
@@ -552,13 +551,13 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Seque
     if after:
         step["depends_on"] = list(after)
     step["build"] = {
-        "branch": planned_project.branch,
+        "branch": name_of(planned_project.ref),
         "commit": planned_project.commit,
         "message": message,
         "env": {
             "SNAPSHOT_PLAN": plan.id,
             "SNAPSHOT_NEEDS": needs_value(needs),
-            BRANCH_BUILD: branch_build_value(speaks),
+            BRANCH_BUILD: branch_build_value(planned_project.writes_latest_file),
         },
     }
     return step

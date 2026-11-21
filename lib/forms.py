@@ -9,10 +9,6 @@ import datetime
 
 BRANCH_PREFIX = "refs/heads/"
 TAG_PREFIX = "refs/tags/"
-# What the name a build runs under starts with when a plan step started it for a
-# dependency and it is not the build its own branch would make: no branch has that
-# name, so the build writes no latest file.
-SNAPSHOT_BRANCH_PREFIX = "snapshot/"
 
 
 def branch_ref(branch: str) -> str:
