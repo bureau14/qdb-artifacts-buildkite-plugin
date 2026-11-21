@@ -437,15 +437,21 @@ def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
 def with_asking_entry(
     job: Job, p: Plan, generated: Generated, c: Cause, records: Mapping[str, Record]
 ) -> Cause:
-    """``c``, when the build of its dependency in this chain refused steps it does not make,
-    with the template of the entry that asked for them and the steps that entry names (None
-    for every step its dependency's templates name): the entry a person changes."""
+    """``c``, when the build of its dependency in this chain refused steps this build asked
+    for, with the template of the entry that asked for them and the steps that entry names
+    (None for every step its dependency's templates name): the entry a person changes.
+
+    The record of the chain at a key can be the refusal of what another
+    dependent asked for; ``c`` then stays as it is, and names that build.
+    """
     r = records.get(c.key)
     if r is None or r.reason != NOT_DECLARED:
         return c
+    asked = frozenset(c.missing) & frozenset(x.folder for x in r.refused)
+    if not asked:
+        return c
     steps = p.projects[c.project].steps
-    refused = [x.folder for x in r.refused]
-    entry = entry_taking(generated.doc, job.project, c.project, steps, refused)
+    entry = entry_taking(generated.doc, job.project, c.project, steps, asked)
     template = declared_path(generated.declaration, c.project, SNAPSHOT)
     return replace(c, template=template, takes=entry_steps(entry) or None)
 
