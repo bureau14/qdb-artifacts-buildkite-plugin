@@ -1,4 +1,4 @@
-"""The list of uploaded files, with links and sizes, on the build page.
+"""A step's files, with links and sizes, on the build page.
 
 An annotation is a convenience for people looking at the build, so a failure
 to create one is logged and never fails the upload.
@@ -11,7 +11,8 @@ from .layout import key_join
 from .log import fmt_size, log
 
 
-def create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
+def create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes, title):
+    """Annotate the job with ``title`` and a link to every file under ``prefix``."""
     if not os.environ.get("BUILDKITE"):
         log(
             "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
@@ -22,12 +23,11 @@ def create_buildkite_annotation(artifacts_domain, prefix, files_with_sizes):
         return
     file_count = len(files_with_sizes)
     total_bytes = sum(size for _, size in files_with_sizes)
-    log(f"  creating Buildkite annotation for {file_count} uploaded artifact(s)")
+    log(f"  creating Buildkite annotation for {file_count} artifact(s)")
     job_label = os.environ.get("BUILDKITE_LABEL", "unknown job")
     uri = f"https://{artifacts_domain}"
     body = (
-        f"## {job_label}\n"
-        f"### Uploaded artifacts ({file_count} files, {fmt_size(total_bytes)} total):\n\n"
+        f"## {job_label}\n### {title} ({file_count} files, {fmt_size(total_bytes)} total):\n\n"
     ) + "\n".join(
         f"- [{path}]({key_join(uri, prefix, path)}) ({fmt_size(size)})"
         for path, size in files_with_sizes

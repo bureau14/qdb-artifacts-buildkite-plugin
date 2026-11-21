@@ -1,39 +1,57 @@
-"""Which build a download gets, and which of its objects.
+"""Which steps a download takes, at which keys, and which of their files.
 
-A build id of LATEST_SUCCESSFUL is read from the pointer that promote moves. A
-ref without artifacts falls back to refs/heads/master, then refs/heads/main, so
-that a branch that has not built a variant yet gets the default branch's;
-a strict ref match turns that off. The selection is kept apart from any
-transfer, so that a caller outside the plugin resolves exactly as a download
-does and fetches the objects its own way.
+A step is found at a key in one of two ways:
+
+- the key is given: the ``keys`` the plan step writes into an entry, or the
+  build's own key; the step's manifest must be there (``keyed_step``);
+- the walk over the latest files of branches, for a download that takes the
+  latest successful build: the entry's ref, then ``refs/heads/master``, then
+  ``refs/heads/main``, or the entry's ref alone when it is one of those or
+  the entry asks for a strict ref match. A named step takes the key its own
+  latest file names (``walk_named``); an entry without a step takes every
+  step whose latest file names the newest key of the platform
+  (``walk_newest``). A key counts only when the step's manifest says
+  promoted.
+
+The files of a step are those its manifest names that match the entry's
+patterns and no exclude (``selected``): a download lists nothing. The plugin's
+download and a caller of the library resolve through these same functions,
+and fetch the objects each its own way.
 """
 
 from __future__ import annotations
 
 import datetime
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import layout
 from .errors import ArtifactsError
+from .layout import Folder
 from .log import fmt_size, log
-from .manifest import read_manifest_at
+from .manifest import Manifest, is_made, read_manifest_at
 from .objects import destination_store
 from .rules import is_excluded, match_rules, parse_rules
 
+MASTER_REFS = ("refs/heads/master", "refs/heads/main")
+# A latest file without a time sorts before every other.
+NO_TIME = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+
 
 @dataclass(frozen=True)
-class ResolvedBuild:
-    """Resolved artifact location after applying LATEST_SUCCESSFUL and
-    default-branch fallback. Carries enough context for downstream logging
-    (whether a fallback was applied, when the build was created)."""
+class ResolvedStep:
+    """One step a download takes: its project, folder and key, where it lies, its manifest.
 
-    requested_ref: str
-    requested_build_id: str
-    ref: str
-    build_id: str
-    prefix: str
-    fallback_applied: bool
-    pointer_lastmod: datetime.datetime | None  # mtime of LATEST_SUCCESSFUL pointer, if used
+    ``latest`` is the latest file the walk found it through; None when its key
+    was given.
+    """
+
+    project: str
+    folder: Folder
+    key: str
+    location: str
+    manifest: Manifest
+    latest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,250 +64,211 @@ class ResolvedArtifact:
     entry_rules: list[tuple[str | None, str | None]]
 
 
-def _fmt_age(t):
-    """Format a UTC datetime as 'Nd Nh ago' / 'Nh Nm ago' / 'Nm ago' for log
-    readability. Naive datetimes are assumed UTC."""
-    if t is None:
-        return "unknown"
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=datetime.timezone.utc)
-    delta = datetime.datetime.now(datetime.timezone.utc) - t
-    s = int(delta.total_seconds())
-    if s < 0:
-        return "in the future"
-    if s < 60:
-        return f"{s}s ago"
-    if s < 3600:
-        return f"{s // 60}m ago"
-    if s < 86400:
-        h, m = divmod(s, 3600)
-        m //= 60
-        return f"{h}h {m}m ago" if m else f"{h}h ago"
-    d, rem = divmod(s, 86400)
-    h = rem // 3600
-    return f"{d}d {h}h ago" if h else f"{d}d ago"
+def entry_name(n: int, project: str, platform: str) -> str:
+    """How messages name the ``n``-th download entry of a step."""
+    return f"Download entry {n} ({project}, {platform})"
 
 
-def _read_latest_successful(store, key):
-    """Read the LATEST_SUCCESSFUL pointer. Returns (build_id, pointer_lastmod) or
-    (None, None) if absent. The pointer mtime is useful as a build-age proxy
-    when the build itself has no manifest.json."""
-    stored = store.get(key)
-    if stored is None:
-        return None, None
-    return stored.body.decode("utf-8").strip(), stored.last_modified
+# ---------------------------------------------------------------------------
+# A step at a given key
+# ---------------------------------------------------------------------------
 
 
-def _holds_objects(store, prefix):
-    """Check if any objects exist under the given prefix."""
-    return bool(store.list(f"{prefix}/", limit=1))
+def keyed_step(
+    store, prefix: str, project: str, key: str, folder: Folder, name: str
+) -> ResolvedStep:
+    """The step ``folder`` of ``project`` at ``key``, whose manifest must be there.
 
-
-def _validate_artifact_path(
-    store,
-    dest_prefix,
-    project_id,
-    ref,
-    variant,
-    build_id,
-    require_strict_ref_match=False,
-):
-    """Resolve the artifact prefix, logging every attempt as it goes.
-
-    By default walks [requested_ref, refs/heads/master, refs/heads/main] in order,
-    resolving LATEST_SUCCESSFUL pointers when needed and skipping refs whose prefix
-    is empty. require_strict_ref_match limits resolution to the requested ref.
-    Returns a ResolvedBuild describing the winning attempt. On failure, raises
-    ArtifactsError with a structured trace listing every attempt that was tried and
-    why each failed.
+    ``name`` is how messages name the download.
     """
-    bucket = store.bucket
-    master_refs = ("refs/heads/master", "refs/heads/main")
-
-    refs_to_check = [ref]
-    if not require_strict_ref_match and ref not in master_refs:
-        refs_to_check += list(master_refs)
-
-    # Each entry: dict(ref, resolved_build_id_or_None, prefix_or_None, status, detail)
-    attempts = []
-
-    for current_ref in refs_to_check:
-        log(f"resolve attempt: ref={current_ref} build={build_id}")
-        pointer_lastmod = None
-        effective_build_id = build_id
-
-        if build_id == "LATEST_SUCCESSFUL":
-            pointer_key = layout.latest_pointer(dest_prefix, project_id, current_ref, variant)
-            effective_build_id, pointer_lastmod = _read_latest_successful(store, pointer_key)
-            if not effective_build_id:
-                log(f"  no LATEST_SUCCESSFUL pointer at s3://{bucket}/{pointer_key}, skipping")
-                attempts.append(
-                    {
-                        "ref": current_ref,
-                        "build_id": None,
-                        "prefix": None,
-                        "status": "no-pointer",
-                        "detail": f"s3://{bucket}/{pointer_key}",
-                    }
-                )
-                continue
-            mtime_str = (
-                pointer_lastmod.strftime("%Y-%m-%d %H:%M:%SZ") if pointer_lastmod else "unknown"
-            )
-            log(f"  LATEST_SUCCESSFUL -> {effective_build_id} (pointer mtime {mtime_str})")
-
-        prefix = layout.build_prefix(
-            dest_prefix, project_id, current_ref, variant, effective_build_id
+    location = layout.step_folder(prefix, project, key, folder)
+    m = read_manifest_at(store, location)
+    if m is None:
+        raise ArtifactsError(
+            f"{name} takes step {folder.step} at {key}, and {location}/{layout.MANIFEST} does "
+            "not exist: no build has uploaded that step at that key."
         )
+    return ResolvedStep(project, folder, key, location, m)
 
-        if _holds_objects(store, prefix):
-            log(f"  prefix s3://{bucket}/{prefix}/ has objects -> MATCH")
-            return ResolvedBuild(
-                requested_ref=ref,
-                requested_build_id=build_id,
-                ref=current_ref,
-                build_id=effective_build_id,
-                prefix=prefix,
-                fallback_applied=(current_ref != ref),
-                pointer_lastmod=pointer_lastmod,
-            )
 
-        log(f"  prefix s3://{bucket}/{prefix}/ has no objects, skipping")
-        attempts.append(
-            {
-                "ref": current_ref,
-                "build_id": effective_build_id,
-                "prefix": prefix,
-                "status": "empty",
-                "detail": f"s3://{bucket}/{prefix}/",
-            }
-        )
+# ---------------------------------------------------------------------------
+# The walk over latest files
+# ---------------------------------------------------------------------------
 
-    lines = [
-        (
-            f"Artifact path could not be resolved for project={project_id}, "
-            f"variant={variant}, requested_ref={ref}, requested_build_id={build_id}."
-        ),
-        f"Attempts ({len(attempts)}):",
+
+def walked_refs(ref: str, strict: bool) -> tuple[str, ...]:
+    """The branches a walk tries, in order."""
+    if strict or ref in MASTER_REFS:
+        return (ref,)
+    return (ref, *MASTER_REFS)
+
+
+def named_key(store, where: str) -> str | None:
+    """The key a latest file names; None when there is no such file."""
+    stored = store.get(where)
+    return None if stored is None else stored.body.decode("utf-8").strip()
+
+
+def made_step(
+    store, prefix: str, project: str, key: str, folder: Folder, latest: str
+) -> ResolvedStep | None:
+    """The step at ``key`` that a latest file named, when its manifest says promoted."""
+    location = layout.step_folder(prefix, project, key, folder)
+    m = read_manifest_at(store, location)
+    return ResolvedStep(project, folder, key, location, m, latest) if is_made(m) else None
+
+
+def named_step_at(
+    store, prefix: str, project: str, ref: str, folder: Folder
+) -> ResolvedStep | None:
+    """The step of ``folder`` that the latest file of ``ref`` names; None when it names none
+    that is made."""
+    where = layout.latest_file(prefix, project, ref, folder)
+    key = named_key(store, where)
+    return None if key is None else made_step(store, prefix, project, key, folder, where)
+
+
+def newest_steps_at(
+    store, prefix: str, project: str, ref: str, platform: str
+) -> list[ResolvedStep]:
+    """The steps of ``platform`` whose latest file of ``ref`` names the newest key, and that
+    are made there; none when ``ref`` has no latest file of the platform.
+
+    The newest key is the one the latest file with the latest time names; of
+    two at one time, the key that sorts last.
+    """
+    listed = store.list(layout.latest_files(prefix, project, ref, platform))
+    named = [
+        (item.last_modified or NO_TIME, named_key(store, item.key), item.key) for item in listed
     ]
-    for a in attempts:
-        if a["status"] == "no-pointer":
-            lines.append(
-                f"  - ref={a['ref']}: LATEST_SUCCESSFUL pointer not found at {a['detail']}"
-            )
-        elif a["status"] == "empty":
-            lines.append(
-                f"  - ref={a['ref']} build={a['build_id']}: "
-                f"prefix {a['detail']} contained no objects"
-            )
-        else:
-            lines.append(f"  - ref={a['ref']}: {a['status']} ({a['detail']})")
-    raise ArtifactsError("\n".join(lines))
+    named = [(time, key, where) for time, key, where in named if key is not None]
+    if not named:
+        return []
+    newest = max((time, key) for time, key, _ in named)[1]
+    found = (
+        made_step(store, prefix, project, key, Folder(platform, where.rsplit("/", 1)[1]), where)
+        for _, key, where in named
+        if key == newest
+    )
+    return sorted((s for s in found if s is not None), key=lambda s: s.folder.step)
+
+
+def walk_named(
+    store, prefix: str, project: str, ref: str, strict: bool, folder: Folder
+) -> ResolvedStep:
+    """The step ``folder`` of the latest successful build of ``project`` that made it,
+    on the first branch of the walk that has one."""
+    refs = walked_refs(ref, strict)
+    for r in refs:
+        found = named_step_at(store, prefix, project, r, folder)
+        if found is not None:
+            return found
+    tried = ", ".join(layout.latest_file(prefix, project, r, folder) for r in refs)
+    raise ArtifactsError(
+        f"{project} has no latest successful build of {folder} on {', '.join(refs)}: no "
+        f"latest file of {tried} names a key at which {folder} is promoted."
+    )
+
+
+def walk_newest(
+    store, prefix: str, project: str, ref: str, strict: bool, platform: str
+) -> list[ResolvedStep]:
+    """Every made step of the newest key of ``platform``, on the first branch of the walk
+    that has one."""
+    refs = walked_refs(ref, strict)
+    for r in refs:
+        found = newest_steps_at(store, prefix, project, r, platform)
+        if found:
+            return found
+    tried = ", ".join(layout.latest_files(prefix, project, r, platform) for r in refs)
+    raise ArtifactsError(
+        f"{project} has no latest successful build of {platform} on {', '.join(refs)}: no "
+        f"latest file in {tried} names a key at which its step is promoted."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The files of a step
+# ---------------------------------------------------------------------------
+
+
+def selected(step: ResolvedStep, rules, exclude_patterns) -> list[ResolvedArtifact]:
+    """The files the manifest of ``step`` names that match ``rules`` and no exclude pattern."""
+    found = (
+        (f, match_rules(f.path, rules))
+        for f in step.manifest.files
+        if not is_excluded(f.path, exclude_patterns)
+    )
+    return [
+        ResolvedArtifact(layout.key_join(step.location, f.path), f.path, f.size, entry_rules)
+        for f, entry_rules in found
+        if entry_rules
+    ]
+
+
+def within_sentence(name: str) -> str:
+    """A download's name, which starts a sentence, inside one."""
+    return name[0].lower() + name[1:]
+
+
+def nothing_matched(name: str, patterns, exclude_patterns, steps: Sequence[ResolvedStep]):
+    """The error of a download none of whose steps gives a file."""
+    folders = ", ".join(s.location for s in steps)
+    return ArtifactsError(
+        f"No file of {within_sentence(name)} matched files {list(patterns)} and exclude "
+        f"{list(exclude_patterns or [])}, in any of its steps: {folders}."
+    )
+
+
+def log_step(name: str, step: ResolvedStep, objects: Sequence[ResolvedArtifact]) -> None:
+    """Say which key a download takes a step at, how it came to it, and what it takes."""
+    log(f"{name}, step {step.folder.step}:")
+    if step.latest is not None:
+        log(f"  latest file = {step.latest}")
+    log(f"  key         = {step.key}")
+    size = sum(o.size for o in objects)
+    log(f"  takes       = {len(objects)} of {len(step.manifest.files)} file(s), {fmt_size(size)}")
+
+
+# ---------------------------------------------------------------------------
+# The library
+# ---------------------------------------------------------------------------
 
 
 def resolve_artifacts(
     cfg,
     auth,
     project_id,
-    build_id,
-    git_ref,
     variant,
+    step,
     patterns,
+    git_ref=None,
+    key=None,
     exclude_patterns=None,
     require_strict_ref_match=False,
 ):
-    """Resolve a build and select its artifacts without downloading or extracting.
+    """Find one step of a project's platform and select its artifacts, without downloading.
 
-    Accepts explicit StoreConfig, ObjectAuth, and project/build/ref/variant values;
-    no Buildkite environment or local output directory is required. patterns uses
-    the plugin's archive_glob[!entry_filter] syntax. LATEST_SUCCESSFUL resolution,
-    branch fallback, exclusions, and ordered entry-filter aggregation are shared
-    with the downloader. Returns (bucket, ResolvedBuild, objects), where objects
-    is a list of ResolvedArtifact instances. Unresolved builds or empty
-    matches keep the plugin's diagnostic logging and raise ArtifactsError.
+    Takes explicit StoreConfig and ObjectAuth; no Buildkite environment or
+    output directory is required. A ``key`` gives the step at that key; else
+    ``git_ref`` gives the latest successful build of the step, through the
+    walk over the latest files of that ref, then of master and main unless
+    ``require_strict_ref_match``. ``patterns`` use the plugin's
+    archive_glob[!entry_filter] syntax. Returns (bucket, ResolvedStep,
+    objects), objects a list of ResolvedArtifact. A step that cannot be found,
+    or that gives no file, raises ArtifactsError.
     """
-    # Keep selection independent of transfer/output handling so callers outside plugin
-    # can reuse the exact same resolution policy with their own download mechanism.
-    rules = parse_rules(patterns)
-    store, dest_prefix = destination_store(cfg, auth)  # pointers, manifest, listing; no transfers
-    bucket = store.bucket
-    resolved = _validate_artifact_path(
-        store,
-        dest_prefix,
-        project_id,
-        git_ref,
-        variant,
-        build_id,
-        require_strict_ref_match=require_strict_ref_match,
-    )
-    pfx = resolved.prefix
-
-    if resolved.fallback_applied:
-        log(
-            f"WARNING: falling back from ref={resolved.requested_ref} to "
-            f"ref={resolved.ref} (no artifacts on the requested ref)"
-        )
-
-    # Canonical resolved-build summary -- emitted once per project, before any transfer.
-    manifest = read_manifest_at(store, pfx)
-    log(f"resolved build for project={project_id} variant={variant}:")
-    fallback_note = (
-        f"  (fallback from {resolved.requested_ref})" if resolved.fallback_applied else ""
-    )
-    log(f"  ref       = {resolved.ref}{fallback_note}")
-    bid_note = (
-        " (via LATEST_SUCCESSFUL)" if resolved.requested_build_id == "LATEST_SUCCESSFUL" else ""
-    )
-    log(f"  build_id  = {resolved.build_id}{bid_note}")
-    built_at = None
-    if manifest and manifest.get("uploaded_at"):
-        try:
-            ua = manifest["uploaded_at"].rstrip("Z")
-            built_at = datetime.datetime.fromisoformat(ua).replace(tzinfo=datetime.timezone.utc)
-        except (ValueError, TypeError):
-            built_at = None
-    if built_at is None:
-        built_at = resolved.pointer_lastmod
-    if built_at is not None:
-        log(f"  built at  = {built_at.strftime('%Y-%m-%d %H:%M:%SZ')} ({_fmt_age(built_at)})")
-    log(f"  prefix    = s3://{bucket}/{pfx}/")
-    if manifest:
-        log(
-            f"  contents  = {manifest.get('file_count', '?')} file(s), "
-            f"{fmt_size(manifest.get('total_size_bytes', 0))}"
-        )
-
-    objects = []
-    present_keys = []  # everything at the prefix except manifest.json, for diagnostics
-    for key, size in store.list(f"{pfx}/"):
-        rel = key[len(pfx) + 1 :]  # path relative to variant's artifact root
-        if not rel or rel == layout.MANIFEST:
-            continue
-        present_keys.append(rel)
-        entry_rules = match_rules(rel, rules)
-        if entry_rules and not is_excluded(rel, exclude_patterns):
-            objects.append(ResolvedArtifact(key=key, rel=rel, size=size, entry_rules=entry_rules))
-
+    store, prefix = destination_store(cfg, auth)
+    folder = Folder(variant, step)
+    name = f"The download of {project_id} ({variant})"
+    if key is not None:
+        resolved = keyed_step(store, prefix, project_id, key, folder, name)
+    elif git_ref is not None:
+        resolved = walk_named(store, prefix, project_id, git_ref, require_strict_ref_match, folder)
+    else:
+        raise ArtifactsError(f"{name} names neither a git_ref nor a key")
+    objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
-        rule_strs = [f"{ag}!{ef}" if ef else ag for ag, ef, _ in rules]
-        lines = [
-            "no artifacts matched the configured rules.",
-            f"  rules    : {rule_strs}",
-            f"  exclude  : {exclude_patterns or []}",
-            f"  prefix   : s3://{bucket}/{pfx}/",
-        ]
-        if present_keys:
-            sample = present_keys[:20]
-            lines.append(f"  present  : {len(present_keys)} object(s) at this prefix, e.g.")
-            for k in sample:
-                lines.append(f"               {k}")
-            if len(present_keys) > len(sample):
-                lines.append(f"               ... and {len(present_keys) - len(sample)} more")
-            lines.append("  hint: archive extension or variant name probably mismatched.")
-        else:
-            # _validate_artifact_path only returns a prefix where _holds_objects
-            # was True, so reaching here means the only object was manifest.json.
-            lines.append("  present  : (only manifest.json -- this build uploaded no artifacts)")
-        raise ArtifactsError("\n".join(lines))
-
-    return bucket, resolved, objects
+        raise nothing_matched(name, patterns, exclude_patterns, [resolved])
+    log_step(name, resolved, objects)
+    return store.bucket, resolved, objects

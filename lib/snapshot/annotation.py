@@ -3,14 +3,16 @@
 Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 
 - the plan (``plan_annotation``): the tree of a node, each node with its
-  commit, ref, key and label; for a build that is reused, also the builds
-  that hold its variants (``reused_annotation``);
+  commit, ref, key and the branch it runs under; for a build that is reused,
+  also the builds that made its steps (``reused_annotation``);
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
   records of its causes to the builds that failed, and how to retry;
   ``caused_annotation`` is the same text for a build that dependencies left
-  without variants, also one without a record of its own.
+  without steps it needs, also one without a record of its own.
+
+A step of a platform is shown as its folder, ``<platform>/<step id>``.
 
 Everything that is not a heading or the closing sentence is in a fenced code
 block, because template paths and branch names hold Markdown characters.
@@ -20,7 +22,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from ..pointer import Build
+from ..layout import Folder
+from ..manifest import Build
 from .plan import Plan, short_commit, trigger_label
 from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Cause, Record
 
@@ -38,19 +41,20 @@ def fenced(lines: Sequence[str]) -> str:
 
 
 def plan_heading(plan: Plan, project: str) -> str:
-    root = plan.root
-    if project == root.project:
-        return f"Snapshot plan of `{root.project}` build {root.build_number}"
+    first = plan.first
+    if project == first.project:
+        return f"Snapshot plan of `{first.project}` build {first.build_number}"
     return (
-        f"Snapshot plan of `{project}`, in the chain of `{root.project}` build {root.build_number}"
+        f"Snapshot plan of `{project}`, in the chain of `{first.project}` build "
+        f"{first.build_number}"
     )
 
 
 def node_line(plan: Plan, project: str, depth: int) -> str:
     """One node: its commit, ref and key, and the branch a build of it runs under."""
-    n = plan.nodes[project]
+    n = plan.projects[project]
     key = n.key if n.key is not None else "no snapshot"
-    return f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {key} runs as {n.label}"
+    return f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {key} runs as {n.branch}"
 
 
 def tree_lines(plan: Plan, project: str) -> list[str]:
@@ -64,7 +68,7 @@ def tree_lines(plan: Plan, project: str) -> list[str]:
             return
         shown.add(p)
         lines.append(node_line(plan, p, depth))
-        for d in plan.nodes[p].deps:
+        for d in plan.projects[p].deps:
             visit(d, depth + 1)
 
     visit(project, 0)
@@ -77,14 +81,14 @@ def plan_annotation(plan: Plan, project: str) -> str:
     return f"{plan_heading(plan, project)}\n\n{fenced([context, *tree_lines(plan, project)])}"
 
 
-def reused_annotation(plan: Plan, project: str, builds: Mapping[str, Build]) -> str:
-    """A build that is reused: the build that holds each variant it was asked for, and the plan.
+def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) -> str:
+    """A build that is reused: the build that made each step it was asked for, and the plan.
 
-    ``builds`` maps each variant to the build its pointer names.
+    ``builds`` maps each folder to the build its manifest says promoted it.
     """
-    held = [f"{v} in build {b.number} {b.url}" for v, b in sorted(builds.items())]
-    heading = f"`{project}` is reused: every variant it was asked for exists, so nothing is built"
-    return f"{heading}\n\n{fenced(held)}\n\n{plan_annotation(plan, project)}"
+    made = [f"{f} made by build {b.number} {b.url}" for f, b in sorted(builds.items())]
+    heading = f"`{project}` is reused: every step it was asked for is made, so nothing is built"
+    return f"{heading}\n\n{fenced(made)}\n\n{plan_annotation(plan, project)}"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +108,7 @@ STEP_ERROR = "error"
 REFUSAL_HEADINGS = {
     GENERATOR_FAILED: "The pipeline generator of `{project}` build {number} failed",
     RULE: "The generated pipeline of `{project}` build {number} breaks the rule of its templates",
-    NOT_DECLARED: "`{project}` build {number} was asked for a variant it does not promote",
+    NOT_DECLARED: "`{project}` build {number} was asked for a step it does not make",
     PLAN_REFUSED: "The snapshot plan of `{project}` build {number} cannot be made",
     STEP_ERROR: "The snapshot step of `{project}` build {number} failed",
 }
@@ -128,7 +132,7 @@ def refusal_annotation(kind: str, project: str, build: Build, message: str) -> s
 REASON_TEXTS = {
     GENERATOR_FAILED: "its pipeline generator failed",
     RULE: "its generated pipeline breaks the rule of its templates",
-    NOT_DECLARED: "it was asked for a variant it does not promote",
+    NOT_DECLARED: "it was asked for a step it does not make",
 }
 
 # Each part of a failure below gives its lines, the builds whose failed job a
@@ -141,19 +145,23 @@ REASON_TEXTS = {
 
 def entry_lines(r: Record, depth: int) -> list[str]:
     return [
-        f"{INDENT * depth}{f.variant}: step {f.step}: {f.outcome or 'did not finish'}"
+        f"{INDENT * depth}{f.folder}: step {f.step_key}: {f.outcome or 'did not finish'}"
         for f in r.failed
     ]
 
 
+def shown_folders(folders: Iterable[Folder]) -> str:
+    return ", ".join(map(str, folders))
+
+
 def cause_line(plan: Plan, c: Cause, depth: int, nested: bool) -> str:
-    node = plan.nodes.get(c.project)
-    commit = short_commit(node.commit) if node is not None else "a commit not in the plan"
+    n = plan.projects.get(c.project)
+    commit = short_commit(n.commit) if n is not None else "a commit not in the plan"
     which = f"{c.project} @ {commit} ({c.key})"
-    variants = ", ".join(c.variants)
+    missing = shown_folders(c.missing)
     if nested:
-        return f"{INDENT * depth}caused by {which}, which has no {variants}."
-    return f"{INDENT * depth}{which} has no {variants}."
+        return f"{INDENT * depth}caused by {which}, which has no {missing}."
+    return f"{INDENT * depth}{which} has no {missing}."
 
 
 Part = tuple[list[str], list[tuple[str, Build]], frozenset[str]]
@@ -189,7 +197,7 @@ def content_part(
 ) -> Part:
     """What a record says, each of its causes followed down to the build that failed.
 
-    Its reason; its failed variants, or the build it shares them with; its causes.
+    Its reason; its failed steps, or the build it shares them with; its causes.
     """
     pad = INDENT * depth
     lines: list[str] = []
@@ -280,7 +288,7 @@ def failure_annotation(plan: Plan, record: Record, records: Mapping[str, Record]
     """
     head = failure_head(record)
     lines, retry, _ = content_part(plan, record, records, 1, frozenset({record.key}), nested=False)
-    closing = retry_sentence(retry, plan.root.project)
+    closing = retry_sentence(retry, plan.first.project)
     return f"{failure_title(record)}\n\n{fenced([head, *lines])}\n\n{closing}"
 
 
@@ -290,20 +298,20 @@ def failure_annotation(plan: Plan, record: Record, records: Mapping[str, Record]
 
 
 def left_no_record(plan: Plan, c: Cause) -> str:
-    """A dependency this build triggered whose build ended without the variants and said nothing."""
-    variants = ", ".join(c.variants)
+    """A dependency this build triggered whose build ended without the steps and said nothing."""
     return (
-        f"the build of {c.project} triggered by this build ended without {variants} and left "
-        f"no record; see the step {trigger_label(plan, c.project)}"
+        f"the build of {c.project} triggered by this build ended without "
+        f"{shown_folders(c.missing)} and left no record; see the step "
+        f"{trigger_label(plan, c.project)}"
     )
 
 
 def caused_annotation(
     plan: Plan, project: str, build: Build, causes: Sequence[Cause], records: Mapping[str, Record]
 ) -> str:
-    """The failure of a build of ``project`` that dependencies left without variants it needs.
+    """The failure of a build of ``project`` that dependencies left without steps it needs.
 
-    ``causes`` name each dependency, its key and the variants it lacks;
+    ``causes`` name each dependency, its key and the folders it lacks;
     ``records`` holds, by key, the record of this chain the caller read for
     each key a cause names and for the keys those records name. A cause with
     a record is followed down as by ``failure_annotation``; one without is a
@@ -322,5 +330,5 @@ def caused_annotation(
         lines.extend(more)
         retry.extend(again)
     head = head_line(project, build, built=False)
-    closing = retry_sentence(retry, plan.root.project)
+    closing = retry_sentence(retry, plan.first.project)
     return f"{DEPENDENCY_FAILED}\n\n{fenced([head, *lines])}\n\n{closing}"

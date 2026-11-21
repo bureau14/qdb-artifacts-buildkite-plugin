@@ -1,6 +1,8 @@
 """Fakes behind the interfaces of the planning half, in memory: no network, no subprocess.
 
-- ``MemoryStore``: ``objects.Store`` (get, put, create once, list in key order).
+- ``MemoryStore``: ``objects.Store`` (get, put, create once, list one level in key
+  order), each object with the time it was last written, one millisecond after
+  the write before.
 - ``Hosting``: repositories as commits of files. ``FakeGit`` asks it what
   ``git.Git`` asks git; ``FakeCheckout`` is one commit of it, as ``git.Checkout``.
 - ``BuildAgent``: ``agent.Agent`` of one build, over ``AgentState``, the
@@ -12,14 +14,17 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import datetime
 import hashlib
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 
-from lib.objects import StoredObject
+from lib.objects import Listed, StoredObject
 from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
 from lib.snapshot.git import branch_of, branch_ref
+
+EPOCH = datetime.datetime(2026, 11, 20, tzinfo=datetime.timezone.utc)
 
 
 class MemoryStore:
@@ -30,23 +35,29 @@ class MemoryStore:
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.times: dict[str, datetime.datetime] = {}
+        self.writes = itertools.count(1)
+
+    def write(self, key: str, body: bytes) -> None:
+        self.objects[key] = body
+        self.times[key] = EPOCH + datetime.timedelta(milliseconds=next(self.writes))
 
     def get(self, key: str) -> StoredObject | None:
         body = self.objects.get(key)
-        return None if body is None else StoredObject(body, None)
+        return None if body is None else StoredObject(body, self.times[key])
 
     def put(self, key: str, body: bytes, content_type: str) -> None:
-        self.objects[key] = body
+        self.write(key, body)
 
     def create(self, key: str, body: bytes, content_type: str) -> bool:
         if key in self.objects:
             return False
-        self.objects[key] = body
+        self.write(key, body)
         return True
 
-    def list(self, prefix: str, limit: int | None = None) -> list[tuple[str, int]]:
-        found = sorted((k, len(b)) for k, b in self.objects.items() if k.startswith(prefix))
-        return found if limit is None else found[:limit]
+    def list(self, prefix: str) -> list[Listed]:
+        below = (k for k in self.objects if k.startswith(prefix) and "/" not in k[len(prefix) :])
+        return [Listed(k, self.times[k]) for k in sorted(below)]
 
 
 def url(project: str) -> str:

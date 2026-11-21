@@ -12,7 +12,9 @@ the key of the build it takes, each pair once, sorted. They are keys and not
 commits, so each ``key.json`` is one level deep, and reading them down from
 any key gives every commit of the tree.
 
-Jobs compute keys as well as the plan step, so nothing here imports
+The plan step computes the keys of its build and of the builds it starts; a
+build without a plan step computes its key in each job, with its own build id
+in it. Jobs compute keys as well as the plan step, so nothing here imports
 ``snapshot``.
 """
 
@@ -22,6 +24,8 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
+
+from . import layout
 
 DIGEST_LENGTH = 32
 
@@ -67,3 +71,13 @@ def key_of(k: KeyJson) -> str:
     """The key: the commit, a dash, and the first 32 hex digits of the SHA-256 of ``key.json``."""
     digest = hashlib.sha256(encode_key_json(k)).hexdigest()[:DIGEST_LENGTH]
     return f"{k.commit}-{digest}"
+
+
+def create_key_json(store, prefix: str, k: KeyJson) -> bool:
+    """Create ``key.json`` under the key of ``k`` unless it is there; whether this call did.
+
+    Every writer of one key writes the same bytes, so one that finds it there
+    is no error.
+    """
+    where = layout.key_json(prefix, k.project, key_of(k))
+    return store.create(where, encode_key_json(k), "application/json")

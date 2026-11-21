@@ -4,13 +4,13 @@ A [Buildkite plugin](https://buildkite.com/docs/plugins) for uploading and downl
 
 ## What it does
 
-- **Upload** — after a build step's command completes, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project_id>/<ref>/variants/<variant>/builds/<build_id>/…`, preserving directory structure, with optional exclusions, and generating a manifest file. This includes failed builds, so diagnostic artifacts remain available.
-- **Download** — before a step's command runs, fetches artifacts produced by another step (cross-step sharing), with optional extraction and entry-level filtering. Can resolve latest successful builds and fallback to main/master branch artifacts.
-- **Promote** — updates a pointer file after a successful build step, allowing downstream test steps to fetch the `LATEST_SUCCESSFUL` artifacts without knowing the specific build ID.
+- **Upload** -- after a build step's command completes, glob-matches local files and uploads them to `s3://<bucket>/<prefix>/<project>/<key>/<platform>/<step id>/...`, preserving directory structure, with optional exclusions, then writes the folder's `manifest.json`. This includes failed builds, so diagnostic artifacts remain available.
+- **Download** -- before a step's command runs, fetches the files of steps of a build (cross-step sharing), with optional extraction and entry-level filtering. It takes a step at a key it is given, or the latest successful build of a branch, with a fallback to the master and main branches.
+- **Promote** -- after a successful command, makes a step's upload official in its manifest, once, and points the branch's latest file at the build's key, so that downstream steps can take the latest successful build without knowing its key.
 
 Uploaded artifacts are stored with `Content-Disposition: attachment` so browsers won't try to display them, instead prompting to download the file.
 
-Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipeline run is isolated and test steps can address a specific build step's output.
+Artifacts are scoped by project, key, platform and step id: the key says what a build was built from, and each step of a build keeps what it makes for one platform in a folder of its own, so test steps can address a specific build step's output.
 
 ## Requirements
 
@@ -18,6 +18,8 @@ Artifacts are scoped by project ID, git ref, build ID, and variant, so each pipe
 - The agent must have IAM permissions (S3) or SSM-stored R2 credentials configured. See [Backend configuration](#backend-configuration).
 
 ## Usage
+
+A step that uploads or promotes names its step id at the top of its configuration, as `step`: what it makes for its platform, the same on every platform (`build`, `api`). A `pipeline.py` writes `step_id: <id>` in the step's template in place of its key, and the runner's `load_template` (qdb-cicd-tools) makes the key and writes this option; a pipeline written in YAML by hand writes `step` itself. A step id is lower-case letters, digits and `_`, and starts with a letter. A step that uploads or promotes without one fails before its command.
 
 ### Upload (build step)
 
@@ -28,9 +30,9 @@ steps:
     command: make release
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
+          step: build
           upload:
             variant: "linux-amd64-release"
-            git_ref: "refs/heads/main"
             files: "artifacts/**/*.tar.zst"
 ```
 
@@ -44,9 +46,9 @@ steps:
     command: python setup.py bdist_wheel
     plugins:
       - bureau14/qdb-artifacts#v1.0.0:
+          step: build
           upload:
             variant: "linux-amd64-release-python"
-            git_ref: "refs/heads/main"
             files: "dist/quasardb*.whl"
             base_dir: "dist"
 ```
@@ -61,9 +63,9 @@ are matched against the uploaded artifact path after `base_dir` is stripped.
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
         files: "dist/**/*.tar.zst"
         base_dir: "dist"
         exclude:
@@ -75,21 +77,24 @@ plugins:
 
 Set `upload.allow_empty: true` to skip uploading without an error when no files
 match `files` or all matches are excluded. Defaults to `false`, so empty uploads
-fail as before. Skipping requires no object-store configuration or credentials,
-creates no manifest or upload annotation, and skips promotion when `promote` is
-configured in the same step, preserving the previous `LATEST_SUCCESSFUL` pointer.
+fail. Skipping requires no object-store configuration or credentials, creates
+no manifest or upload annotation, and skips promotion when `promote` is
+configured in the same step.
 
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
         files: "artifacts/**/*.tar.zst"
         allow_empty: true
 ```
 
-### Download (test step, cross-step, with extraction and entry filtering)
+### Download (test step, from its own build, with extraction and entry filtering)
+
+An entry of the pipeline's own project without a `git_ref`, or with the build's
+own, takes the steps it names from the build's own key; it must name them.
 
 ```yaml
 steps:
@@ -101,7 +106,7 @@ steps:
             clean: true
             projects:
               - variant: "linux-amd64-release"
-                git_ref: "refs/heads/main"
+                step: build
                 output-dir: artifacts
                 extract: true
                 files:
@@ -133,13 +138,13 @@ steps:
                   - "*-tests.tar.zst!bin/*"
 ```
 
-Download defaults used by the plugin:
+Which steps an entry takes, and at which key:
 
-- If `project_id` is omitted, it defaults to the current pipeline (`BUILDKITE_PIPELINE_SLUG`).
-- If `build_id` is omitted and `project_id` is set to current or omitted, it defaults to `BUILDKITE_BUILD_ID`.
-- If `build_id` is omitted and `project_id` is set to current or omitted, but `git_ref` is different from the current Buildkite ref, it defaults to `LATEST_SUCCESSFUL`.
-- If `build_id` is omitted and `project_id` points to another pipeline, it defaults to `LATEST_SUCCESSFUL`.
-- By default, downloads fall back to `refs/heads/master` and then `refs/heads/main` when the requested `git_ref` has no artifacts. Set `require_strict_ref_match: true` on a project to disable this fallback.
+- `step` names one step id or a list of them; `step: []` is the same as no `step`.
+- `keys`, which the plan step of a build with snapshot dependencies writes, gives the key of each step the entry takes.
+- An entry of the pipeline's own project (no `project_id`, or `BUILDKITE_PIPELINE_SLUG`) whose `git_ref` is absent or the build's own ref takes the steps it names at the build's own key.
+- Any other entry takes the latest successful build of its `git_ref`: a named step takes the key its own latest file names, and an entry without `step` takes every step whose latest file names the newest key of the platform. A key counts only when the step's manifest says promoted. When the ref has none, the download tries `refs/heads/master`, then `refs/heads/main`, unless the entry is of one of those or says `require_strict_ref_match: true`.
+- An entry fails only when none of its steps gives a file that matches. Steps are downloaded in the order of their ids; of two files of one path the last stays.
 
 ### Download without extraction
 
@@ -149,7 +154,7 @@ plugins:
       download:
         projects:
           - variant: "linux-amd64-release"
-            git_ref: "refs/heads/main"
+            step: build
             output-dir: dist
             files:
               - "*.tar.zst"
@@ -181,10 +186,9 @@ plugins:
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
-        project_id: quasardb
         files: "dist/**/*.tar.zst"
         parallel: 8
         concurrency: 16
@@ -197,9 +201,9 @@ Set `annotate: false` to skip creating the Buildkite job annotation after upload
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
         files: "dist/**/*.tar.zst"
         annotate: false
 ```
@@ -209,13 +213,12 @@ plugins:
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
         files: "dist/**/*.tar.zst"
       promote:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
 ```
 
 ## Configuration reference
@@ -224,61 +227,62 @@ plugins:
 
 | Key        | Type    | Description                                                                                                                                                                                                                           |
 | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`     | string  | The step id of a step that uploads or promotes. Required for those steps. See [Usage](#usage).                                                                                                                                        |
+| `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                               |
 | `upload`   | object  | Upload configuration block.                                                                                                                                                                                                           |
 | `download` | object  | Download configuration block.                                                                                                                                                                                                         |
-| `promote`  | object  | Updates the LATEST_SUCCESSFUL pointer.                                                                                                                                                                                                |
+| `promote`  | object  | Makes the step's upload of its platform official, and moves the branch's latest file.                                                                                                                                                 |
 | `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                    |
 | `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that enters a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
 | `resume`   | string  | Written by the plan step, never by a person: the gate step that goes on once the triggered dependency builds have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                 |
-| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that runs after every other step and records which variants did not pass. See [Snapshot dependencies](#snapshot-dependencies).                           |
+| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the gate step that runs after every other step and records which steps did not pass. See [Snapshot dependencies](#snapshot-dependencies).                              |
 
 ### `upload` object keys
 
 | Key           | Type             | Required | Description                                                                                                               |
 | ------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `variant`     | string           | ✓        | Name of the artifact variant (e.g. `linux-amd64-release`).                                                                |
-| `git_ref`     | string           | ✓        | Git ref to upload for (e.g. `refs/heads/main`).                                                                           |
-| `project_id`  | string           |          | Unique project identifier for namespacing artifacts (e.g. `quasardb`). Defaults to `BUILDKITE_PIPELINE_SLUG`.             |
-| `files`       | string           | ✓        | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).                                                         |
+| `variant`     | string           | yes      | The platform the step uploads (e.g. `linux-amd64-release`).                                                               |
+| `files`       | string           | yes      | Glob pattern for files to upload (e.g. `artifacts/**/*.tar.zst`).                                                         |
 | `exclude`     | array of strings |          | Glob patterns to skip after `files` has matched. Matched against the uploaded artifact path after `base_dir` is stripped. |
 | `base_dir`    | string           |          | Optional base directory to strip from uploaded object keys (e.g. `dist`).                                                 |
 | `parallel`    | integer          |          | Files uploaded simultaneously. Default: `4`.                                                                              |
 | `concurrency` | integer          |          | Multipart threads per upload. Default: `32`.                                                                              |
 | `annotate`    | boolean          |          | Create a Buildkite job annotation listing uploaded artifacts. Default: `true`.                                            |
 | `allow_empty` | boolean          |          | Skip upload without error when no files match or all matches are excluded. Default: `false`.                              |
-| `snapshot`    | string           |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots).        |
+
+The project is the pipeline's (`BUILDKITE_PIPELINE_SLUG`) and the branch the
+build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 ### `promote` object keys
 
-| Key          | Type   | Required | Description                                                                                                        |
-| ------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `project_id` | string |          | Unique project identifier of the artifacts to mark as latest. Defaults to `BUILDKITE_PIPELINE_SLUG`.               |
-| `variant`    | string | ✓        | Artifact variant to mark as latest successful build.                                                               |
-| `git_ref`    | string | ✓        | Git ref to promote (e.g. `refs/heads/main`).                                                                       |
-| `snapshot`   | string |          | Written by the plan step, never by a person: the key of the snapshot the build makes. See [Snapshots](#snapshots). |
+| Key       | Type   | Required | Description                                              |
+| --------- | ------ | -------- | -------------------------------------------------------- |
+| `variant` | string | yes      | The platform whose upload of this step to make official. |
 
 ### `download` object keys
 
 | Key           | Type    | Required | Description                                                                                                   |
 | ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `projects`    | array   | ✓        | List of projects to download artifacts from.                                                                  |
+| `projects`    | array   | yes      | List of entries to download, each of one project and platform.                                                |
 | `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
 | `parallel`    | integer |          | Files downloaded simultaneously. Default: `4`.                                                                |
 | `concurrency` | integer |          | Multipart threads per download. Default: `32`.                                                                |
 
 #### `projects` item keys
 
-| Key                        | Type             | Required | Description                                                                                                                                                                             |
-| -------------------------- | ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `project_id`               | string           |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_SLUG`.                                                                                          |
-| `build_id`                 | string           |          | Build identifier to download from. Defaults to `BUILDKITE_BUILD_ID` if `project_id` matches current pipeline and `git_ref` matches the current Buildkite ref, else `LATEST_SUCCESSFUL`. |
-| `variant`                  | string           | ✓        | Variant of the artifacts to download.                                                                                                                                                   |
-| `git_ref`                  | string           | ✓        | Git ref to download from (e.g. `refs/heads/main`).                                                                                                                                      |
-| `require_strict_ref_match` | boolean          |          | Disable branch fallback. Default: `false`.                                                                                                                                              |
-| `files`                    | array of strings | ✓        | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)).                                                                                         |
-| `exclude`                  | array of strings |          | Archive glob patterns to skip after `files` patterns have matched.                                                                                                                      |
-| `output-dir`               | string           |          | Destination directory. Default: `.` (current working directory).                                                                                                                        |
-| `extract`                  | boolean          |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.                                                                                                   |
+| Key                        | Type                       | Required | Description                                                                                                                     |
+| -------------------------- | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `project_id`               | string                     |          | Unique project identifier of the artifacts to download. Defaults to `BUILDKITE_PIPELINE_SLUG`.                                  |
+| `variant`                  | string                     | yes      | The platform to download.                                                                                                       |
+| `step`                     | string or array of strings |          | The step ids to download. Required from the build's own key; without it, an entry of another project takes every step.          |
+| `keys`                     | object                     |          | Written by the plan step, never by a person: the key of each step the entry takes.                                              |
+| `latest`                   | boolean                    |          | The entry takes the latest successful build of another project, which a build with snapshot dependencies does not plan.         |
+| `git_ref`                  | string                     |          | The ref whose latest successful build to take (e.g. `refs/heads/main`). Required in an entry of another project without `keys`. |
+| `require_strict_ref_match` | boolean                    |          | Disable branch fallback. Default: `false`.                                                                                      |
+| `files`                    | array of strings           | yes      | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)).                                 |
+| `exclude`                  | array of strings           |          | Archive glob patterns to skip after `files` patterns have matched.                                                              |
+| `output-dir`               | string                     |          | Destination directory. Default: `.` (current working directory).                                                                |
+| `extract`                  | boolean                    |          | Stream-extract archives on download (no intermediate file on disk). Default: `false`.                                           |
 
 ### Entry filtering
 
@@ -309,8 +313,8 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 | Hook            | Trigger                 | Action                                                                                                                                                                                                                                                                                                   |
 | --------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `post-checkout` | After repo checkout     | Prints the path and version of the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, fails when that is not set or names nothing that runs, and makes the step's venv anew with it: `<plugin-dir>/.venv` with the dependencies from `lib/requirements.txt`, or the venv of a gate step, described below. |
-| `pre-command`   | Before the step command | If `download` is configured, runs `artifacts.py pre-command`, which downloads (and optionally extracts) artifacts from the specified step.                                                                                                                                                               |
-| `post-command`  | After the step command  | If `upload` files or a `promote` variant are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty.                                                          |
+| `pre-command`   | Before the step command | If `download`, `upload` files or a `promote` platform are configured, runs `artifacts.py pre-command`, which fails a step that uploads or promotes without a step id, then downloads (and optionally extracts) the files of the steps each entry takes.                                                  |
+| `post-command`  | After the step command  | If `upload` files or a `promote` platform are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty.                                                         |
 
 `pre-command` and `post-command` start `artifacts.py` with the Python of the venv that `post-checkout` made, and the name of their phase; `lib/cli.py` decides what the phase runs.
 
@@ -318,73 +322,80 @@ On a gate step of a build with snapshot dependencies (option `plan`, `resume` or
 
 ### Failed builds
 
-If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so `LATEST_SUCCESSFUL` can only reference successful builds.
+If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so a step's manifest says promoted, and a branch's latest file names a key, only for a build whose command succeeded.
 
-### Snapshots
+### The bucket
 
-A **snapshot** of a project is one commit of it together with one snapshot of
-every project it depends on. Its **key** is a hash of exactly that, so it is a
-function of git commits alone. The **pointer** says which build holds one
-variant of a snapshot: the object
-`_snapshot/v1/pointers/<project>/<key>/<variant>.json` of the bucket, beside
-the projects and never inside a build.
+```text
+<prefix>/<project>/<key>/key.json                           what the key stands for
+<prefix>/<project>/<key>/<platform>/<step id>/<files>       what one step made for one platform
+<prefix>/<project>/<key>/<platform>/<step id>/manifest.json the files of that upload, and who promoted them
+<prefix>/<project>/<key>/failures/<build id>.json           a build of this key failed, and why
+<prefix>/<project>/refs/heads/<branch>/<platform>/<step id> the branch's latest file: its text is a key
+```
 
-The options `promote.snapshot` and `upload.snapshot` hold a key. The plan step
-of a build with snapshot dependencies writes them into the pipeline it uploads;
-a person never writes them. In a step whose `promote` block has a key, whose
-command passed and whose upload, if it names files, was not empty, promote
-moves `LATEST_SUCCESSFUL` and then creates the pointer of the variant, once: the first build of the key to promote the variant
-holds it, and a later build logs which build that is and leaves the pointer as
-it is. Nothing changes or removes a pointer.
+**The key** says what a build was built from: the 40 hex digits of the
+project's commit, a dash, and the first 32 hex digits of the SHA-256 of
+`key.json`, the canonical JSON (members sorted, no white space, UTF-8) of
+`{"commit": <40 hex>, "deps": [[<project>, <key>], ...], "project": <slug>}`.
+`deps` holds the key of the build taken of each snapshot dependency, sorted.
+A key of one build's own also holds `"build": "<build id>"`, so that no other
+build has it. The plan step of a build with snapshot dependencies computes the
+keys of its build and of the builds it starts, writes its own as the option
+`key` into every configuration of the plugin, and creates `key.json` once. A
+build without a plan step has no `key` option: each of its jobs computes the
+key of its own build (its project, the commit of its checkout, no dependency,
+its build id), and its first upload creates that `key.json`.
 
-An upload whose block has a key adds two fields to `manifest.json`, after the
-five that every upload writes:
+**The manifest** of a step's folder, canonical JSON:
+`{"files": [{"path", "size"}, ...], "promoted": null or {"at", "branch", "id", "number", "url"}, "uploaded": {"branch", "id", "number", "url"}}`.
+An upload writes the files, reads the manifest again, and writes it with
+`promoted` null: the step is captured. An upload into a folder whose manifest
+says promoted writes nothing and counts as empty, so the promote of its step
+does not run. A promote writes the manifest back once, with this build, its
+branch and the time: the step is made at the key, and the first promote wins.
+A promote that finds the folder promoted already leaves it as it is.
 
-- `source`: where the files were made,
-  `{schema, repository, commit, pipeline, build_number, build_id, job_id, snapshot}`;
-  `commit` is `git rev-parse HEAD` of the job's checkout.
-- `downloads`: the builds the job downloaded by those of its own download
-  options that name a build, `[{project_id, variant, git_ref, build_id}]`.
-
-Without a key, upload writes the files and the manifest of five fields, and
-promote writes only `LATEST_SUCCESSFUL`.
+**The branch's latest file** names the key of the latest build of a branch
+that made a step for a platform. A promote writes it right after it promoted,
+under `refs/heads/<BUILDKITE_BRANCH>`; the last writer wins. A build under a
+`snapshot/` name, which a plan step starts for a dependency, writes none.
 
 ## Snapshot dependencies
 
 A build that downloads the artifacts of another pipeline gets them from the
 build of exactly the commits its root planned, and every job of a chain of
-builds downloads the same build of them. A repository configures nothing for
+builds downloads them at the same keys. A repository configures nothing for
 this beyond what its step templates already say: which project each step
-downloads.
+downloads, and the step id of each step that uploads.
 
 ### Words
 
-- A **project** is a Buildkite pipeline, named by its slug. A **variant** is
-  the files of a project for one platform, such as `linux-amd64-release`.
-- A **snapshot** of a project is one commit of it together with one snapshot
-  of every project it depends on. Its **key** is a hash of exactly that, so it
-  is a function of git commits alone.
-- The **pointer** says which build holds one variant of a snapshot. The step
-  that promotes the variant writes it, once, and nothing changes it.
+- A **project** is a Buildkite pipeline, named by its slug. A **platform** is
+  what the option `variant` names, such as `linux-amd64-release`; a **step
+  id** names what one step uploads for one platform.
+- The **key** of a build says what it was built from (see
+  [The bucket](#the-bucket)). A step is **made** at a key when its manifest
+  there says promoted; nothing changes a promoted manifest.
 - A **root** is a build without `SNAPSHOT_PLAN` in its environment: one
   started by a person, a push or a schedule. Its plan step makes the **plan**:
-  the commit, the key and the label of every project of its snapshot tree.
-  A **chain node** is a build that a trigger step started for the plan, with
-  `SNAPSHOT_PLAN` in its environment; a **chain** is a root and its chain
-  nodes.
-- The **label** of a node is the branch name its build runs under, uploads
-  under and moves `LATEST_SUCCESSFUL` of: its own branch when the build is the
-  one its own pipeline would make for that branch, else `snapshot/<root
-branch>`, a name no branch has.
+  the commit, the key, the step ids and the branch of every project of its
+  snapshot tree. A **chain node** is a build that a trigger step started for
+  the plan, with `SNAPSHOT_PLAN` in its environment; a **chain** is a root and
+  its chain nodes.
+- The **branch** of a chain node is the name its build runs under: its own
+  branch when the build is the one its own pipeline would make for that
+  branch, else `snapshot/<root branch>`, a name no branch has, under which it
+  writes no latest file.
 
 ### Two types of dependency
 
 A download entry of another project declares a dependency when it is in a
 committed `.yml` or `.yaml` file under `.buildkite/`, under a key that names
 the plugin exactly: `bureau14/qdb-artifacts` or `bureau14/qdb-artifacts#<ref>`.
-Whether the entry names a build gives its type.
+Whether the entry says `latest: true` gives its type.
 
-A **snapshot** dependency names none:
+A **snapshot** dependency does not:
 
 ```yaml
 download:
@@ -395,31 +406,34 @@ download:
       files: ["*-c-api.tar.zst"]
 ```
 
-Before any job runs, the plan step writes the build of the planned snapshot
-into the entry: `build_id`, its `git_ref` and `require_strict_ref_match: true`.
-A `git_ref` that is literal text in the template, such as `refs/heads/3.14.x`,
-is a pin: the project is planned at that ref for the whole chain. A ref that
-only `pipeline.py` gives, through `by_project` for example, is no pin: the plan
-step reads templates and never runs another repository's `pipeline.py`.
+Before any job runs, the plan step writes into the entry the key of the
+planned build for each step it takes, as `keys`, in place of its `step`,
+`git_ref` and `require_strict_ref_match`. An entry without `step` takes every
+step id the dependency's templates promote at the planned commit, which the
+plan carries. A `git_ref` that is literal text in the template, such as
+`refs/heads/3.14.x`, is a pin: the project is planned at that ref for the
+whole chain. A ref that only `pipeline.py` gives, through `by_project` for
+example, is no pin: the plan step reads templates and never runs another
+repository's `pipeline.py`.
 
-A **latest successful** dependency names its build:
+A **latest successful** dependency says `latest: true`:
 
 ```yaml
 download:
   projects:
     - project_id: "quasardb"
-      build_id: "LATEST_SUCCESSFUL"
+      latest: true
       variant: "linux-amd64-release"
       git_ref: "{git_ref}"
       files: ["*-c-api.tar.zst"]
 ```
 
 It is not planned, not triggered and part of no key: the plan step leaves the
-entry as generated, and the job downloads the newest good build of the ref,
-as before. A snapshot tree never contains one. A project whose templates hold
-a latest successful dependency has no snapshot: as a root it is built every
-time and its snapshot dependencies are planned all the same, and no project
-can take it as a snapshot dependency.
+entry as generated, and the job takes the latest successful build of the ref
+when it runs. A snapshot tree never contains one. A project whose templates
+hold a latest successful dependency has no snapshot: as a root it is built
+every time, at a key of each build's own, and its snapshot dependencies are
+planned all the same; no project can take it as a snapshot dependency.
 
 ### What a repository changes to adopt
 
@@ -441,6 +455,10 @@ can take it as a snapshot dependency.
 - Its configuration in Buildkite runs
   `.buildkite/pipeline.py | buildkite-agent pipeline upload`: the plan step
   looks for that text in it.
+- Every template of a step that uploads writes `step_id: <id>` in place of
+  its key. The step ids of a commit are those of its templates' steps that
+  promote; a `step_id` that is not a step id fails the plan step like a
+  template that does not parse.
 - Every download of another project that its generated pipeline makes is in a
   committed template, with the same type; the `git_ref` of a snapshot download
   is the build's own ref or a pin written in a committed template; and no key
@@ -465,29 +483,29 @@ and the file.
    commit passes the gate at a time.
 2. Enter: its command generates the pipeline, then the plugin plans. A root
    makes the plan and keeps it as meta-data of its own build; a chain node
-   reads its root's. A build whose pipeline promotes at least one variant, and
-   whose every variant asked for has a pointer at its key, is reused and builds
-   nothing. Else the dependencies that lack a variant
-   are triggered, with a resume step that carries `resume`. Else the pipeline
-   is uploaded with one build of every snapshot dependency written into it.
+   reads its root's. Then it creates the `key.json` of its key. A build whose
+   pipeline promotes at least one step, and whose every step and platform
+   asked for is made at its key, is reused and builds nothing. Else the
+   dependencies that lack a step are triggered, with a resume step that
+   carries `resume`. Else the pipeline is uploaded with the key of every step
+   a snapshot download takes, and its own key, written into it.
 3. Resume: once the triggered builds have ended, it uploads the pipeline, or
    fails and names the dependency that failed.
-4. The jobs run as ever. A step that promotes writes the pointer of its
-   variant after its command passed and its upload, if it names files, was not
-   empty.
-5. Leave runs after every other step and records the variants whose step did
-   not pass.
+4. The jobs run as ever. A step that promotes makes its folder at the key
+   after its command passed and its upload, if it names files, was not empty.
+5. Leave runs after every other step and records the steps whose job did not
+   pass.
 
-A key some of whose variants exist builds only what is missing: a step all of
-whose variants exist is replaced by one that names the build that holds them.
+A key some of whose steps are made builds only what is missing: a job all of
+whose folders are made is replaced by one that names the build that made them.
 
 ### Variables a person can set
 
-| Variable               | Effect                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------ |
-| `SNAPSHOT_REBUILD=1`   | The root builds again, under a key no earlier build has; its dependencies are reused.      |
-| `SNAPSHOT_REBUILD=all` | Every node of the tree builds again. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
-| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                  |
+| Variable               | Effect                                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `SNAPSHOT_REBUILD=1`   | The root builds again, under a key of the root build's own; its dependencies are reused.                             |
+| `SNAPSHOT_REBUILD=all` | Every project of the tree builds again, each under such a key. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
+| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                                            |
 
 The plan step of a root asks Buildkite's API (`read_pipelines`) for the
 repository and the configuration of every pipeline of its tree, with the token
@@ -498,17 +516,20 @@ nothing.
 
 ### What is stored, and where
 
-| What           | Where                                                                   | Written                                                   |
-| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| pointer        | `_snapshot/v1/pointers/<project>/<key>/<variant>.json` in the bucket    | once, by the step that promotes the variant               |
-| failure record | `_snapshot/v1/failures/<project>/<key>/<build uuid>.json` in the bucket | once, by a gate step of a build that has a key            |
-| plan           | meta-data `snapshot-plan` of the root build                             | by the root's enter step; a retried enter writes it again |
-| marks          | meta-data `snapshot-mode` and `snapshot-promotes`                       | by the enter and resume steps of each build               |
-| arrival        | meta-data `snapshot-arrived`                                            | by the runner, when it prints the gate                    |
+| What                 | Where                                                      | Written                                                         |
+| -------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
+| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload |
+| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote             |
+| branch's latest file | `<project>/refs/heads/<branch>/<platform>/<step id>`       | by each promote, but under a `snapshot/` name                   |
+| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by a gate step of a build that has a key                  |
+| plan                 | meta-data `snapshot-plan` of the root build                | by the root's enter step; a retried enter writes it again       |
+| marks                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the enter and resume steps of each build                     |
+| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the gate                          |
 
 A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
-uuid, and `SNAPSHOT_NEEDS`, the variants its consumer downloads. The plan goes
-away with the root build; a pointer and a failure record stay.
+uuid, and `SNAPSHOT_NEEDS`, the platforms and step ids its consumer
+downloads. The plan goes away with the root build; what lies under a key
+stays.
 
 ### What a failed build shows
 
@@ -521,9 +542,9 @@ pipeline>`. Everything that passed is reused." For several it names each; with
 none it says to start a new build of the root pipeline when the cause is
 fixed.
 
-If a snapshot fails, it fails everywhere: a variant whose step hard failed
-fails, without compiling it again, every build of that key in a chain whose
-root build arrived at the gate more than 5 seconds before the failure was
+If a snapshot fails, it fails everywhere: a step whose job hard failed fails,
+without compiling it again, every build of that key in a chain whose root
+build arrived at the gate more than 5 seconds before the failure was
 recorded, also one that waited at the gate meanwhile and one that reaches the
 dependency later. A root build that arrived later, or 5 seconds or less
 before the failure, builds the key again. Within one chain a key is built at
@@ -547,9 +568,9 @@ most once.
 
 A release script, deployment tool, or local utility can use `resolve_artifacts`
 to find the same artifacts the plugin would download, without running Buildkite
-hooks or duplicating the resolution logic. For example, resolve the latest
-successful C API artifacts for a given project, ref, and variant, then pass their
-object-store locations to your own downloader.
+hooks or duplicating the resolution logic. For example, resolve the C API
+artifacts of the latest successful build of a given project, branch, platform
+and step, then pass their object-store locations to your own downloader.
 
 `lib/__init__.py` exposes the resolver, downloader, and their configuration types.
 Install the dependencies from `lib/requirements.txt`.
@@ -565,35 +586,38 @@ bucket, resolved, objects = resolve_artifacts(
     cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
     auth=ObjectAuth(),
     project_id="quasardb",
-    build_id="LATEST_SUCCESSFUL",
-    git_ref="refs/heads/master",
     variant="linux-amd64-release",
+    step="build",
+    git_ref="refs/heads/master",
     patterns=["*-c-api.tar.zst"],
     require_strict_ref_match=True,
 )
 
-print(f"Resolved ref={resolved.ref} build={resolved.build_id}")
+print(f"Resolved key={resolved.key} latest file={resolved.latest}")
 for artifact in objects:
     print(f"s3://{bucket}/{artifact.key}")
 ```
 
-`require_strict_ref_match=True` ensures this script only selects artifacts from
-the requested ref. Omit it or set it to `False` to allow the plugin's usual
-master/main fallback. The same `patterns`, optional `exclude_patterns` rules
-are supported.
+One call takes one step. `git_ref` takes the latest successful build of that
+step on the ref, through the ref's latest file; `key=` in its place takes the
+step at that key. `require_strict_ref_match=True` ensures this script only
+selects artifacts from the requested ref. Omit it or set it to `False` to
+allow the plugin's usual master/main fallback. The same `patterns`, optional
+`exclude_patterns` rules are supported.
 
-The result is `(bucket, resolved_build, objects)`. `resolved_build` identifies the
-selected ref and build ID and whether fallback was applied. Each object is a
-`ResolvedArtifact` dataclass with
-`key`, `rel` (relative path), `size` (bytes), and `entry_rules` fields. The
-`entry_rules` list contains all matching `(entry_filter, strip_prefix)` pairs in
-configuration order for callers that also want to extract selected archive entries.
-Project, build, ref, variant, and patterns are explicit inputs rather than
-Buildkite-specific defaults.
+The result is `(bucket, resolved_step, objects)`. `resolved_step` is a
+`ResolvedStep` with the `project`, the `folder` (platform and step id), the
+`key`, its `location` in the bucket, its `manifest`, and the `latest` file it
+was found through, None for a key given. Each object is a `ResolvedArtifact`
+dataclass with `key`, `rel` (relative path), `size` (bytes), and
+`entry_rules` fields. The `entry_rules` list contains all matching
+`(entry_filter, strip_prefix)` pairs in configuration order for callers that
+also want to extract selected archive entries. Project, platform, step, ref or
+key, and patterns are explicit inputs rather than Buildkite-specific defaults.
 
 ### Download and extract artifacts
 
-Use `download_artifacts` to resolve and download one project's artifacts in a
+Use `download_artifacts` to resolve and download one step's artifacts in a
 single call, without plugin configuration or a separate call to `resolve_artifacts`:
 
 ```python
@@ -603,9 +627,9 @@ bucket, resolved, objects = download_artifacts(
     cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
     auth=ObjectAuth(),
     project_id="quasardb",
-    build_id="LATEST_SUCCESSFUL",
-    git_ref="refs/heads/master",
     variant="linux-amd64-release",
+    step="build",
+    git_ref="refs/heads/master",
     patterns=["*-c-api.tar.zst!bin/*", "*-c-api.tar.zst!lib/*"],
     require_strict_ref_match=True,
     output_dir="artifacts",
@@ -618,7 +642,7 @@ entries into `artifacts/`, and strips those prefixes. Set `extract=False` (the
 default) to save the archives themselves, preserving their relative paths.
 `parallel` and `concurrency` control transfers just as they do in the plugin.
 
-The function returns the same `(bucket, resolved_build, objects)` tuple as the
+The function returns the same `(bucket, resolved_step, objects)` tuple as the
 resolver, after all transfers complete. It creates the output directory if needed
 but does not clean it; the plugin's `clean` option remains handled by its wrapper.
 
@@ -628,11 +652,12 @@ import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.
 `resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
 `auth` instead of constructing them directly.
 
-### Read the manifest of a build
+### Read the manifest of a step
 
-`read_manifest` returns the `manifest.json` of a build that `resolve_artifacts`
-or `download_artifacts` resolved, as a dict with the fields the upload wrote:
-`file_count`, `files`, `uploaded_at`, `total_size_bytes` and `base_dir`.
+`read_manifest` returns the `manifest.json` of a step that `resolve_artifacts`
+or `download_artifacts` resolved, as a dict with the members the upload and
+the promote wrote: `files`, `uploaded` and `promoted` (see
+[The bucket](#the-bucket)).
 
 ```python
 from vendor.qdb_artifacts.lib import read_manifest
@@ -640,19 +665,16 @@ from vendor.qdb_artifacts.lib import read_manifest
 manifest = read_manifest(cfg, auth, bucket, resolved)
 ```
 
-It returns `None` when the build has no manifest that reads as a JSON object,
-for example when its upload failed before the end.
-
-The manifest of a build uploaded with a snapshot key also has the fields
-`source` and `downloads` (see [Snapshots](#snapshots)).
+It returns `None` when the step's folder has no manifest.
 
 ### Errors
 
 A failure the library can explain raises `ArtifactsError`, also exported by
-`vendor.qdb_artifacts.lib`, with the facts in its message: an unresolvable build
-names every ref and pointer it tried, an empty selection names the patterns and
-what the build holds, a configuration error names the variable and the SSM
-parameter. Catch `ArtifactsError` to handle such a failure.
+`vendor.qdb_artifacts.lib`, with the facts in its message: a step that cannot
+be found names every latest file it tried, or the manifest that is missing at
+its key; an empty selection names the patterns, the excludes and the step's
+folder; a configuration error names the variable and the SSM parameter. Catch
+`ArtifactsError` to handle such a failure.
 
 Other failures raise the exception of boto3, of zstandard or of the standard
 library: a request the store still refuses after its retries, an archive that
@@ -665,16 +687,19 @@ or exit handlers.
 
 A program that vendors an earlier copy of the library changes this:
 
+- `resolve_artifacts` and `download_artifacts` take one `step` of a platform
+  (`variant`), and a `git_ref` or a `key` where they took a `build_id`; they
+  give a `ResolvedStep` where they gave a `ResolvedBuild`.
+- `read_manifest` gives the members `files`, `uploaded` and `promoted`.
 - A failure the library can explain raises `ArtifactsError` where it ended
   the process before (`SystemExit` with status 1). Catch it, or let it end the
   process.
-- `read_manifest` is new.
 
-The import path (`vendor.qdb_artifacts.lib` in the examples above) and the nine
-names exported before are unchanged: `ObjectAuth`, `ResolvedArtifact`,
-`ResolvedBuild`, `StoreConfig`, `aws_clients`, `download_artifacts`,
-`load_store_config`, `resolve_artifacts` and `resolve_object_auth`. The
-library never imports `lib/snapshot/`, and needs no PyYAML.
+The import path (`vendor.qdb_artifacts.lib` in the examples above) is
+unchanged, and so are `ObjectAuth`, `ResolvedArtifact`, `StoreConfig`,
+`aws_clients`, `download_artifacts`, `load_store_config`, `read_manifest`,
+`resolve_artifacts` and `resolve_object_auth`. The library never imports
+`lib/snapshot/`, and needs no PyYAML.
 
 ## Backend configuration
 
@@ -701,9 +726,9 @@ Set `debug: true` in the plugin config to enable `set -x` tracing in all hooks:
 ```yaml
 plugins:
   - bureau14/qdb-artifacts#v1.0.0:
+      step: build
       upload:
         variant: "linux-amd64-release"
-        git_ref: "refs/heads/main"
         files: "artifacts/**/*.tar.zst"
       debug: true
 ```

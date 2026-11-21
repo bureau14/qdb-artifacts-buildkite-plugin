@@ -1,13 +1,15 @@
 """Small objects of the store, behind one interface over a bucket and its client.
 
-A pointer, a manifest and the listing of a prefix each take one request (a
-listing one per page). Files of a build travel through boto3's transfer
-manager instead, in `upload` and `download`.
+A manifest, a latest file, ``key.json``, a failure record and the listing of
+one level of a prefix each take one request (a listing one per page). Files of
+a step travel through boto3's transfer manager instead, in ``upload`` and
+``download``.
 
-An object that is not there is not an error: `get` says so with None, because
-a missing pointer or manifest is an answer the callers act on. Nor is an object
-that is there already when `create` wants to write it: create says so with
-False. Every other error of the store is raised as boto3 raised it.
+An object that is not there is not an error: ``get`` says so with None,
+because a missing manifest or latest file is an answer the callers act on. Nor
+is an object that is there already when ``create`` wants to write it: create
+says so with False. Every other error of the store is raised as boto3 raised
+it.
 """
 
 from __future__ import annotations
@@ -27,6 +29,14 @@ TAKEN = ("PreconditionFailed",)
 @dataclass(frozen=True)
 class StoredObject:
     body: bytes
+    last_modified: datetime.datetime | None
+
+
+@dataclass(frozen=True)
+class Listed:
+    """An object a listing names: its key, and when it was last written."""
+
+    key: str
     last_modified: datetime.datetime | None
 
 
@@ -72,16 +82,20 @@ class Store:
                 return False
             raise
 
-    def list(self, prefix: str, limit: int | None = None) -> list[tuple[str, int]]:
-        """(key, size) of every object whose key starts with prefix, in key order.
+    def list(self, prefix: str) -> list[Listed]:
+        """Every object directly under ``prefix``, which ends with "/", in key order.
 
-        With a limit, the first `limit` of them, in pages of `limit` keys, so that
-        asking whether a prefix holds anything costs one small request."""
-        config = {} if limit is None else {"MaxItems": limit, "PageSize": limit}
+        The delimiter "/" leaves out what lies deeper, so a listing of the latest
+        files of one platform holds those files and no branch whose name goes on
+        below it."""
         pages = self.client.get_paginator("list_objects_v2").paginate(
-            Bucket=self.bucket, Prefix=prefix, PaginationConfig=config
+            Bucket=self.bucket, Prefix=prefix, Delimiter="/"
         )
-        return [(item["Key"], item["Size"]) for page in pages for item in page.get("Contents", [])]
+        return [
+            Listed(item["Key"], item.get("LastModified"))
+            for page in pages
+            for item in page.get("Contents", [])
+        ]
 
 
 def destination_store(cfg, auth) -> tuple[Store, str]:

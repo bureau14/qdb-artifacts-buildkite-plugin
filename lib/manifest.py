@@ -1,100 +1,151 @@
-"""manifest.json of a build: what an upload wrote, as compact JSON.
+"""manifest.json of a step's folder: its files, who uploaded them, and who promoted them.
 
-An upload writes it last, after every file of the build has arrived, so a build
-whose manifest exists holds the whole upload. A download reads it for the
-build's log lines only; a caller outside the plugin reads it through
-read_manifest.
+    {"files": [{"path": "<path>", "size": <bytes>}, ...],
+     "promoted": null or {"at": "<UTC ISO 8601, ms, Z>", "branch": "<branch>",
+                          "id": "<uuid>", "number": <n>, "url": "<url>"},
+     "uploaded": {"branch": "<branch>", "id": "<uuid>", "number": <n>, "url": "<url>"}}
 
-In a build with a snapshot key the manifest also says where its files were
-made, so that whoever finds a build by its snapshot pointer can tell from what:
+Canonical JSON, ``files`` sorted by path. An upload writes it after its last
+file, with ``promoted`` null: the step's files are captured. A promote writes
+it back once, with ``promoted`` set: the step is made at its key, and the
+first promote wins. A download reads it and takes the files it names: a
+listing cannot tell a promoted upload from a failed or half-written one.
 
-    source     {schema, repository, commit, pipeline, build_number, build_id,
-                job_id, snapshot}
-    downloads  [{project_id, variant, git_ref, build_id}], the builds the job
-               downloaded by those of its own download options that name one
+This is ordinary job code: the plan step reads the same manifests, so nothing
+here imports ``snapshot``.
 """
 
-import json
-from dataclasses import asdict, dataclass
+from __future__ import annotations
 
-from botocore.exceptions import ClientError
+import json
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from typing import Any
 
 from . import layout
 from .clients import s3_client
+from .key import canonical_json
 from .objects import Store
 
-SOURCE_SCHEMA = 1
+
+@dataclass(frozen=True)
+class Build:
+    id: str
+    number: int
+    url: str
 
 
 @dataclass(frozen=True)
-class Source:
-    repository: str
-    commit: str  # git rev-parse HEAD of the job's checkout
-    pipeline: str
-    build_number: int
-    build_id: str  # the build the files are uploaded under
-    job_id: str
-    snapshot: str  # the key of the snapshot the build makes
+class Uploaded:
+    """The build whose bytes a folder holds, and the branch it ran under."""
+
+    branch: str
+    build: Build
 
 
 @dataclass(frozen=True)
-class Download:
-    project_id: str
-    variant: str
-    git_ref: str
-    build_id: str
+class Promoted:
+    """The build that promoted a folder, the branch it ran under, and when (``at``)."""
+
+    at: str
+    branch: str
+    build: Build
+
+
+@dataclass(frozen=True, order=True)
+class File:
+    path: str
+    size: int
 
 
 @dataclass(frozen=True)
-class Provenance:
-    source: Source
-    downloads: tuple
+class Manifest:
+    files: tuple[File, ...]
+    uploaded: Uploaded
+    promoted: Promoted | None = None
 
 
-def compose_manifest(files, total_size_bytes, base_dir, uploaded_at, provenance=None):
-    """The manifest of an upload of files (paths relative to base_dir); with
-    provenance, after the five fields every upload writes, where they were made."""
-    manifest = {
-        "file_count": len(files),
-        "files": files,
-        "uploaded_at": uploaded_at,
-        "total_size_bytes": total_size_bytes,
-        "base_dir": base_dir,
-    }
-    if provenance is None:
-        return manifest
+def captured(files: Iterable[tuple[str, int]], uploaded: Uploaded) -> Manifest:
+    """The manifest an upload of ``files`` (path and size) writes: captured, not promoted."""
+    listed = sorted(File(path, size) for path, size in files)
+    return Manifest(tuple(listed), uploaded)
+
+
+def promoted_by(m: Manifest, p: Promoted) -> Manifest:
+    """``m`` written back by the promote ``p``."""
+    return replace(m, promoted=p)
+
+
+def is_made(m: Manifest | None) -> bool:
+    """True for a manifest that says promoted: the step is made at its key."""
+    return m is not None and m.promoted is not None
+
+
+# ---------------------------------------------------------------------------
+# Encoding and decoding
+# ---------------------------------------------------------------------------
+
+
+def build_document(b: Build) -> dict[str, Any]:
+    return {"id": b.id, "number": b.number, "url": b.url}
+
+
+def manifest_document(m: Manifest) -> dict[str, Any]:
+    promoted = m.promoted
     return {
-        **manifest,
-        "source": {"schema": SOURCE_SCHEMA, **asdict(provenance.source)},
-        "downloads": [asdict(d) for d in provenance.downloads],
+        "files": [{"path": f.path, "size": f.size} for f in m.files],
+        "promoted": (
+            None
+            if promoted is None
+            else {"at": promoted.at, "branch": promoted.branch, **build_document(promoted.build)}
+        ),
+        "uploaded": {"branch": m.uploaded.branch, **build_document(m.uploaded.build)},
     }
 
 
-def upload_manifest(store, prefix, manifest_payload):
-    store.put(
-        layout.manifest(prefix),
-        json.dumps(manifest_payload, separators=(",", ":")).encode("utf-8"),
-        "application/json",
+def encode_manifest(m: Manifest) -> bytes:
+    return canonical_json(manifest_document(m))
+
+
+def build_of(d: Mapping[str, Any]) -> Build:
+    return Build(id=d["id"], number=d["number"], url=d["url"])
+
+
+def decode_manifest(body: bytes) -> Manifest:
+    """The manifest in ``body``, as ``encode_manifest`` wrote it."""
+    d = json.loads(body)
+    promoted = d["promoted"]
+    return Manifest(
+        files=tuple(File(f["path"], f["size"]) for f in d["files"]),
+        uploaded=Uploaded(d["uploaded"]["branch"], build_of(d["uploaded"])),
+        promoted=(
+            None
+            if promoted is None
+            else Promoted(promoted["at"], promoted["branch"], build_of(promoted))
+        ),
     )
 
 
-def read_manifest_at(store, prefix):
-    """Best-effort fetch of <prefix>/manifest.json. Returns dict or None on any
-    error -- this is purely informational and must never break the download."""
-    try:
-        stored = store.get(layout.manifest(prefix))
-        return None if stored is None else json.loads(stored.body)
-    except (ClientError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
+# ---------------------------------------------------------------------------
+# In the store
+# ---------------------------------------------------------------------------
 
 
-def read_manifest(cfg, auth, bucket, resolved):
-    """The manifest.json of a resolved build as a dict, or None when there is none
-    that reads as a JSON object: missing, refused by the store, not JSON, or not
-    an object.
+def read_manifest_at(store, step_folder: str) -> Manifest | None:
+    """The manifest of a step's folder; None when no upload wrote one."""
+    stored = store.get(layout.manifest(step_folder))
+    return None if stored is None else decode_manifest(stored.body)
 
-    It reads the manifest the way a download does. A caller must expect None: an
-    upload that failed before its end leaves its files without a manifest.
+
+def write_manifest(store, step_folder: str, m: Manifest) -> None:
+    store.put(layout.manifest(step_folder), encode_manifest(m), "application/json")
+
+
+def read_manifest(cfg, auth, bucket, resolved) -> dict[str, Any] | None:
+    """The manifest.json of a step that ``resolve_artifacts`` or ``download_artifacts``
+    resolved, as a dict; None when the folder has none.
+
+    It reads the manifest the way a download does.
     """
-    manifest = read_manifest_at(Store(s3_client(cfg, auth), bucket), resolved.prefix)
-    return manifest if isinstance(manifest, dict) else None
+    m = read_manifest_at(Store(s3_client(cfg, auth), bucket), resolved.location)
+    return None if m is None else manifest_document(m)

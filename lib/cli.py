@@ -1,9 +1,11 @@
 """What each hook phase does, decided from the step's options:
 
-    pre-command   download the step's download projects
+    pre-command   check the step id of a step that uploads or promotes, so
+                  that a step without one fails before its command; download
+                  the step's download entries
     post-command  a gate step runs its one gate command and nothing else; any
                   other step uploads, when the step names files; then
-                  promotes, when the step names a variant to promote, its
+                  promotes, when the step names a platform to promote, its
                   command passed and the upload was not empty
 
 The hooks find Python and start this module with the name of their phase. The
@@ -17,8 +19,10 @@ import sys
 from .download import download
 from .errors import ArtifactsError
 from .options import (
+    check_step_id,
     command_exit_status,
     download_arguments,
+    download_requested,
     gate_step,
     promote_arguments,
     promote_requested,
@@ -36,8 +40,10 @@ def section(title):
 
 
 def pre_command():
-    section(":arrow_down: Downloading artifacts")
-    download(**download_arguments())
+    check_step_id()
+    if download_requested():
+        section(":arrow_down: Downloading artifacts")
+        download(**download_arguments())
     return 0
 
 

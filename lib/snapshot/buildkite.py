@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ArtifactsError
-from ..options import without_user
 from ..retry import with_retry
 
 API = "https://api.buildkite.com"
@@ -52,6 +51,15 @@ class PipelineFacts:
 # ---------------------------------------------------------------------------
 # The repository and the configuration
 # ---------------------------------------------------------------------------
+
+
+def without_user(repository: str) -> str:
+    """A repository URL without its user part, which may hold a token or a password. The scp
+    form (git@host:org/repo) has no place for a password."""
+    url = urllib.parse.urlsplit(repository)
+    if not url.scheme or "@" not in url.netloc:
+        return repository
+    return urllib.parse.urlunsplit(url._replace(netloc=url.netloc.rpartition("@")[2]))
 
 
 def https_repository(repository: str) -> str:

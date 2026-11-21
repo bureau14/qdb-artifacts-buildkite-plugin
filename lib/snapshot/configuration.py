@@ -27,19 +27,23 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..options import read_bool
+
 PLUGIN = "bureau14/qdb-artifacts"
 
-# The plugin's blocks and the options the planning half reads.
+# The plugin's blocks and the options the planning half reads and writes.
 DOWNLOAD = "download"
 UPLOAD = "upload"
 PROMOTE = "promote"
 PROJECTS = "projects"
 PROJECT_ID = "project_id"
 GIT_REF = "git_ref"
-BUILD_ID = "build_id"
 VARIANT = "variant"
 STRICT_REF_MATCH = "require_strict_ref_match"
-SNAPSHOT_OPTION = "snapshot"
+LATEST = "latest"
+STEP = "step"
+KEY = "key"
+KEYS = "keys"
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +136,27 @@ def plugin_block(config: Any, block: str) -> dict[str, Any] | None:
     """
     found = option_value(config, block) if isinstance(config, dict) else None
     return found if isinstance(found, dict) else None
+
+
+def named_step(config: Any) -> str | None:
+    """The step id an artifacts configuration names at its top (``step``), as text; None
+    when it names none."""
+    v = option_value(config, STEP) if isinstance(config, dict) else None
+    return v if isinstance(v, str) and v else None
+
+
+def entry_steps(entry: Mapping[Any, Any]) -> tuple[str, ...]:
+    """The step ids a download entry names: one, a list, or none (absent, or ``[]``)."""
+    v = option_value(entry, STEP)
+    if isinstance(v, list):
+        return tuple(str(s) for s in v)
+    return () if v is None or v == "" else (str(v),)
+
+
+def takes_latest(entry: Mapping[Any, Any]) -> bool:
+    """True for an entry that takes the latest successful build (``latest: true``), read as
+    the job reads a boolean."""
+    return read_bool(option_value(entry, LATEST))
 
 
 def plugin_download_entries(config: Any) -> list[dict[str, Any]]:

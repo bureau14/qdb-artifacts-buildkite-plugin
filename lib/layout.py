@@ -1,35 +1,49 @@
 """Every object key the plugin reads or writes.
 
-    <prefix>/<project>/<git ref>/variants/<variant>/
-        LATEST_SUCCESSFUL                 text, a build id; moved by promote
-        builds/<build id>/manifest.json   written by upload
-        builds/<build id>/<file>          written by upload
+    <prefix>/<project>/<key>/key.json                           what the key stands for
+    <prefix>/<project>/<key>/<platform>/<step id>/<file>        what one step made for one platform
+    <prefix>/<project>/<key>/<platform>/<step id>/manifest.json the files of that upload, and who
+                                                                promoted them
+    <prefix>/<project>/<key>/failures/<build id>.json           a build of this key failed, and why
+    <prefix>/<project>/<ref>/<platform>/<step id>               the branch's latest file: a key
 
-    <prefix>/_snapshot/v1/
-        pointers/<project>/<key>/<variant>.json    written once, see pointer.py
-        failures/<project>/<key>/<build id>.json   written once by the plan step
-
-The destination names the bucket and the prefix. Project, ref and build id keep
-the runs of pipelines apart; the variant keeps apart what the steps of one
-build produce, so that a test step downloads under the variant its build step
-uploaded to. A file keeps its path relative to the checkout, or to `base_dir`.
-
-The objects of snapshot dependencies sit beside the projects and never inside
-a build prefix: a deployed plugin counts every object there as an artifact of
-the build, and a step may download "*" of another pipeline's build. No pipeline
-slug starts with "_", so no project shares their prefix.
+The destination names the bucket and the prefix. The key says what a build
+was built from; the platform (the option ``variant``) and the step id keep
+apart what the steps of one build make. A file keeps its path relative to the
+checkout, or to ``base_dir``. The latest file of a branch lies under its full
+ref, ``refs/heads/<branch>``, which no key starts with.
 
 Each kind of key has its own function, so the kind of a key follows from the
-function a caller names and never from the value of a build id.
+function a caller names.
 """
 
 from __future__ import annotations
 
+import re
+from typing import NamedTuple
 from urllib.parse import urlparse
 
-LATEST = "LATEST_SUCCESSFUL"
+KEY_JSON = "key.json"
 MANIFEST = "manifest.json"
-SNAPSHOT_ROOT = "_snapshot/v1"
+FAILURES = "failures"
+
+# One path segment of one spelling. It starts with a letter because the agent
+# reads YAML 1.2, in which a plain 1e3 or 0889 is a number.
+STEP_ID = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def is_step_id(value: object) -> bool:
+    return isinstance(value, str) and STEP_ID.fullmatch(value) is not None
+
+
+class Folder(NamedTuple):
+    """One folder of a key: what one step made for one platform."""
+
+    platform: str
+    step: str
+
+    def __str__(self) -> str:
+        return f"{self.platform}/{self.step}"
 
 
 def parse_destination(destination: str) -> tuple[str, str]:
@@ -45,29 +59,30 @@ def key_join(*parts: str) -> str:
     return "/".join(p.strip("/") for p in parts if p.strip("/"))
 
 
-def variant_prefix(prefix: str, project: str, git_ref: str, variant: str) -> str:
-    return key_join(prefix, project, git_ref, "variants", variant)
+def key_json(prefix: str, project: str, key: str) -> str:
+    return key_join(prefix, project, key, KEY_JSON)
 
 
-def latest_pointer(prefix: str, project: str, git_ref: str, variant: str) -> str:
-    return key_join(variant_prefix(prefix, project, git_ref, variant), LATEST)
+def step_folder(prefix: str, project: str, key: str, folder: Folder) -> str:
+    return key_join(prefix, project, key, folder.platform, folder.step)
 
 
-def build_prefix(prefix: str, project: str, git_ref: str, variant: str, build_id: str) -> str:
-    return key_join(variant_prefix(prefix, project, git_ref, variant), "builds", build_id)
-
-
-def manifest(build: str) -> str:
-    return key_join(build, MANIFEST)
-
-
-def snapshot_pointer(prefix: str, project: str, key: str, variant: str) -> str:
-    return key_join(prefix, SNAPSHOT_ROOT, "pointers", project, key, f"{variant}.json")
+def manifest(step_folder: str) -> str:
+    return key_join(step_folder, MANIFEST)
 
 
 def failure_records(prefix: str, project: str, key: str) -> str:
-    return key_join(prefix, SNAPSHOT_ROOT, "failures", project, key) + "/"
+    return key_join(prefix, project, key, FAILURES) + "/"
 
 
 def failure_record(prefix: str, project: str, key: str, build_id: str) -> str:
     return failure_records(prefix, project, key) + f"{build_id}.json"
+
+
+def latest_file(prefix: str, project: str, ref: str, folder: Folder) -> str:
+    return key_join(prefix, project, ref, folder.platform, folder.step)
+
+
+def latest_files(prefix: str, project: str, ref: str, platform: str) -> str:
+    """The prefix of the latest files of every step of ``platform`` on ``ref``."""
+    return key_join(prefix, project, ref, platform) + "/"

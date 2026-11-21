@@ -21,15 +21,14 @@ steps:
             project_id: quasardb-build
             variant: linux-haswell-release
         promote:
-          git-ref: refs/heads/feature
           variant: linux-haswell-release
+        step: build
         upload:
           files:
           - build/ci/extension/quasar/qdb*
           - build/ci/extension/quasar/*duckdb_extension*
           - qdb/**/*qdb_api.*
           - artifacts/*.tar.zst
-          git-ref: refs/heads/feature
           variant: linux-haswell-release
     - bureau14/qdb-test-report#master: {}
 - group: Freebsd Haswell Release
@@ -53,15 +52,14 @@ steps:
             project_id: quasardb-build
             variant: freebsd-haswell-release
         promote:
-          git-ref: refs/heads/feature
           variant: freebsd-haswell-release
+        step: build
         upload:
           files:
           - build/ci/extension/quasar/qdb*
           - build/ci/extension/quasar/*duckdb_extension*
           - qdb/**/*qdb_api.*
           - artifacts/*.tar.zst
-          git-ref: refs/heads/feature
           variant: freebsd-haswell-release
     - bureau14/qdb-test-report#master: {}
 - label: Aggregate test report

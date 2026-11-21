@@ -64,13 +64,14 @@ reached, their dependencies sorted):
      dependencies, with the plan id as its build when ``SNAPSHOT_REBUILD``
      forces the node (the root under ``one``, every node under ``all``); None
      for a root that has no snapshot;
-   - the labels: the branch a triggered build runs under, uploads under and
-     moves ``LATEST_SUCCESSFUL`` of. A node runs under its own branch only
-     when it runs as itself (``runs_as_itself``): its build is the one its own
-     pipeline would make for that branch, as far as the plan shows. Any other
-     node runs under ``snapshot/<root branch>``, which no branch has. The
-     rule needs where each pin was written (``pin_writers``), and the root's
-     repository: the plan knows the release line of that repository only.
+   - the branches: the name a started build runs under, whose latest files
+     its promotes write. A node runs under its own branch only when it runs
+     as itself (``runs_as_itself``): its build is the one its own pipeline
+     would make for that branch, as far as the plan shows. Any other node runs
+     under ``snapshot/<root branch>``, which no branch has, and writes no
+     latest file. The rule needs where each pin was written
+     (``pin_writers``), and the root's repository: the plan knows the release
+     line of that repository only.
 """
 
 from __future__ import annotations
@@ -99,19 +100,20 @@ from .plan import (
     REBUILD_ALL,
     REBUILD_NONE,
     REBUILD_ONE,
-    Node,
+    First,
     Plan,
     PlanError,
-    RootInfo,
+    Planned,
+    forced_build,
 )
 from .shape import has_shape
 
 PIPELINE_PY = ".buildkite/pipeline.py"
 DIRECTORY = BUILDKITE_DIR.rstrip("/")
-LATEST_SUCCESSFUL_ENTRY = "build_id: LATEST_SUCCESSFUL"
+LATEST_SUCCESSFUL_ENTRY = "latest: true"
 
-# What the label of a node that does not run as itself starts with.
-SNAPSHOT_LABEL_PREFIX = "snapshot/"
+# What the branch of a node that does not run as itself starts with.
+SNAPSHOT_BRANCH_PREFIX = "snapshot/"
 
 # The branches a dependency without a pin is taken from when its repository
 # has neither the root's branch nor the root's line, in order: as the
@@ -326,9 +328,9 @@ def unmet_latest(project: str, place: Place, latest: Entry) -> Unmet:
     path = latest.path
     return Unmet(
         f"its declaration holds a latest successful dependency, which a snapshot never "
-        f"contains: {path} downloads {latest.project} with build_id",
+        f"contains: {path} downloads {latest.project} with latest: true",
         f"{project} takes {latest.project} as a snapshot dependency on {place.ref} "
-        f"(no build_id in its entry of {latest.project} in {path})",
+        f"(no latest: true in its entry of {latest.project} in {path})",
     )
 
 
@@ -564,26 +566,24 @@ def bottom_up(tree: Mapping[str, Member], start: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Keys and labels, dependencies first
+# Keys and branches, dependencies first
 # ---------------------------------------------------------------------------
-
-
-def forced_by(root: Root, project: str) -> str | None:
-    """The plan id when ``SNAPSHOT_REBUILD`` forces ``project`` to be built again; else None."""
-    every = root.rebuild == REBUILD_ALL
-    forced = every or (root.rebuild == REBUILD_ONE and project == root.project)
-    return root.build_id if forced else None
 
 
 def compute_keys(
     tree: Mapping[str, Member], order: Sequence[str], root: Root
 ) -> dict[str, str | None]:
-    """The key of every project of ``order`` (dependencies first); None without a snapshot."""
+    """The key of every project of ``order`` (dependencies first); None without a snapshot.
+
+    ``SNAPSHOT_REBUILD`` makes a forced project's key one of the first build's
+    own (``plan.forced_build``), so that no earlier build has it.
+    """
     keys: dict[str, str | None] = {}
     for p in order:
         n = tree[p]
         deps = tuple((d, keys[d]) for d in deps_of(n))
-        stands_for = KeyJson(p, n.place.commit, deps, forced_by(root, p))
+        forced = forced_build(root.rebuild, p == root.project, root.build_id)
+        stands_for = KeyJson(p, n.place.commit, deps, forced)
         keys[p] = key_of(stands_for) if has_snapshot(n.declaration) else None
     return keys
 
@@ -657,19 +657,19 @@ def runs_as_itself(
     return on_roots_branch or on_its_line
 
 
-def label_of(p: str, as_itself: bool, tree: Mapping[str, Member], context: str) -> str:
+def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], context: str) -> str:
     """The branch a build of ``p`` runs under: its own when it runs as itself, else another.
 
     A node that runs as itself is on a branch (``runs_as_itself``). The other
     is ``snapshot/<root branch>``: no branch has that name, so a build under it
-    moves no ``LATEST_SUCCESSFUL`` that anybody reads.
+    writes no latest file.
     """
-    return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_LABEL_PREFIX + context
+    return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + context
 
 
-def plan_node(n: Member, key: str | None, label: str) -> Node:
+def planned_of(n: Member, key: str | None, branch: str) -> Planned:
     p = n.place
-    return Node(p.ref, p.commit, key, label, tuple(deps_of(n)))
+    return Planned(p.ref, p.commit, key, branch, tuple(deps_of(n)), n.declaration.steps)
 
 
 # ---------------------------------------------------------------------------
@@ -698,9 +698,9 @@ def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> P
         id=root.build_id,
         context=root.branch,
         rebuild=root.rebuild,
-        root=RootInfo(root.project, root.build_number),
-        nodes={
-            p: plan_node(tree[p], keys[p], label_of(p, as_itself[p], tree, root.branch))
+        first=First(root.project, root.build_number),
+        projects={
+            p: planned_of(tree[p], keys[p], runs_under(p, as_itself[p], tree, root.branch))
             for p in order
         },
     )

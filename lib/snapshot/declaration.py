@@ -2,21 +2,22 @@
 
 A pipeline depends on what its committed step templates download: every
 download entry of the artifacts plugin with a literal project id of another
-pipeline gives one entry ``(project, type, pin)``. An entry that names its
-build (``names_build``) is a **latest successful** dependency, any other a
-**snapshot** dependency. ``read_declaration`` reads those entries from the
-files of one commit without running anything, for the build's own checkout and
-for another repository's commit alike; reading the files is the caller's
-business. ``rule_violations`` compares the download entries of a generated
-pipeline with that declaration. Both read the plugin's configuration by its
-structure (the ``configuration`` module), so what the reader counts and what
-the rule checks are one notion.
+pipeline gives one entry ``(project, type, pin)``. An entry that takes the
+latest successful build (``latest: true``) is a **latest successful**
+dependency, any other a **snapshot** dependency. The same templates give the
+pipeline's step ids: the ``step_id`` of every template step that promotes.
+``read_declaration`` reads both from the files of one commit without running
+anything, for the build's own checkout and for another repository's commit
+alike; reading the files is the caller's business. ``rule_violations``
+compares the download entries of a generated pipeline with that declaration.
+Both read the plugin's configuration by its structure (the ``configuration``
+module), so what the reader counts and what the rule checks are one notion.
 
 A snapshot tree never contains a latest successful dependency: a declaration
 that holds one has no snapshot (``has_snapshot``).
 
-A template that does not parse raises ``TemplateError``, which names the
-project and the file.
+A template that does not parse, or that writes a ``step_id`` that is not a
+step id, raises ``TemplateError``, which names the project and the file.
 """
 
 from __future__ import annotations
@@ -27,19 +28,25 @@ from typing import Any
 
 import yaml
 
+from ..layout import is_step_id
 from .configuration import (
-    BUILD_ID,
     GIT_REF,
     PLUGIN,
     PROJECT_ID,
+    PROMOTE,
     download_entries,
     misnamed_plugins,
-    option_items,
     option_value,
+    plugin_block,
+    plugin_configurations,
+    takes_latest,
 )
 
 BUILDKITE_DIR = ".buildkite/"
 TEMPLATE_SUFFIXES = (".yml", ".yaml")
+# What a template writes in a step in place of its key; the runner's
+# load_template turns it into the key and the plugin's step.
+STEP_ID = "step_id"
 
 # The two types of dependency.
 SNAPSHOT = "snapshot"
@@ -55,12 +62,12 @@ LATEST_SUCCESSFUL = "latest successful"
 class Entry:
     """One dependency: the project a template downloads from, its type and its pin.
 
-    ``type`` is ``SNAPSHOT``, or ``LATEST_SUCCESSFUL`` for an entry that names
-    its build (``names_build``). ``pin`` is a snapshot entry's git ref when that
-    is a literal string; None when it has no git ref or one that is not
-    literal, and always for a latest successful entry. ``path`` is the first
-    template the entry was found in, for messages; it is not part of what
-    makes two entries one.
+    ``type`` is ``SNAPSHOT``, or ``LATEST_SUCCESSFUL`` for an entry that takes
+    the latest successful build (``takes_latest``). ``pin`` is a snapshot
+    entry's git ref when that is a literal string; None when it has no git ref
+    or one that is not literal, and always for a latest successful entry.
+    ``path`` is the first template the entry was found in, for messages; it is
+    not part of what makes two entries one.
     """
 
     project: str
@@ -71,9 +78,11 @@ class Entry:
 
 @dataclass(frozen=True)
 class Declaration:
-    """The entries of one commit's templates, each once, sorted."""
+    """The entries of one commit's templates, each once, sorted, and the step ids its
+    templates promote, sorted."""
 
     entries: tuple[Entry, ...] = ()
+    steps: tuple[str, ...] = ()
 
 
 class TemplateError(ValueError):
@@ -141,20 +150,11 @@ def other_project(entry: Mapping[str, Any], own: str) -> str | None:
     return None if v is None or v == "" or v == own else v
 
 
-def names_build(entry: Mapping[str, Any]) -> bool:
-    """True for an entry with a key the plugin reads as ``build_id``, whatever its value.
-
-    Such an entry names the build it downloads: it is a latest successful
-    dependency, not a snapshot dependency. It is not planned, not triggered
-    and not part of a key, and the plan step leaves it as generated.
-    ``build_id: LATEST_SUCCESSFUL`` is how a pipeline asks, for one download
-    and for good, for the newest good build.
-    """
-    return bool(option_items(entry, BUILD_ID))
-
-
 def entry_type(entry: Mapping[str, Any]) -> str:
-    return LATEST_SUCCESSFUL if names_build(entry) else SNAPSHOT
+    """``LATEST_SUCCESSFUL`` for an entry that takes the latest successful build, which is
+    not planned, not triggered and not part of a key, and which the plan step leaves as
+    generated; else ``SNAPSHOT``."""
+    return LATEST_SUCCESSFUL if takes_latest(entry) else SNAPSHOT
 
 
 def is_literal(text: str) -> bool:
@@ -260,21 +260,50 @@ def parse_template(own: str, path: str, content: str | bytes) -> Any:
 def read_entry(path: str, entry: Mapping[str, Any], own: str) -> Entry | None:
     """The dependency one download entry of a template declares; None for the own project.
 
-    An entry that names its build is a latest successful dependency, without
-    a pin.
+    An entry that takes the latest successful build is a latest successful
+    dependency, without a pin.
     """
     project = other_project(entry, own)
     if project is None:
         return None
-    if names_build(entry):
+    if takes_latest(entry):
         return Entry(project, LATEST_SUCCESSFUL, None, path)
     return Entry(project, SNAPSHOT, literal_pin(option_value(entry, GIT_REF)), path)
 
 
-def read_template(path: str, content: str | bytes, own: str) -> list[Entry]:
-    """The entries of one template that mentions the plugin."""
-    found = (read_entry(path, e, own) for e in download_entries(parse_template(own, path, content)))
-    return [x for x in found if x is not None]
+def template_steps(doc: Any) -> list[dict[str, Any]]:
+    """The steps of a template: the mapping it holds, and each of its ``steps``, groups
+    descended."""
+    if not isinstance(doc, dict):
+        return []
+    inner = doc.get("steps")
+    listed = list(leaf_steps(inner)) if isinstance(inner, list) else []
+    return [doc, *(s for s in listed if isinstance(s, dict))]
+
+
+def promotes(step: Mapping[str, Any]) -> bool:
+    """True for a step one of whose artifacts configurations has a ``promote`` block."""
+    return any(plugin_block(c, PROMOTE) is not None for c in plugin_configurations(step))
+
+
+def step_id_of(own: str, path: str, step: Mapping[str, Any]) -> str | None:
+    """The ``step_id`` a template step writes, None when it writes none; one that is not a
+    step id raises ``TemplateError``, as a template that does not parse does."""
+    value = step.get(STEP_ID)
+    if value is None or is_step_id(value):
+        return value
+    raise TemplateError(
+        f'{own}: {path}: step_id {value} is not a step id. Write lower-case letters, digits and "_", '
+        "starting with a letter."
+    )
+
+
+def read_template(path: str, content: str | bytes, own: str) -> tuple[list[Entry], list[str]]:
+    """The entries of one template that mentions the plugin, and the step ids it promotes."""
+    doc = parse_template(own, path, content)
+    found = (read_entry(path, e, own) for e in download_entries(doc))
+    ids = ((step_id_of(own, path, s), s) for s in template_steps(doc))
+    return [x for x in found if x is not None], [i for i, s in ids if i and promotes(s)]
 
 
 def _entry_order(e: Entry) -> tuple[str, str, str]:
@@ -289,18 +318,24 @@ def read_declaration(files: Mapping[str, str | bytes], own: str) -> Declaration:
     ignored. A file counts when ``is_template_path`` holds and its text
     contains ``PLUGIN`` (``mentions_plugin``). In every such file each download entry
     (``download_entries``) with a project id gives one entry ``(project,
-    type, pin)``: a latest successful one when it names its build
-    (``names_build``), else a snapshot one. Entries of ``own`` and entries
-    without a project id are dropped. Files are read in path order; entries
-    are kept once each, sorted, with the first file each was found in.
+    type, pin)``: a latest successful one when it takes the latest successful
+    build (``takes_latest``), else a snapshot one. Entries of ``own`` and
+    entries without a project id are dropped. Files are read in path order;
+    entries are kept once each, sorted, with the first file each was found
+    in. Every step that promotes gives its ``step_id``, kept once each, sorted:
+    the step ids a build of this commit makes, never a Buildkite key or the
+    plugin's ``step`` of a pipeline written in YAML by hand.
     """
-    found = [
-        e
+    read = [
+        read_template(path, files[path], own)
         for path in sorted(files)
         if is_template_path(path) and mentions_plugin(files[path])
-        for e in read_template(path, files[path], own)
     ]
-    return Declaration(tuple(sorted(dict.fromkeys(found), key=_entry_order)))
+    entries = [e for found, _ in read for e in found]
+    steps = {s for _, ids in read for s in ids}
+    return Declaration(
+        tuple(sorted(dict.fromkeys(entries), key=_entry_order)), tuple(sorted(steps))
+    )
 
 
 # ---------------------------------------------------------------------------

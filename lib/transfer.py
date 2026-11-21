@@ -37,21 +37,15 @@ def one_file(cfg, auth, name, attempt):
     return time.monotonic() - start
 
 
-def run(transfer_one, items, parallel, then=None):
-    """Call transfer_one(item) for every item, `parallel` at a time, wait for all of
-    them, then call then(); the seconds from the first transfer to the end of then().
-
-    The first failure is raised. then() runs under the same Ctrl-C rule as the
-    transfers, so that an upload's manifest, written there, ends the same way.
-    """
+def run(transfer_one, items, parallel):
+    """Call transfer_one(item) for every item, `parallel` at a time, and wait for all of
+    them; the seconds from the first transfer to the last. The first failure is raised."""
     start = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=parallel)
     futures = [pool.submit(transfer_one, item) for item in items]
     try:
         for future in as_completed(futures):
             future.result()
-        if then is not None:
-            then()
     except KeyboardInterrupt:
         os._exit(130)
     pool.shutdown()

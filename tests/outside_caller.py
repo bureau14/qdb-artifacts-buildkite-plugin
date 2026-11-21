@@ -2,14 +2,14 @@
 
 Such a caller vendors the plugin as ``vendor/qdb_artifacts`` in its own tree and
 imports through that path, reads the store's configuration from the environment
-and SSM with a client of its own, downloads one project's artifacts with keyword
-arguments and strict ref matching, and reads the manifest of the build it got.
+and SSM with a client of its own, downloads one step of a project's platform with
+keyword arguments and strict ref matching, and reads the manifest of the step it got.
 
 Usage: python -I outside_caller.py <directory holding vendor/> <request JSON> <output dir>
 
-The request holds ``project_id``, ``build_id``, ``git_ref``, ``variant``,
-``patterns``, ``exclude_patterns`` and ``extract``. Prints the build downloaded
-and the file count of its manifest, as JSON.
+The request holds ``project_id``, ``variant``, ``step``, ``git_ref`` or ``key``,
+``patterns``, ``exclude_patterns`` and ``extract``. Prints the key downloaded at and
+the file count of its manifest, as JSON.
 """
 
 import json
@@ -33,7 +33,7 @@ def download(tree, request, output_dir):
         cfg=cfg, auth=auth, output_dir=output_dir, require_strict_ref_match=True, **request
     )
     manifest = read_manifest(cfg, auth, bucket, resolved)
-    return {"build_id": resolved.build_id, "file_count": manifest["file_count"]}
+    return {"key": resolved.key, "file_count": len(manifest["files"])}
 
 
 if __name__ == "__main__":

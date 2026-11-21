@@ -11,6 +11,7 @@ import json
 import time
 
 from ..clients import aws_clients
+from ..layout import Folder
 from ..log import log
 from .agent import MetaDataAbsent, RealAgent
 from .annotation import failure_annotation
@@ -21,10 +22,11 @@ from .edge import (
     Edge,
     chain_plan,
     create_record,
+    made_only,
+    manifests_at,
     opened_store,
     origin_of,
-    own_node,
-    pointers_at,
+    own_planned,
 )
 from .failing import gated
 from .git import RealGit
@@ -48,9 +50,10 @@ def build_mode(edge: Edge) -> str | None:
         return None
 
 
-def step_promotes(edge: Edge) -> dict[str, str]:
-    """``snapshot-promotes``: the step key of each variant the build makes."""
-    return json.loads(edge.agent.meta_data_get(PROMOTES))
+def step_promotes(edge: Edge) -> dict[Folder, str]:
+    """``snapshot-promotes``: the Buildkite key of the step that promotes each folder."""
+    listed = json.loads(edge.agent.meta_data_get(PROMOTES))
+    return {Folder(e["variant"], e["step"]): e["step_key"] for e in listed}
 
 
 def leave_decisions(job: Job, edge: Edge) -> None:
@@ -59,17 +62,16 @@ def leave_decisions(job: Job, edge: Edge) -> None:
         edge.log(f"the mode is {mode}: nothing to record")
         return
     p = chain_plan(job, edge)
-    node = own_node(job, edge, p)
-    if node.key is None:
+    n = own_planned(job, edge, p)
+    if n.key is None:
         edge.log(f"{job.project} has no snapshot: nothing to record")
         return
     promotes = step_promotes(edge)
     outcomes = {s: edge.agent.step_outcome(s) for s in sorted(set(promotes.values()))}
-    held = pointers_at(edge, job.project, node.key, unpassed(promotes, outcomes))
-    present = [v for v, found in held.items() if found is not None]
-    record = leave_record(origin_of(job, p, node.key), promotes, outcomes, present, edge.clock())
+    made = made_only(manifests_at(edge, job.project, n.key, unpassed(promotes, outcomes)))
+    record = leave_record(origin_of(job, p, n.key), promotes, outcomes, made, edge.clock())
     if record is None:
-        edge.log(f"every variant of {job.project} at {node.key} passed or exists")
+        edge.log(f"every step of {job.project} at {n.key} passed or is made")
         return
     create_record(edge, record)
     edge.agent.annotate(failure_annotation(p, record, {}), "error", LEAVE_CONTEXT)
@@ -78,11 +80,11 @@ def leave_decisions(job: Job, edge: Edge) -> None:
 def leave(job: Job, edge: Edge) -> int:
     """After every other step of the build: record what failed.
 
-    When the mode is built and the build has a key: the variants of
+    When the mode is built and the build has a key: the folders of
     ``snapshot-promotes`` whose step did not pass (its outcome empty or not
-    ``passed``) and that have no pointer at ``K`` go into one failure record,
-    written once, and an annotation. A job retried later writes its pointer
-    itself; the pointer decides, never the record. Leave sets no mode: its
+    ``passed``) and that are not made at ``K`` go into one failure record,
+    written once, and an annotation. A job retried later promotes the folder
+    itself; the manifest decides, never the record. Leave sets no mode: its
     command failed the step already when no plan step set one.
     """
     return gated(job, edge, leave_decisions, LEAVE_CONTEXT, mark=False)

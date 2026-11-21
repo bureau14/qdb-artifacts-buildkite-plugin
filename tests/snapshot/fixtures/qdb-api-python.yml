@@ -27,14 +27,13 @@ steps:
             project_id: qdb-api-rest
             variant: linux-core2-release
         promote:
-          git_ref: refs/heads/feature
           variant: linux-core2-release-py312
+        step: build
         upload:
           base_dir: dist
           files:
           - dist/quasardb-*.whl
           - dist/doc.tar.gz
-          git_ref: refs/heads/feature
           variant: linux-core2-release-py312
     - bureau14/qdb-test-report#master: {}
 - group: Macos Aarch64 Release
@@ -64,14 +63,13 @@ steps:
             project_id: qdb-api-rest
             variant: macos-aarch64-release
         promote:
-          git_ref: refs/heads/feature
           variant: macos-aarch64-release-py312
+        step: build
         upload:
           base_dir: dist
           files:
           - dist/quasardb-*.whl
           - dist/doc.tar.gz
-          git_ref: refs/heads/feature
           variant: macos-aarch64-release-py312
     - bureau14/qdb-test-report#master: {}
 - label: ':bar_chart: Aggregate test report'

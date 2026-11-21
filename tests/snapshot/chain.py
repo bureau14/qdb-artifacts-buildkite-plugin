@@ -1,18 +1,22 @@
-"""The chain's world: projects generated from a graph and a platform matrix, and a
-simulated Buildkite that plays their builds in process, over the fakes of ``fakes.py``.
+"""The chain's world: projects generated from a graph, a platform matrix and the step ids of
+every platform, and a simulated Buildkite that plays their builds in process, over the fakes
+of ``fakes.py``.
 
 Every project is a repository with a step template and a ``pipeline.py`` of the
-runner's shape. Its template has one step per variant, which downloads the same
-variant of each snapshot dependency, uploads and promotes it; a test may add a
-second step that promotes a variant again (``Project.packaged``).
+runner's shape. Its template has, per platform, one step per step id, which writes
+``step_id``, downloads the same platform of each snapshot dependency without naming a
+step, uploads and promotes; a test may add a step that promotes a folder again
+(``Project.packaged``). The project's generator does what the runner's
+``load_template`` does: the key ``<step id>-<platform>``, and the plugin's ``step``.
 
 A build starts with the runner's gate. The gate steps run the library's own
 decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
 over its ``Edge``. A trigger step starts the build it asks for, with its branch,
 commit and environment, and plays it to its end. A command step is a simulated
-job of the plugin: it records which build each download names, compiles (or
-fails, when the test broke that step), and promotes as a job does:
-``LATEST_SUCCESSFUL``, then the snapshot pointer through ``lib.pointer``.
+job of the plugin, through the library's own store functions: it finds the steps
+each download takes (``download.entry_steps``), compiles (or fails, when the test
+broke that step), captures its files (``upload.capture_step``) and promotes after a
+passed command (``promote.promote_folder``).
 """
 
 from __future__ import annotations
@@ -33,20 +37,26 @@ from fakes import (
     MemoryStore,
     url,
 )
+from world import paired
 
-from lib import layout, pointer
+from lib import layout, manifest
+from lib.download import Entry, entry_steps
 from lib.errors import ArtifactsError
 from lib.forms import iso_utc
+from lib.key import KeyJson, create_key_json, key_of
+from lib.layout import Folder
+from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
+from lib.promote import promote_folder
 from lib.snapshot.buildkite import PipelineFacts
 from lib.snapshot.enter import PlanEdge, enter, resume
 from lib.snapshot.job import Job
 from lib.snapshot.leave import leave
 from lib.snapshot.plan import decode_plan
 from lib.snapshot.records import decode_record
+from lib.upload import capture_step
 
 PLUGIN = "bureau14/qdb-artifacts"
 PLUGIN_COMMIT = "a" * 40
-LATEST = "LATEST_SUCCESSFUL"
 T0 = 1_763_380_800
 SHAPED = (
     b"from qdb_pipeline import run\n\n\ndef generate_pipeline():\n    return None\n\n\n"
@@ -72,6 +82,8 @@ GRAPHS = {
     "real": REAL,
 }
 MATRICES = {"linux": ("linux",), "three": ("linux", "macos", "windows")}
+# The step ids every platform of a project makes: one, or two.
+STEP_IDS = {"build": ("build",), "build-notes": ("build", "notes")}
 
 
 def below(graph: dict, p: str) -> frozenset[str]:
@@ -90,6 +102,11 @@ def roots(graph: dict) -> list[str]:
 
 def tree(graph: dict, root: str) -> frozenset[str]:
     return below(graph, root) | {root}
+
+
+def folders(matrix: tuple, steps: tuple) -> set[Folder]:
+    """Every folder of a project of ``matrix`` and ``steps``."""
+    return {Folder(v, s) for v in matrix for s in steps}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -123,36 +140,74 @@ LOWER_NODES = [a for a in GRAPH_NODES if a.node not in roots(a.graph)]
 SPELLINGS = {"snake": lambda k: k, "kebab": lambda k: k.replace("_", "-")}
 
 
-def entry(project: str, variant: str, ref="{git_ref}", latest=False, spelling="snake") -> dict:
-    """A download entry; a literal ``ref`` is a pin, ``latest`` names LATEST_SUCCESSFUL."""
+def entry(
+    project: str, variant: str, ref="{git_ref}", latest=False, spelling="snake", step=None
+) -> dict:
+    """A download entry; a literal ``ref`` is a pin, ``latest`` takes the latest successful
+    build, ``step`` names the steps it takes."""
     s = SPELLINGS[spelling]
     e = {s("project_id"): project, "variant": variant, s("git_ref"): ref, "files": ["*.tar.zst"]}
-    return {**e, s("build_id"): LATEST} if latest else e
+    named = {} if step is None else {"step": step}
+    return {**e, **named, **({"latest": True} if latest else {})}
 
 
 def build_step(
     project: str, variant: str, entries: list, spelling="snake", step="build", plugin=PLUGIN
 ) -> dict:
-    """The step ``step`` that builds ``variant`` from ``entries``, uploads and promotes it, with
-    the plugin's options under the name ``plugin``."""
-    s = SPELLINGS[spelling]
-    options = {
-        "upload": {"variant": variant, s("git_ref"): "{git_ref}", "files": "out/*"},
-        "promote": {"variant": variant, s("git_ref"): "{git_ref}"},
-    }
+    """The template step of step id ``step`` that builds ``variant`` from ``entries``, uploads
+    and promotes it, with the plugin's options under the name ``plugin``."""
+    options = {"upload": {"variant": variant, "files": "out/*"}, "promote": {"variant": variant}}
     if entries:
         options = {"download": {"projects": entries}, **options}
     return {
         "label": f"{project} {step} {variant}",
-        "key": f"{step}-{variant}",
+        "step_id": step,
         "command": "make",
         "plugins": [{f"{plugin}#master": options}],
     }
 
 
+def promoted_again(project: str, variant: str, entries: list) -> dict:
+    """A step that promotes the folder ``variant``/build a second time, written as a pipeline
+    without ``pipeline.py`` writes it: its key, and the plugin's ``step`` by hand."""
+    options = {
+        "step": "build",
+        "upload": {"variant": variant, "files": "out/*"},
+        "promote": {"variant": variant},
+    }
+    if entries:
+        options = {"download": {"projects": entries}, **options}
+    return {
+        "label": f"{project} package {variant}",
+        "key": f"package-{variant}",
+        "command": "make",
+        "plugins": [{f"{PLUGIN}#master": options}],
+    }
+
+
+def loaded(step: dict) -> dict:
+    """A template step as the runner's ``load_template`` gives it: its ``step_id`` gone, the
+    key ``<step id>-<slug>``, and ``step: <step id>`` at the top of every configuration of the
+    plugin. The slug of these templates is the platform the step uploads."""
+    if "step_id" not in step:
+        return step
+    step_id = step["step_id"]
+    plugins = [
+        {
+            name: {"step": step_id, **options} if name.split("#", 1)[0] == PLUGIN else options
+            for name, options in p.items()
+        }
+        for p in step["plugins"]
+    ]
+    slug = next(o["upload"]["variant"] for p in plugins for o in p.values() if "upload" in o)
+    kept = {k: v for k, v in step.items() if k not in ("step_id", "plugins")}
+    return {**kept, "key": f"{step_id}-{slug}", "plugins": plugins}
+
+
 def generated(template_text: str, ref: str) -> str:
     """What the project's generator prints for a build of ``ref``."""
-    return template_text.replace("{git_ref}", ref)
+    doc = yaml.safe_load(template_text.replace("{git_ref}", ref))
+    return yaml.safe_dump({"steps": [loaded(s) for s in doc["steps"]]})
 
 
 # ---------------------------------------------------------------------------
@@ -162,15 +217,17 @@ def generated(template_text: str, ref: str) -> str:
 
 @dataclasses.dataclass
 class Project:
-    """What a project's repository says: its dependencies, variants and how it adopted."""
+    """What a project's repository says: its dependencies, platforms, step ids and how it
+    adopted."""
 
     deps: tuple
     variants: tuple
+    steps: tuple = ("build",)
     pins: dict = dataclasses.field(default_factory=dict)  # dependency -> literal ref
     latest: tuple = ()  # projects it takes as latest successful
     pipeline_py: bytes = SHAPED
-    extra: tuple = ()  # (dependency, variant) that every step downloads besides its own variant
-    packaged: tuple = ()  # variants a second step, "package", builds and promotes again
+    extra: tuple = ()  # (dependency, variant, step) that every step downloads besides
+    packaged: tuple = ()  # platforms whose build folder a second step promotes again
 
 
 @dataclasses.dataclass(eq=False)
@@ -193,8 +250,8 @@ class Build:
         return "failed" if failed else "passed"
 
     @property
-    def info(self) -> pointer.Build:
-        return pointer.Build(self.id, self.number, self.url)
+    def info(self) -> manifest.Build:
+        return manifest.Build(self.id, self.number, self.url)
 
     def chain(self) -> list[Build]:
         """This build and every build it triggered, recursively."""
@@ -204,15 +261,19 @@ class Build:
 @dataclasses.dataclass(frozen=True)
 class Compiled:
     build: Build
-    variant: str
+    folder: Folder
 
 
 @dataclasses.dataclass(frozen=True)
 class Download:
+    """A step a job downloaded: the project, the folder, the key it took it at, and the build
+    whose upload the manifest names there."""
+
     build: Build
     project: str
-    variant: str
-    build_id: str | None
+    folder: Folder
+    key: str
+    made_by: str
 
 
 def agent_view(value):
@@ -242,6 +303,32 @@ def dependencies(step: dict) -> list[tuple[str, bool]]:
     ]
 
 
+def entry_of(e: dict, build: Build, key: str) -> Entry:
+    """A download entry as a job of ``build``, whose key is ``key``, reads it from the agent."""
+    project = e.get("PROJECT_ID") or build.project
+    ref = e.get("GIT_REF")
+    steps = e.get("STEP") or ()
+    own = project == build.project and ref in (None, "refs/heads/" + build.branch)
+    return Entry(
+        project=project,
+        variant=e["VARIANT"],
+        files=tuple(e["FILES"]),
+        exclude=(),
+        output_dir=".",
+        extract=False,
+        keys={s.lower(): k for s, k in e.get("KEYS", {}).items()},
+        steps=(steps,) if isinstance(steps, str) else tuple(steps),
+        git_ref=ref,
+        strict=bool(e.get("REQUIRE_STRICT_REF_MATCH")),
+        own_key=key if own else None,
+    )
+
+
+def made_by(m: Manifest) -> str:
+    """The build whose bytes a folder holds: the one that promoted it, else the uploader."""
+    return (m.promoted or m.uploaded).build.id
+
+
 # The runner's gate: enter, and leave after every other step.
 ENTER = {"key": "snapshot-enter"}
 LEAVE = {"key": "snapshot-leave", "depends_on": [{"step": "snapshot-enter", "allow_failure": True}]}
@@ -255,16 +342,18 @@ class World:
     arrived and before it plays: nothing, unless a test plays another chain there.
     """
 
-    def __init__(self, directory, graph: dict, matrix: tuple) -> None:
+    def __init__(self, directory, graph: dict, matrix: tuple, steps: tuple) -> None:
         self.directory = directory
-        self.projects = {p: Project(tuple(deps), tuple(matrix)) for p, deps in graph.items()}
+        self.projects = {
+            p: Project(tuple(deps), tuple(matrix), tuple(steps)) for p, deps in graph.items()
+        }
         self.hosting = Hosting()
         self.git = FakeGit(self.hosting)
         self.store = MemoryStore()
         self.facts = {p: PipelineFacts(url(p), True) for p in graph}
         self.pipelines = FakePipelines(self.facts)
         self.agents = AgentState()
-        self.broken: set[tuple[str, str]] = set()
+        self.broken: set[tuple[str, Folder]] = set()
         self.builds: list[Build] = []
         self.compiled: list[Compiled] = []
         self.downloads: list[Download] = []
@@ -290,11 +379,11 @@ class World:
                 for d in p.deps
                 if v in self.projects[d].variants
             ]
-            extra = [entry(d, x, p.pins.get(d, "{git_ref}")) for d, x in p.extra]
+            extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
             return deps + extra + [entry(t, v, latest=True) for t in p.latest]
 
-        built = [build_step(name, v, entries(v)) for v in p.variants]
-        packaged = [build_step(name, v, entries(v), step="package") for v in p.packaged]
+        built = [build_step(name, v, entries(v), step=s) for v in p.variants for s in p.steps]
+        packaged = [promoted_again(name, v, entries(v)) for v in p.packaged]
         return {"steps": built + packaged}
 
     def commit(self, name: str, branch: str = "master") -> str:
@@ -428,50 +517,43 @@ class World:
             return "passed"
         return "soft_failed" if step.get("soft_fail") else "hard_failed"
 
+    def own_key(self, build: Build, options: dict) -> str:
+        """The build's key: the plan step's; else, as a job computes it, a key of the build's
+        own, whose key.json it creates."""
+        if options.get("KEY"):
+            return options["KEY"]
+        stands_for = KeyJson(build.project, build.commit, (), build.id)
+        create_key_json(self.store, "", stands_for)
+        return key_of(stands_for)
+
     def job(self, build: Build, options: dict | None) -> str:
-        """A job of the plugin: download, compile, then promote after a passed command."""
-        if options is None:  # a step completion put in place of one whose variants exist
+        """A job of the plugin: download, compile, capture its files, then promote after a
+        passed command."""
+        if options is None:  # a step completion put in place of one whose folders are made
             return "passed"
+        key = self.own_key(build, options)
         for e in options.get("DOWNLOAD", {}).get("PROJECTS", []):
-            project = e.get("PROJECT_ID") or build.project
-            self.downloads.append(Download(build, project, e["VARIANT"], self.resolved(build, e)))
+            found = entry_of(e, build, key)
+            for s in entry_steps(self.store, "", found, f"{build.project} {found.variant}"):
+                made = made_by(s.manifest)
+                self.downloads.append(Download(build, s.project, s.folder, s.key, made))
         variant = (options.get("UPLOAD") or options["PROMOTE"])["VARIANT"]
-        if (build.project, variant) in self.broken:
+        folder = Folder(variant, options["STEP"])
+        location = layout.step_folder("", build.project, key, folder)
+        name = f"out/{variant}.bin"
+
+        def write_files() -> None:
+            self.store.put(f"{location}/{name}", build.id.encode(), "application/octet-stream")
+
+        uploaded = captured([(name, len(build.id))], Uploaded(build.branch, build.info))
+        capture_step(self.store, location, write_files, uploaded)
+        if (build.project, folder) in self.broken:
             return "hard_failed"
-        self.compiled.append(Compiled(build, variant))
-        if "PROMOTE" in options:
-            self.promote(build, options["PROMOTE"])
+        self.compiled.append(Compiled(build, folder))
+        # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
+        promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
+        promote_folder(self.store, "", build.project, key, folder, promotion)
         return "passed"
-
-    def resolved(self, build: Build, e: dict) -> str | None:
-        """The build a download entry gets, as the job resolves it."""
-        project = e.get("PROJECT_ID") or build.project
-        ref = e["GIT_REF"]
-        own = project == build.project and ref == "refs/heads/" + build.branch
-        asked = e.get("BUILD_ID") or (build.id if own else LATEST)
-        if asked != LATEST:
-            return asked
-        for r in dict.fromkeys((ref, "refs/heads/master", "refs/heads/main")):
-            found = self.store.get(layout.latest_pointer("", project, r, e["VARIANT"]))
-            if found is not None:
-                return found.body.decode()
-        return None
-
-    def promote(self, build: Build, block: dict) -> None:
-        ref, variant = block["GIT_REF"], block["VARIANT"]
-        where = layout.latest_pointer("", build.project, ref, variant)
-        self.store.put(where, build.id.encode(), "text/plain")
-        if block.get("SNAPSHOT"):
-            made = pointer.Pointer(
-                build.project,
-                block["SNAPSHOT"],
-                variant,
-                ref,
-                build.commit,
-                build.info,
-                iso_utc(self.clock()),
-            )
-            pointer.create(self.store, "", made)
 
     # -- what a test reads -------------------------------------------------
 
@@ -481,17 +563,21 @@ class World:
     def plan(self, root: Build):
         return decode_plan(self.agents.meta_data[root.id]["snapshot-plan"])
 
-    def pointer(self, project: str, key: str, variant: str) -> pointer.Pointer | None:
-        return pointer.find(self.store, "", project, key, variant)
+    def made(self, project: str, key: str, folder: Folder) -> Manifest | None:
+        """The manifest of ``folder`` of ``project`` at ``key`` when it says promoted."""
+        m = read_manifest_at(self.store, layout.step_folder("", project, key, folder))
+        return m if m is not None and m.promoted is not None else None
 
     def objects(self, prefix: str) -> dict[str, bytes]:
         return {k: b for k, b in self.store.objects.items() if k.startswith(prefix)}
 
     def records(self) -> list:
-        return [decode_record(b.decode()) for b in self.objects("_snapshot/v1/failures/").values()]
+        found = (k.split("/") for k in self.store.objects)
+        paths = [p for p in found if len(p) == 4 and p[2] == layout.FAILURES]
+        return [decode_record(self.store.objects["/".join(p)].decode(), p[0], p[1]) for p in paths]
 
-    def latest(self, project: str, ref: str, variant: str) -> str | None:
-        found = self.store.get(layout.latest_pointer("", project, ref, variant))
+    def latest(self, project: str, ref: str, folder: Folder) -> str | None:
+        found = self.store.get(layout.latest_file("", project, ref, folder))
         return None if found is None else found.body.decode()
 
 
@@ -518,20 +604,27 @@ def lower_node(request) -> At:
     return request.param
 
 
-@pytest.fixture(params=sorted(MATRICES))
-def matrix(request) -> tuple:
-    """The variants every project builds: one platform, or three."""
-    return MATRICES[request.param]
+# The platforms every project builds and the step ids every platform makes, each value of
+# each once: one platform of one step id, three platforms of two.
+SHAPES = {
+    f"{m}-{s}": (MATRICES[m], STEP_IDS[s]) for m, s in paired(sorted(MATRICES), sorted(STEP_IDS))
+}
+
+
+@pytest.fixture(params=sorted(SHAPES))
+def shape(request) -> tuple[tuple, tuple]:
+    """``(platforms, step ids)`` of every project."""
+    return SHAPES[request.param]
 
 
 @pytest.fixture
 def worlds(tmp_path):
-    """Make a world: ``worlds(graph, matrix)``."""
+    """Make a world: ``worlds(graph, matrix, steps)``."""
     count = itertools.count(1)
 
-    def make(graph: dict, matrix: tuple = ("linux",)) -> World:
+    def make(graph: dict, matrix: tuple = ("linux",), steps: tuple = ("build",)) -> World:
         directory = tmp_path / f"world-{next(count)}"
         directory.mkdir()
-        return World(directory, graph, matrix)
+        return World(directory, graph, matrix, steps)
 
     return make

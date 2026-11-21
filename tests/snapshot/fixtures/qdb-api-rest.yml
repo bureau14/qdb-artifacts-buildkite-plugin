@@ -50,13 +50,12 @@ steps:
           project_id: qdb-duck
           variant: linux-haswell-release
       promote:
-        git_ref: refs/heads/feature
         variant: linux-haswell-release
+      step: build
       upload:
         base-dir: artifacts
         files:
         - artifacts/*-rest.*
-        git_ref: refs/heads/feature
         variant: linux-haswell-release
   - bureau14/qdb-test-report#master: {}
 - label: ':hammer: build (freebsd-haswell)'
@@ -85,13 +84,12 @@ steps:
           project_id: qdb-duck
           variant: freebsd-haswell-release
       promote:
-        git_ref: refs/heads/feature
         variant: freebsd-haswell-release
+      step: build
       upload:
         base-dir: artifacts
         files:
         - artifacts/*-rest.*
-        git_ref: refs/heads/feature
         variant: freebsd-haswell-release
   - bureau14/qdb-test-report#master: {}
 - label: ':bar_chart: Aggregate test report'

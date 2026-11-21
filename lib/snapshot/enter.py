@@ -4,21 +4,22 @@ A gated build runs them in the post-command of the steps that carry the
 plugin's options ``plan`` (enter) and ``resume``, after the step's command
 generated the pipeline:
 
-- enter: reuse what exists, trigger the builds of dependencies that lack a
-  variant, or upload the pipeline with one build of every snapshot dependency
+- enter: reuse what is made, trigger the builds of dependencies that lack a
+  step, or upload the pipeline with the key of every step a download takes
   written into it;
 - resume, after the triggered builds ended: build, or fail with the cause.
 
-Each is its decisions in the specification's order, under its numbers; the
-first decision that ends the step ends it. A decision is a function of what
-the plan step's edge (``PlanEdge``) returned. A decision that fails the step
-raises a ``failing.Refusal``.
+What a build makes is a set of folders of its key, each a platform and a step
+id; a folder is made when its manifest says promoted. Each step is its
+decisions in the specification's order, under its numbers; the first decision
+that ends the step ends it. A decision is a function of what the plan step's
+edge (``PlanEdge``) returned. A decision that fails the step raises a
+``failing.Refusal``.
 """
 
 from __future__ import annotations
 
 import functools
-import json
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -30,8 +31,9 @@ from ..clients import aws_clients
 from ..config import env_or_ssm
 from ..errors import ArtifactsError
 from ..key import canonical_json
+from ..layout import Folder
 from ..log import log
-from ..pointer import Pointer
+from ..manifest import Manifest
 from .agent import RealAgent
 from .annotation import (
     PLAN_REFUSED,
@@ -41,6 +43,7 @@ from .annotation import (
     plan_annotation,
     refusal_annotation,
     reused_annotation,
+    shown_folders,
 )
 from .buildkite import PipelineFacts, fetch_pipeline
 from .declaration import (
@@ -55,13 +58,15 @@ from .declaration import (
 from .document import (
     DocumentError,
     Rewrite,
+    Taken,
     dump_document,
     dump_written,
     load_document,
-    needed_variants,
+    needed_folders,
     planned,
-    promote_keys,
+    promote_entries,
     promotions,
+    read_needs,
     resume_pipeline,
 )
 from .edge import (
@@ -73,11 +78,12 @@ from .edge import (
     Edge,
     chain_plan,
     chain_records,
-    held_only,
+    create_planned_key_json,
+    made_only,
+    manifests_at,
     opened_store,
     origin_of,
-    own_node,
-    pointers_at,
+    own_planned,
     root_arrival,
     stored_records,
 )
@@ -137,13 +143,17 @@ def reason_refusal(
 def chain_origin(job: Job, edge: Edge) -> Origin | None:
     """What a record of this build says of it, for a chain node with a key; None for a root.
 
-    A root knows no key before it made its plan (step 3).
+    A root knows no key before it made its plan (step 3). A chain node creates
+    ``key.json`` of its key before its record.
     """
     if not is_chain_node(job):
         return None
     p = chain_plan(job, edge)
-    node = own_node(job, edge, p)
-    return None if node.key is None else origin_of(job, p, node.key)
+    n = own_planned(job, edge, p)
+    if n.key is None:
+        return None
+    create_planned_key_json(edge, p, job.project)
+    return origin_of(job, p, n.key)
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +235,14 @@ def entered_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
 
 def resumed_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
     """3, resume. Every build loads the plan of its chain, a root its own: the plan its enter
-    made, which names the commits the triggered builds build."""
+    made, which names the commits the triggered builds built."""
     return chain_plan(job, edge)
 
 
-def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[str]:
-    """5. ``D``, the variants this pipeline promotes; a variant promoted twice fails, as the rule.
+def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> frozenset[Folder]:
+    """5. ``D``, the folders this pipeline promotes; a folder promoted twice fails, as the rule.
 
-    Two steps that promote one variant break a rule the plan step holds a
+    Two steps that promote one folder break a rule the plan step holds a
     pipeline that has a snapshot to, so the record's reason is ``rule``.
     """
     try:
@@ -241,20 +251,20 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
         raise reason_refusal(job, RULE, str(exc), origin, edge.clock()) from exc
 
 
-def asked(job: Job, d: frozenset[str]) -> frozenset[str]:
+def asked(job: Job, d: frozenset[Folder]) -> frozenset[Folder]:
     """5. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
-    return frozenset(json.loads(job.needs)) if is_chain_node(job) else d
+    return read_needs(job.needs) if is_chain_node(job) else d
 
 
 def check_declared(
-    job: Job, edge: Edge, n: frozenset[str], d: frozenset[str], origin: Origin
+    job: Job, edge: Edge, n: frozenset[Folder], d: frozenset[Folder], origin: Origin
 ) -> None:
-    """5. A variant of ``N`` that is not in ``D``: record ``not_declared``; fail. Nothing compiles."""
+    """5. A folder of ``N`` that is not in ``D``: record ``not_declared``; fail. Nothing compiles."""
     undeclared = sorted(n - d)
     if undeclared:
         message = (
-            f"asked for {', '.join(undeclared)}, which this pipeline does not promote; it "
-            f"promotes {', '.join(sorted(d)) or 'nothing'}"
+            f"asked for {shown_folders(undeclared)}, which this pipeline does not promote; it "
+            f"promotes {shown_folders(sorted(d)) or 'nothing'}"
         )
         raise reason_refusal(job, NOT_DECLARED, message, origin, edge.clock())
 
@@ -264,23 +274,23 @@ def check_declared(
 # ---------------------------------------------------------------------------
 
 
-def is_reused(d: frozenset[str], n: frozenset[str], m: frozenset[str]) -> bool:
-    """6. ``D`` is not empty and no variant of ``N`` is in ``M``, the variants without a pointer."""
+def is_reused(d: frozenset[Folder], n: frozenset[Folder], m: frozenset[Folder]) -> bool:
+    """6. ``D`` is not empty and no folder of ``N`` is in ``M``, the folders not made."""
     return bool(d) and not (n & m)
 
 
 def reuse(
-    job: Job, edge: Edge, p: Plan, held: Mapping[str, Pointer | None], n: frozenset[str]
+    job: Job, edge: Edge, p: Plan, made: Mapping[Folder, Manifest], n: frozenset[Folder]
 ) -> None:
-    """6. Mode ``reused``, and the builds that hold the variants asked for on the build page."""
-    builds = {v: held[v].build for v in n if held[v] is not None}
+    """6. Mode ``reused``, and the builds that made the folders asked for on the build page."""
+    builds = {f: made[f].promoted.build for f in n}
     edge.agent.meta_data_set(MODE, REUSED)
     edge.agent.annotate(reused_annotation(p, job.project, builds), "success", STEP_CONTEXT)
-    edge.log(f"{job.project} is reused: every variant asked for is held")
+    edge.log(f"{job.project} is reused: every step asked for is made")
 
 
-def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozenset[str]) -> None:
-    """7. Another build of ``K`` hard failed on every wanted variant after the root build of
+def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozenset[Folder]) -> None:
+    """7. Another build of ``K`` hard failed on every wanted folder after the root build of
     this chain arrived at the gate: fail, compiling nothing.
 
     If it fails, it fails everywhere: the failure counts for every build of a
@@ -301,7 +311,7 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
     own = shared_record(origin, source, wanted, edge.clock())
     message = (
         f"build {source.build.number} of the same snapshot failed on "
-        f"{', '.join(sorted(wanted))} after the root build of this chain started: "
+        f"{shown_folders(sorted(wanted))} after the root build of this chain started: "
         f"{source.build.url}"
     )
     raise Refusal(message, failure_annotation(p, own, {}), own)
@@ -314,36 +324,42 @@ def check_shared(job: Job, edge: Edge, p: Plan, origin: Origin, wanted: frozense
 
 def dependency_key(p: Plan, project: str) -> str:
     """The key of a snapshot dependency of this build, as the plan fixed it."""
-    return p.nodes[project].key
+    return p.projects[project].key
 
 
-def dependency_pointers(
-    edge: Edge, p: Plan, needs: Mapping[str, frozenset[str]]
-) -> dict[tuple[str, str], Pointer | None]:
-    """8. The pointer of each variant of each dependency at its key; None for a missing one."""
+def steps_of(p: Plan) -> dict[str, tuple[str, ...]]:
+    """The step ids of every project of the plan, which an entry that names no step takes."""
+    return {project: n.steps for project, n in p.projects.items()}
+
+
+def dependency_manifests(
+    edge: Edge, p: Plan, needs: Mapping[str, frozenset[Folder]]
+) -> dict[tuple[str, Folder], Manifest | None]:
+    """8. The manifest of each folder of each dependency at its key; None where none is."""
     return {
-        (project, v): found
-        for project, variants in sorted(needs.items())
-        for v, found in pointers_at(edge, project, dependency_key(p, project), variants).items()
+        (project, f): found
+        for project, folders in sorted(needs.items())
+        for f, found in manifests_at(edge, project, dependency_key(p, project), folders).items()
     }
 
 
-def missing_variants(
-    held: Mapping[tuple[str, str], Pointer | None],
-) -> dict[str, tuple[str, ...]]:
-    """8. The variants of each dependency that have no pointer at its key, sorted."""
-    missing: dict[str, list[str]] = {}
-    for (project, v), found in sorted(held.items()):
-        if found is None:
-            missing.setdefault(project, []).append(v)
-    return {project: tuple(vs) for project, vs in missing.items()}
+def missing_folders(
+    found: Mapping[tuple[str, Folder], Manifest | None],
+) -> dict[str, tuple[Folder, ...]]:
+    """8. The folders of each dependency that are not made at its key, sorted."""
+    made = made_only(found)
+    missing: dict[str, list[Folder]] = {}
+    for project, f in sorted(found):
+        if (project, f) not in made:
+            missing.setdefault(project, []).append(f)
+    return {project: tuple(folders) for project, folders in missing.items()}
 
 
 def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
-    """One line of the message of a build that a dependency left without variants."""
+    """One line of the message of a build that a dependency left without steps."""
     lacks = (
-        f"{c.project} @ {short_commit(p.nodes[c.project].commit)} ({c.key}) has no "
-        f"{', '.join(c.variants)}"
+        f"{c.project} @ {short_commit(p.projects[c.project].commit)} ({c.key}) has no "
+        f"{shown_folders(c.missing)}"
     )
     if c.key in records:
         return f"{lacks}: its build {records[c.key].build.number} failed in this chain"
@@ -353,7 +369,7 @@ def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
 def fail_with_causes(
     job: Job, edge: Edge, p: Plan, causes: list[Cause], origin: Origin | None
 ) -> NoReturn:
-    """Fail a build that its dependencies left without variants, each named as a cause."""
+    """Fail a build that its dependencies left without steps, each named as a cause."""
     records = chain_records(edge, p, causes)
     message = "\n".join(cause_message(p, c, records) for c in causes)
     record = None if origin is None else caused_record(origin, causes, edge.clock())
@@ -365,15 +381,16 @@ def failed_in_chain(
     job: Job,
     edge: Edge,
     p: Plan,
-    missing: Mapping[str, tuple[str, ...]],
+    missing: Mapping[str, tuple[Folder, ...]],
     origin: Origin | None,
 ) -> None:
-    """9. A dependency with a missing variant failed earlier in this chain: fail, triggering nothing.
+    """9. A dependency with a missing folder failed earlier in this chain: fail, triggering
+    nothing.
 
     Its failure record of ``key(P)`` carries this plan. The own record names it
     under ``caused_by``. Within one chain a key is built at most once.
     """
-    lacking = [Cause(project, dependency_key(p, project), vs) for project, vs in missing.items()]
+    lacking = [Cause(project, dependency_key(p, project), fs) for project, fs in missing.items()]
     causes = [c for c in lacking if chain_failure(stored_records(edge, c.project, c.key), p.id)]
     if causes:
         fail_with_causes(job, edge, p, causes, origin)
@@ -383,13 +400,13 @@ def trigger(
     job: Job,
     edge: PlanEdge,
     p: Plan,
-    needs: Mapping[str, frozenset[str]],
-    missing: Mapping[str, tuple[str, ...]],
+    needs: Mapping[str, frozenset[Folder]],
+    missing: Mapping[str, tuple[Folder, ...]],
 ) -> None:
-    """10. One trigger step per dependency with a missing variant, and the resume step.
+    """10. One trigger step per dependency with a missing folder, and the resume step.
 
-    Each trigger step hands down every variant this pipeline's entries name
-    for its dependency. The resume step runs this step's command again.
+    Each trigger step hands down every folder this pipeline's entries take of
+    its dependency. The resume step runs this step's command again.
     """
     wanted = {project: needs[project] for project in missing}
     document = resume_pipeline(p, wanted, job.command, edge.plugin_commit(), job.pipeline or "")
@@ -400,29 +417,29 @@ def trigger(
 def build_pipeline(
     job: Job,
     edge: PlanEdge,
+    p: Plan,
     generated: Generated,
     key: str | None,
-    held: Mapping[tuple[str, str], Pointer | None],
-    existing: Mapping[str, Pointer],
+    made: Mapping[Folder, Manifest],
 ) -> None:
     """11. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
 
-    With a key, ``snapshot-promotes`` names the step of each variant that is
-    built: a replaced step promotes nothing, so leave asks for no outcome of it.
-    The marks leave reads are set before the upload, so that no uploaded step
-    runs in a build without them; an upload the agent refuses then fails the
-    step, which sets the mode ``failed``.
+    With a key, ``snapshot-promotes`` names the step of each folder that is
+    built: a replaced step promotes nothing, so leave asks for no outcome of
+    it. The marks leave reads are set before the upload, so that no uploaded
+    step runs in a build without them; an upload the agent refuses then fails
+    the step, which sets the mode ``failed``.
     """
-    dependencies = held_only(held)
-    rewrite = Rewrite(job.project, key, edge.plugin_commit(), dependencies, existing)
-    out = planned(generated.doc, rewrite)
+    deps = p.projects[job.project].deps
+    taken = {d: Taken(dependency_key(p, d), p.projects[d].steps) for d in deps}
+    out = planned(generated.doc, Rewrite(job.project, key, edge.plugin_commit(), taken, made))
     document = dump_document(out)
     if key is not None:
-        promotes = canonical_json(promote_keys(out, job.project)).decode("utf-8")
+        promotes = canonical_json(promote_entries(out, job.project)).decode("utf-8")
         edge.agent.meta_data_set(PROMOTES, promotes)
     edge.agent.meta_data_set(MODE, BUILT)
     edge.agent.pipeline_upload(document)
-    edge.log(f"{job.project} builds: uploaded the pipeline with {len(dependencies)} builds in it")
+    edge.log(f"{job.project} builds: uploaded the pipeline with the keys of {len(deps)} projects")
 
 
 # ---------------------------------------------------------------------------
@@ -441,70 +458,70 @@ class Prepared:
     plan: Plan
     key: str | None
     origin: Origin | None
-    d: frozenset[str]
-    n: frozenset[str]
+    d: frozenset[Folder]
+    n: frozenset[Folder]
 
 
 def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     """Steps 1 to 5, the same in enter and resume but for how step 3 comes to the plan.
 
-    Step 3 also checks that the plan plans this build at the commit it checked out.
+    Step 3 also checks that the plan plans this build at the commit it checked
+    out, and creates ``key.json`` of its key before any record or upload.
     """
     check_command(job, edge)
     generated = generated_pipeline(job, edge)
     p = plan_of(job, edge, generated)
-    node = own_node(job, edge, p)
-    if node.key is None:
+    n = own_planned(job, edge, p)
+    if n.key is None:
         # 4. Only a root can be here: its declaration holds a latest successful dependency.
         edge.log(f"{job.project} has no snapshot: it is built, and never reused")
         return Prepared(generated, p, None, None, frozenset(), frozenset())
-    origin = origin_of(job, p, node.key)
+    create_planned_key_json(edge, p, job.project)
+    origin = origin_of(job, p, n.key)
     d = promoted(job, edge, generated, origin)
-    n = asked(job, d)
-    check_declared(job, edge, n, d, origin)
-    return Prepared(generated, p, node.key, origin, d, n)
+    asked_for = asked(job, d)
+    check_declared(job, edge, asked_for, d, origin)
+    return Prepared(generated, p, n.key, origin, d, asked_for)
 
 
-def own_pointers(job: Job, edge: Edge, prepared: Prepared) -> dict[str, Pointer | None]:
-    """The pointer of each variant of ``D`` at ``K``; none without a key."""
+def own_manifests(job: Job, edge: Edge, prepared: Prepared) -> dict[Folder, Manifest | None]:
+    """The manifest of each folder of ``D`` at ``K``; none without a key."""
     if prepared.key is None:
         return {}
-    return pointers_at(edge, job.project, prepared.key, prepared.d)
+    return manifests_at(edge, job.project, prepared.key, prepared.d)
 
 
 def enter_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge, entered_plan)
-    held = own_pointers(job, edge, prepared)
+    found = own_manifests(job, edge, prepared)
+    made = made_only(found)
     if prepared.origin is not None:
-        m = frozenset(held) - frozenset(held_only(held))
+        m = frozenset(found) - frozenset(made)
         if is_reused(prepared.d, prepared.n, m):
-            reuse(job, edge, prepared.plan, held, prepared.n)
+            reuse(job, edge, prepared.plan, made, prepared.n)
             return
         check_shared(job, edge, prepared.plan, prepared.origin, prepared.n & m)
-    existing = held_only(held)
-    needs = needed_variants(prepared.generated.doc, job.project, existing)
-    dependencies = dependency_pointers(edge, prepared.plan, needs)
-    missing = missing_variants(dependencies)
+    needs = needed_folders(prepared.generated.doc, job.project, made, steps_of(prepared.plan))
+    missing = missing_folders(dependency_manifests(edge, prepared.plan, needs))
     if missing:
         failed_in_chain(job, edge, prepared.plan, missing, prepared.origin)
         trigger(job, edge, prepared.plan, needs, missing)
         return
-    build_pipeline(job, edge, prepared.generated, prepared.key, dependencies, existing)
+    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
 
 
 def resume_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge, resumed_plan)
-    existing = held_only(own_pointers(job, edge, prepared))
-    needs = needed_variants(prepared.generated.doc, job.project, existing)
-    dependencies = dependency_pointers(edge, prepared.plan, needs)
-    missing = missing_variants(dependencies)
+    made = made_only(own_manifests(job, edge, prepared))
+    needs = needed_folders(prepared.generated.doc, job.project, made, steps_of(prepared.plan))
+    missing = missing_folders(dependency_manifests(edge, prepared.plan, needs))
     if missing:
         causes = [
-            Cause(project, dependency_key(prepared.plan, project), vs)
-            for project, vs in missing.items()
+            Cause(project, dependency_key(prepared.plan, project), folders)
+            for project, folders in missing.items()
         ]
         fail_with_causes(job, edge, prepared.plan, causes, prepared.origin)
-    build_pipeline(job, edge, prepared.generated, prepared.key, dependencies, existing)
+    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
 
 
 def enter(job: Job, edge: PlanEdge) -> int:
@@ -515,18 +532,18 @@ def enter(job: Job, edge: PlanEdge) -> int:
        when a chain node; fail.
     3. A chain node loads the plan and checks its commit; a root makes the
        plan, writes it and annotates the build with it. A plan that cannot be
-       made fails the build with its message.
+       made fails the build with its message. Then ``key.json`` of the own key.
     4. The own project has no snapshot: go to 8 with no key.
-    5. ``D`` is what this pipeline promotes, a variant promoted twice failing;
-       ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A variant of
+    5. ``D`` is what this pipeline promotes, a folder promoted twice failing;
+       ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A folder of
        ``N`` not in ``D``: record ``not_declared``; fail.
-    6. ``D`` is not empty and every variant of ``N`` has a pointer at ``K``:
-       mode reused; done.
-    7. Another build of ``K`` failed on the wanted variants after the chain's
+    6. ``D`` is not empty and every folder of ``N`` is made at ``K``: mode
+       reused; done.
+    7. Another build of ``K`` failed on the wanted folders after the chain's
        root arrived at the gate: record its failure as shared; fail.
-    8. For each direct snapshot dependency, the variants the kept steps name,
-       and which of them have no pointer at its key.
-    9. A dependency with a missing variant failed earlier in this chain:
+    8. For each direct snapshot dependency, the folders the kept steps take,
+       and which of them are not made at its key.
+    9. A dependency with a missing folder failed earlier in this chain:
        record the cause; fail. Nothing is triggered.
     10. Some are missing: upload a trigger step per such dependency and the
         resume step; done.
@@ -539,7 +556,7 @@ def resume(job: Job, edge: PlanEdge) -> int:
     """After the triggered builds: build, or fail with the cause.
 
     Steps 1 to 5 of enter, except that in step 3 a root, too, loads the plan:
-    the one its enter made. Then, for each dependency variant still missing,
+    the one its enter made. Then, for each dependency folder still missing,
     a failure record of its key that carries this plan is its cause, and
     without one the build of that dependency left no record. Resume never
     triggers. With nothing missing it goes on at step 11.

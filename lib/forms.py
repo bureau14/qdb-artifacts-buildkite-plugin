@@ -1,6 +1,6 @@
-"""The forms a snapshot writes its refs and times in.
+"""The forms of a branch's ref and of a time, as the jobs and the plan step write them.
 
-This is ordinary job code, as the pointer is: nothing here imports ``snapshot``.
+This is ordinary job code, as the manifest is: nothing here imports ``snapshot``.
 """
 
 from __future__ import annotations

@@ -5,14 +5,20 @@ Specification section 8, and the trigger and resume steps of section 7.
 The pipeline a repository generates says "download quasardb-build,
 linux-aarch64-release" and leaves the build open. Every job would then find a
 build for itself, at its own moment, and two jobs of one chain could find two
-different builds. So the plan step fixes the build once and writes it into
-the document before any job exists (``planned``). A job on any platform then
-downloads an explicit build with the code path it already has.
+different builds. So the plan step fixes the key of every step a download
+takes, and writes it into the document before any job exists (``planned``):
+``keys: {<step id>: <key>}`` into every snapshot entry of another project,
+and the build's own key into every configuration of the plugin, which the
+build's own uploads, promotes and downloads use.
+
+What a step makes is a folder of the key: a platform (the option ``variant``
+of an upload or promote block) and the step id the configuration names at its
+top (``step``).
 
 Values in, values out: nothing here talks to the bucket, to git, to Buildkite
-or to the agent. The caller hands in the facts as plain values (``Pointer``,
-``Rewrite``, the plan). A function that writes takes a document and returns a
-new one; the document handed in is never changed.
+or to the agent. The caller hands in the facts as plain values (``Rewrite``,
+the plan). A function that writes takes a document and returns a new one; the
+document handed in is never changed.
 
 Download entries, plugin configurations and option keys are those of the
 ``configuration`` module, so the reader of templates, the rule and the rewrite
@@ -29,19 +35,24 @@ from typing import Any
 
 import yaml
 
-from ..pointer import Pointer
+from ..layout import Folder
+from ..manifest import Manifest
 from .configuration import (
-    BUILD_ID,
     GIT_REF,
+    KEY,
+    KEYS,
+    LATEST,
     PLUGIN,
     PROMOTE,
-    SNAPSHOT_OPTION,
+    STEP,
     STRICT_REF_MATCH,
     UPLOAD,
     VARIANT,
     download_entries,
+    entry_steps,
     is_plugin_key,
     mappings,
+    named_step,
     option_value,
     plugin_block,
     plugin_configurations,
@@ -70,8 +81,8 @@ GATE_TIMEOUT_MINUTES = 15
 
 
 class DocumentError(ValueError):
-    """The generated pipeline promotes a variant at two places (``promotions``), or from a
-    step without a key (``promote_keys``)."""
+    """The generated pipeline promotes a folder at two places (``promotions``), or from a
+    step without a key (``promote_entries``)."""
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +122,10 @@ def dump_written(doc: Any) -> str:
 
 
 def named_variant(options: Mapping[Any, Any]) -> str | None:
-    """The variant an entry or a block names, as text; None when it names none.
+    """The platform an entry or a block names (``variant``), as text; None when it names none.
 
     The agent hands a list or a mapping over as variables of other names, so
-    the plugin reads no variant from one.
+    the plugin reads no platform from one.
     """
     v = option_value(options, VARIANT)
     if v is None or v == "" or isinstance(v, (dict, list)):
@@ -145,7 +156,7 @@ def snapshot_dependencies(doc: Any, own: str) -> list[tuple[str, dict[str, Any]]
     """``(project, entry)`` of every snapshot dependency entry of ``doc``, in order.
 
     ``own`` is the pipeline's own project. An entry of another project that
-    names no build is one; a latest successful entry names its build.
+    does not take the latest successful build is one.
     """
     found = []
     for e in download_entries(doc):
@@ -155,31 +166,35 @@ def snapshot_dependencies(doc: Any, own: str) -> list[tuple[str, dict[str, Any]]
     return found
 
 
-def own_downloads(doc: Any, own: str) -> list[dict[str, Any]]:
-    """The download entries of ``doc`` from the pipeline's own project."""
-    return [e for e in download_entries(doc) if other_project(e, own) is None]
+def taken_folders(entry: Mapping[Any, Any], steps: Sequence[str]) -> frozenset[Folder]:
+    """The folders a snapshot entry takes: its platform and each step it names, or each of
+    ``steps``, the dependency's step ids, when it names none."""
+    platform = named_variant(entry)
+    return frozenset(Folder(platform, s) for s in entry_steps(entry) or steps)
 
 
 # ---------------------------------------------------------------------------
-# The steps that promote and produce
+# The steps that promote and make
 # ---------------------------------------------------------------------------
 
 
-def own_blocks(step: Any, own: str, block: str) -> list[dict[str, Any]]:
-    """The ``upload`` or ``promote`` blocks of ``step`` that are of the own project."""
-    blocks = (plugin_block(config, block) for config in plugin_configurations(step))
-    return [b for b in blocks if b is not None and other_project(b, own) is None]
+def own_folders(step: Any, own: str, block: str) -> list[Folder]:
+    """The folders the own ``upload`` or ``promote`` blocks of ``step`` name: the block's
+    platform and the step id of its configuration, both named; in order."""
+    found = []
+    for config in plugin_configurations(step):
+        b = plugin_block(config, block)
+        if b is None or other_project(b, own) is not None:
+            continue
+        platform, step_id = named_variant(b), named_step(config)
+        if platform is not None and step_id is not None:
+            found.append(Folder(platform, step_id))
+    return found
 
 
-def block_variants(step: Any, own: str, block: str) -> list[str]:
-    """The variants the own ``block`` blocks of ``step`` name (``named_variant``), in order."""
-    named = (named_variant(b) for b in own_blocks(step, own, block))
-    return [v for v in named if v is not None]
-
-
-def produced_variants(step: Any, own: str) -> frozenset[str]:
-    """What ``step`` produces: every variant its own upload or promote blocks name."""
-    return frozenset(block_variants(step, own, UPLOAD) + block_variants(step, own, PROMOTE))
+def made_folders(step: Any, own: str) -> frozenset[Folder]:
+    """What ``step`` makes: every folder its own upload or promote blocks name."""
+    return frozenset(own_folders(step, own, UPLOAD) + own_folders(step, own, PROMOTE))
 
 
 def step_places(doc: Any) -> list[Any]:
@@ -187,45 +202,46 @@ def step_places(doc: Any) -> list[Any]:
     return list(leaf_steps(pipeline_steps(doc)))
 
 
-def promoted_twice(v: str, first: tuple[int, Any], second: tuple[int, Any]) -> DocumentError:
-    """The error of ``v`` promoted at two places, each ``(position, step)``."""
+def promoted_twice(f: Folder, first: tuple[int, Any], second: tuple[int, Any]) -> DocumentError:
+    """The error of ``f`` promoted at two places, each ``(position, step)``."""
     (p1, s1), (p2, s2) = first, second
     if s1 is s2:
         who = f"the step {step_name(s1, p1)} at two places, steps {p1} and {p2}"
     else:
         who = f"two steps, {step_name(s1, p1)} and {step_name(s2, p2)}"
     return DocumentError(
-        f"{v} is promoted by {who}: the first to pass would write its pointer while the other "
-        "still uploads"
+        f"{f} is promoted by {who}: the first to pass would promote it while the other still "
+        "uploads"
     )
 
 
-def promotions(doc: Any, own: str) -> dict[str, Any]:
-    """``{variant: the step that promotes it}``; its keys are ``D``, what the pipeline can give.
+def promotions(doc: Any, own: str) -> dict[Folder, Any]:
+    """``{folder: the step that promotes it}``; its keys are ``D``, what the pipeline makes.
 
-    A variant promoted at two places is an error: the first to pass would
-    write its pointer while the other still uploads.
+    A folder promoted at two places is an error: the first to pass would
+    promote it while the other still uploads.
     """
-    found: dict[str, tuple[int, Any]] = {}
+    found: dict[Folder, tuple[int, Any]] = {}
     for position, step in enumerate(step_places(doc), start=1):
-        for v in block_variants(step, own, PROMOTE):
-            first = found.setdefault(v, (position, step))
+        for f in own_folders(step, own, PROMOTE):
+            first = found.setdefault(f, (position, step))
             if first[0] != position:
-                raise promoted_twice(v, first, (position, step))
-    return {v: step for v, (_, step) in found.items()}
+                raise promoted_twice(f, first, (position, step))
+    return {f: step for f, (_, step) in found.items()}
 
 
-def promote_keys(doc: Any, own: str) -> dict[str, str]:
-    """``{variant: step key}`` of the steps that promote: meta-data ``snapshot-promotes``.
+def promote_entries(doc: Any, own: str) -> list[dict[str, str]]:
+    """``[{"step", "step_key", "variant"}]`` of the steps that promote: meta-data
+    ``snapshot-promotes``, sorted.
 
     The leave step asks for a step's outcome by its key, so a step that
     promotes and has none is an error.
     """
-    keys = {v: step_key(s) for v, s in promotions(doc, own).items()}
-    keyless = sorted(v for v, k in keys.items() if k is None)
+    keys = {f: step_key(s) for f, s in promotions(doc, own).items()}
+    keyless = sorted(f for f, k in keys.items() if k is None)
     if keyless:
         raise DocumentError(f"the step that promotes {keyless[0]} has no key")
-    return {v: k for v, k in keys.items() if k is not None}
+    return [{"step": f.step, "step_key": k, "variant": f.platform} for f, k in sorted(keys.items())]
 
 
 # ---------------------------------------------------------------------------
@@ -234,45 +250,52 @@ def promote_keys(doc: Any, own: str) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
+class Taken:
+    """What the plan fixes of a snapshot dependency: its key, and its step ids."""
+
+    key: str
+    steps: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Rewrite:
     """What the plan step writes into the generated pipeline of ``own`` before it uploads it.
 
     ``key`` is the pipeline's own key, None when it has no snapshot;
     ``plugin_commit`` the commit the plan step runs (``git rev-parse HEAD`` of
-    the plugin's checkout); ``dependencies`` the pointer of each snapshot
-    dependency and variant the entries name, by ``(project, variant)``;
-    ``existing`` the pointer of each own variant at ``key``, by variant, each
-    as ``pointer.find`` read it.
+    the plugin's checkout); ``dependencies`` the key and step ids of each
+    snapshot dependency, by project; ``made`` the manifest of each own folder
+    that is made at ``key``.
     """
 
     own: str
     key: str | None
     plugin_commit: str
-    dependencies: Mapping[tuple[str, str], Pointer]
-    existing: Mapping[str, Pointer]
+    dependencies: Mapping[str, Taken]
+    made: Mapping[Folder, Manifest]
 
 
 # ---------------------------------------------------------------------------
-# Completion: the steps of variants that exist are replaced
+# Completion: the steps whose folders are made are replaced
 # ---------------------------------------------------------------------------
 
 
-def is_replaced(step: Any, own: str, existing: Mapping[str, Pointer]) -> bool:
-    """True when ``step`` produces at least one variant and every one exists."""
-    produced = produced_variants(step, own)
-    return bool(produced) and produced <= frozenset(existing)
+def is_replaced(step: Any, own: str, made: Mapping[Folder, Manifest]) -> bool:
+    """True when ``step`` makes at least one folder and every one is made."""
+    folders = made_folders(step, own)
+    return bool(folders) and folders <= frozenset(made)
 
 
-def replaced_steps(doc: Any, own: str, existing: Mapping[str, Pointer]) -> list[Any]:
+def replaced_steps(doc: Any, own: str, made: Mapping[Folder, Manifest]) -> list[Any]:
     """The steps of ``doc`` that completion replaces, in order.
 
-    ``existing`` is the pointer of each own variant at the build's key. A step
-    is replaced when it produces at least one variant and every one is in
-    ``D`` (``promotions``) and exists (``is_replaced``); an existing variant
-    outside ``D`` replaces nothing.
+    ``made`` is the manifest of each own folder made at the build's key. A
+    step is replaced when it makes at least one folder and every one is in
+    ``D`` (``promotions``) and made (``is_replaced``); a made folder outside
+    ``D`` replaces nothing.
     """
-    in_d = promotions(doc, own) if existing else {}
-    done = {v: p for v, p in existing.items() if v in in_d}
+    in_d = promotions(doc, own) if made else {}
+    done = {f: m for f, m in made.items() if f in in_d}
     return [s for s in step_places(doc) if is_replaced(s, own, done)]
 
 
@@ -281,58 +304,51 @@ def replaced_steps(doc: Any, own: str, existing: Mapping[str, Pointer]) -> list[
 FLOW_FIELDS = ("key", "depends_on", "allow_dependency_failure", "if", "branches")
 
 
-def replacement(step: Any, own: str, existing: Mapping[str, Pointer]) -> dict[str, Any]:
+def replacement(step: Any, own: str, made: Mapping[Folder, Manifest]) -> dict[str, Any]:
     """The step that stands in for ``step``: its ``FLOW_FIELDS`` and an echo.
 
     It has no plugins and no agents, so it runs for a second on the default
     queue, passes, and every rule about its dependents and the gate holds as
-    for any step. The label is the step's with the builds that hold its
-    variants; the command says where each variant is.
+    for any step. The label is the step's with the builds that made its
+    folders; the command says which build made each.
     """
-    produced = sorted(produced_variants(step, own))
-    builds = {v: existing[v].build for v in produced}
+    folders = sorted(made_folders(step, own))
+    builds = {f: made[f].promoted.build for f in folders}
     numbers = sorted({b.number for b in builds.values()})
-    where = f"build {numbers[0]}" if len(numbers) == 1 else f"builds {', '.join(map(str, numbers))}"
+    by = f"build {numbers[0]}" if len(numbers) == 1 else f"builds {', '.join(map(str, numbers))}"
     label = step_label(step)
-    exists = f"(exists in {where})"
+    made_by = f"(made by {by})"
     kept = {f: step[f] for f in FLOW_FIELDS if f in step}
-    echoes = (f'echo "{v} of {own} exists in build {b.number} {b.url}"' for v, b in builds.items())
+    echoes = (
+        f'echo "{f} of {own} was made by build {b.number} {b.url}"' for f, b in builds.items()
+    )
     return {
-        "label": f"{label} {exists}" if label else exists,
+        "label": f"{label} {made_by}" if label else made_by,
         **kept,
         "command": "\n".join(echoes),
     }
 
 
-def rewired_variants(steps: Sequence[Any], own: str, replaced: Iterable[Any]) -> frozenset[str]:
-    """The variants uploaded by at least one step of ``steps``, and only by replaced steps."""
-    gone = {id(s) for s in replaced}
-    uploaders: dict[str, list[Any]] = {}
-    for s in steps:
-        for v in block_variants(s, own, UPLOAD):
-            uploaders.setdefault(v, []).append(s)
-    return frozenset(v for v, by in uploaders.items() if all(id(s) in gone for s in by))
+def needed_folders(
+    doc: Any, own: str, made: Mapping[Folder, Manifest], steps_of: Mapping[str, Sequence[str]]
+) -> dict[str, frozenset[Folder]]:
+    """``{project: folders}``: what the snapshot entries of the kept steps take, per dependency.
 
-
-def needed_variants(
-    doc: Any, own: str, existing: Mapping[str, Pointer]
-) -> dict[str, frozenset[str]]:
-    """``{project: variants}``: what the snapshot entries of the kept steps name, per dependency.
-
-    ``existing`` is the pointer of each own variant at the build's key, as
-    ``Rewrite.existing``. A step that completion replaces
+    ``made`` is the manifest of each own folder made at the build's key, as
+    ``Rewrite.made``; ``steps_of`` the step ids of each dependency, which an
+    entry that names no step takes. A step that completion replaces
     (``replaced_steps``) downloads nothing, so it needs nothing; an entry it
-    shares with a kept step is needed. This is what the plan step looks up
-    pointers of (step 8), and what a trigger step hands down as
+    shares with a kept step is needed. This is what the plan step reads the
+    manifests of (step 8), and what a trigger step hands down as
     ``SNAPSHOT_NEEDS``.
     """
     kept = copy.deepcopy(doc)
-    for s in replaced_steps(kept, own, existing):
+    for s in replaced_steps(kept, own, made):
         replace_content(s, {})
-    needs: dict[str, set[str]] = {}
+    needs: dict[str, frozenset[Folder]] = {}
     for project, e in snapshot_dependencies(kept, own):
-        needs.setdefault(project, set()).add(named_variant(e))
-    return {p: frozenset(v) for p, v in needs.items()}
+        needs[project] = needs.get(project, frozenset()) | taken_folders(e, steps_of[project])
+    return needs
 
 
 # ---------------------------------------------------------------------------
@@ -340,15 +356,17 @@ def needed_variants(
 # ---------------------------------------------------------------------------
 
 
-def resolved_entry(entry: Mapping[Any, Any], p: Pointer) -> dict[Any, Any]:
-    """``entry`` downloading exactly the build of ``p``: its build id, its ref, strict matching."""
-    kept = without_options(entry, (GIT_REF, STRICT_REF_MATCH, BUILD_ID))
-    return {**kept, BUILD_ID: p.build.id, GIT_REF: p.git_ref, STRICT_REF_MATCH: True}
+def keyed_entry(entry: Mapping[Any, Any], taken: Taken) -> dict[Any, Any]:
+    """``entry`` taking each of its steps at the dependency's key: ``keys``, in place of the
+    options that would find a build."""
+    folders = taken_folders(entry, taken.steps)
+    kept = without_options(entry, (STEP, GIT_REF, STRICT_REF_MATCH, LATEST, KEYS))
+    return {**kept, KEYS: {f.step: taken.key for f in sorted(folders)}}
 
 
-def with_snapshot(block: Mapping[Any, Any], key: str) -> dict[Any, Any]:
-    """An upload or promote block that carries the key ``key``."""
-    return {**without_options(block, (SNAPSHOT_OPTION,)), SNAPSHOT_OPTION: key}
+def with_key(config: Mapping[Any, Any], key: str) -> dict[Any, Any]:
+    """An artifacts configuration that carries the build's key."""
+    return {**without_options(config, (KEY,)), KEY: key}
 
 
 def plugin_key(commit: str) -> str:
@@ -365,34 +383,27 @@ def planned(doc: Any, r: Rewrite) -> Any:
     """The document to upload: one resolution for every job (section 8).
 
     ``doc`` is a generated pipeline that keeps the rule
-    (``declaration.rule_violations``) and promotes no variant at two places
+    (``declaration.rule_violations``) and promotes no folder at two places
     (``promotions``).
 
     - A step that completion replaces (``replaced_steps``) is replaced in its
-      place (``replacement``), and an own download entry of a variant whose
-      uploading steps were all replaced gets that variant's build, ref and
-      strict matching.
-    - Every snapshot entry that remains gets the build, ref and strict
-      matching handed in for its project and variant (``needed_variants``
-      names them). A latest successful entry is left as generated.
-    - With a key, every own upload and promote block gets ``snapshot: <key>``.
+      place (``replacement``). A made step's files lie at the build's key
+      whoever made them, so an entry of the build's own steps stays as
+      generated.
+    - Every snapshot entry that remains gets ``keys``: the dependency's key
+      for each step it takes. A latest successful entry is left as generated.
+    - With a key, every configuration of the plugin carries it as ``key``.
     - Every key that names the plugin names it at the plugin commit.
     """
     out = copy.deepcopy(doc)
-    replaced = replaced_steps(out, r.own, r.existing)
-    rewired = rewired_variants(step_places(out), r.own, replaced)
-    for s in replaced:
-        replace_content(s, replacement(s, r.own, r.existing))
-    for e in own_downloads(out, r.own):
-        v = named_variant(e)
-        if v in rewired:
-            replace_content(e, resolved_entry(e, r.existing[v]))
+    for s in replaced_steps(out, r.own, r.made):
+        replace_content(s, replacement(s, r.own, r.made))
     for project, e in snapshot_dependencies(out, r.own):
-        replace_content(e, resolved_entry(e, r.dependencies[(project, named_variant(e))]))
+        replace_content(e, keyed_entry(e, r.dependencies[project]))
     if r.key is not None:
-        for s in step_places(out):
-            for block in (*own_blocks(s, r.own, UPLOAD), *own_blocks(s, r.own, PROMOTE)):
-                replace_content(block, with_snapshot(block, r.key))
+        for config in plugin_configurations(out):
+            if isinstance(config, dict):
+                replace_content(config, with_key(config, r.key))
     for m in mappings(out):
         if any(is_plugin_key(k) for k in m):
             replace_content(m, with_plugin_commit(m, r.plugin_commit))
@@ -408,15 +419,26 @@ def trigger_key(project: str) -> str:
     return f"{TRIGGER_KEY_PREFIX}{project}"
 
 
-def trigger_step(plan: Plan, project: str, needs: Iterable[str], after: Sequence[str]) -> dict:
+def needs_value(needs: Iterable[Folder]) -> str:
+    """``SNAPSHOT_NEEDS``: the folders a started build must make, as a JSON list of
+    ``[<platform>, <step id>]``, sorted."""
+    return json.dumps([list(f) for f in sorted(frozenset(needs))])
+
+
+def read_needs(value: str) -> frozenset[Folder]:
+    """The folders ``SNAPSHOT_NEEDS`` names, as ``needs_value`` wrote them."""
+    return frozenset(Folder(platform, step) for platform, step in json.loads(value))
+
+
+def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Sequence[str]) -> dict:
     """The step that builds ``project`` as the plan says and hands down ``needs``.
 
     ``after`` are the keys of the trigger steps it waits for. ``soft_fail``
-    is set: the pointer says whether the dependency is usable, not the colour
-    of its build.
+    is set: the manifests say whether the dependency is usable, not the
+    colour of its build.
     """
-    node = plan.nodes[project]
-    message = f"snapshot dependency of {plan.root.project} build {plan.root.build_number}"
+    planned_project = plan.projects[project]
+    message = f"snapshot dependency of {plan.first.project} build {plan.first.build_number}"
     step: dict[str, Any] = {
         "label": trigger_label(plan, project),
         "key": trigger_key(project),
@@ -426,26 +448,26 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[str], after: Sequence
     if after:
         step["depends_on"] = list(after)
     step["build"] = {
-        "branch": node.label,
-        "commit": node.commit,
+        "branch": planned_project.branch,
+        "commit": planned_project.commit,
         "message": message,
-        "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": json.dumps(sorted(frozenset(needs)))},
+        "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": needs_value(needs)},
     }
     return step
 
 
 def below_in(plan: Plan, project: str) -> frozenset[str]:
-    """The nodes below ``project`` in ``plan``: all that it reaches through its dependencies."""
+    """The projects below ``project`` in ``plan``: all that it reaches through its dependencies."""
     return frozenset(dependencies_first(plan, project)) - {project}
 
 
-def trigger_steps(plan: Plan, needs: Mapping[str, Iterable[str]]) -> list[dict]:
-    """One trigger step per dependency of ``needs`` (``{project: variants}``), dependencies first.
+def trigger_steps(plan: Plan, needs: Mapping[str, Iterable[Folder]]) -> list[dict]:
+    """One trigger step per dependency of ``needs`` (``{project: folders}``), dependencies first.
 
     Each waits for the triggers of the dependencies in its own tree.
     """
     below = {p: below_in(plan, p) for p in needs}
-    order = [p for p in dependencies_first(plan, plan.root.project) if p in needs]
+    order = [p for p in dependencies_first(plan, plan.first.project) if p in needs]
     return [
         trigger_step(plan, p, needs[p], [trigger_key(q) for q in order if q in below[p]])
         for p in order
@@ -473,7 +495,7 @@ def resume_step(
 
 def resume_pipeline(
     plan: Plan,
-    needs: Mapping[str, Iterable[str]],
+    needs: Mapping[str, Iterable[Folder]],
     command: str,
     plugin_commit: str,
     pipeline_path: str,

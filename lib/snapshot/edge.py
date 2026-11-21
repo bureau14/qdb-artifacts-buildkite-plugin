@@ -10,12 +10,13 @@ The steps keep no state but these marks on their own build, which leave reads
 back:
 
     snapshot-mode                  reused, built or failed
-    snapshot-promotes              {variant: step key} of the steps that promote
+    snapshot-promotes              [{"step", "step_key", "variant"}]: the steps that promote
 
-The reads here are those of more than one step: the pointers at a key, the
-failure records of a key, the arrival of the chain's root at the gate, and the
-plan of the build's chain. Each meta-data read here is of a value that is set before it is read,
-so an absent value fails the step as any failed call does.
+The reads here are those of more than one step: the manifests of folders at a
+key, the failure records of a key, the arrival of the chain's root at the
+gate, and the plan of the build's chain. Each meta-data read here is of a value
+that is set before it is read, so an absent value fails the step as any failed
+call does.
 """
 
 from __future__ import annotations
@@ -24,15 +25,17 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .. import layout, pointer
+from .. import layout
 from ..clients import resolve_object_auth
 from ..config import load_store_config
+from ..key import create_key_json, key_of
+from ..layout import Folder
+from ..manifest import Manifest, is_made, read_manifest_at
 from ..objects import Store, destination_store
-from ..pointer import Pointer
 from .agent import Agent
 from .git import Checkout
 from .job import Job
-from .plan import Node, Plan, decode_plan, planned_node
+from .plan import Plan, Planned, decode_plan, key_json_of, planned_project
 from .records import Cause, Origin, Record, chain_failure, decode_record, encode_record
 
 # The marks on the build, and the meta-data a step reads.
@@ -68,27 +71,30 @@ def opened_store(ssm: Any) -> tuple[Store, str]:
 
 
 # ---------------------------------------------------------------------------
-# Reading through the edge
+# Reading and writing through the edge
 # ---------------------------------------------------------------------------
 
 
-def pointers_at(
-    edge: Edge, project: str, key: str, variants: Iterable[str]
-) -> dict[str, Pointer | None]:
-    """The pointer of each variant of ``project`` at ``key``; None where no build holds it."""
-    return {v: pointer.find(edge.store, edge.prefix, project, key, v) for v in sorted(variants)}
+def manifests_at(
+    edge: Edge, project: str, key: str, folders: Iterable[Folder]
+) -> dict[Folder, Manifest | None]:
+    """The manifest of each folder of ``project`` at ``key``; None where no upload wrote one."""
+    return {
+        f: read_manifest_at(edge.store, layout.step_folder(edge.prefix, project, key, f))
+        for f in sorted(folders)
+    }
 
 
-def held_only(held: Mapping[Any, Pointer | None]) -> dict[Any, Pointer]:
-    """The pointers of ``held`` that a build holds."""
-    return {k: found for k, found in held.items() if found is not None}
+def made_only(found: Mapping[Any, Manifest | None]) -> dict[Any, Manifest]:
+    """The manifests of ``found`` that say promoted: the steps made."""
+    return {k: m for k, m in found.items() if is_made(m)}
 
 
 def stored_records(edge: Edge, project: str, key: str) -> list[Record]:
     """Every failure record of ``project`` at ``key``."""
     listed = edge.store.list(layout.failure_records(edge.prefix, project, key))
-    found = (edge.store.get(where) for where, _ in listed)
-    return [decode_record(s.body.decode("utf-8")) for s in found if s is not None]
+    found = (edge.store.get(item.key) for item in listed)
+    return [decode_record(s.body.decode("utf-8"), project, key) for s in found if s is not None]
 
 
 def create_record(edge: Edge, r: Record) -> None:
@@ -98,6 +104,15 @@ def create_record(edge: Edge, r: Record) -> None:
         edge.log(f"wrote the failure record s3://{edge.store.bucket}/{where}")
     else:
         edge.log(f"s3://{edge.store.bucket}/{where} exists; left as it is")
+
+
+def create_planned_key_json(edge: Edge, plan: Plan, project: str) -> None:
+    """Create ``key.json`` of the planned key of ``project`` unless it is there: what the
+    plan says that key stands for, so that the key is the hash of its bytes."""
+    stands_for = key_json_of(plan, project)
+    where = layout.key_json(edge.prefix, project, key_of(stands_for))
+    if create_key_json(edge.store, edge.prefix, stands_for):
+        edge.log(f"wrote s3://{edge.store.bucket}/{where}")
 
 
 def chain_records(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str, Record]:
@@ -140,9 +155,9 @@ def chain_plan(job: Job, edge: Edge) -> Plan:
     return decode_plan(edge.agent.meta_data_get(PLAN, job.plan_id))
 
 
-def own_node(job: Job, edge: Edge, p: Plan) -> Node:
-    """This build's node of the plan, which must plan it at the commit it checked out."""
-    return planned_node(p, job.project, edge.checkout.head_commit())
+def own_planned(job: Job, edge: Edge, p: Plan) -> Planned:
+    """This build's project in the plan, which must plan it at the commit it checked out."""
+    return planned_project(p, job.project, edge.checkout.head_commit())
 
 
 def origin_of(job: Job, p: Plan, key: str) -> Origin:

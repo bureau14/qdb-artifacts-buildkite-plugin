@@ -1,55 +1,54 @@
 """Failure records, and what the gate steps decide over them (specification sections 7 and 9).
 
-A failure record says that one build of a key did not give some variants, and
+A failure record says that one build of a key did not make some steps, and
 why. Only a build that has a key writes one, and it carries the plan of its
-chain. It is written once into the bucket and never changed; where it lives
+chain. It is written once into the bucket, at
+``<project>/<key>/failures/<build id>.json``, and never changed; where it lives
 and how it is read are the store's business. Here: the record as a value
 (``Record``), its JSON (``encode_record``, ``decode_record``), and the
 decisions of section 7 over records the caller has read:
 
-- ``unpassed`` and ``leave_record``: the variants whose step did not pass,
-  whose pointers the leave step reads, and its record of those that have no
-  pointer;
+- ``unpassed`` and ``leave_record``: the folders (platform and step id) whose
+  step did not pass, whose manifests the leave step reads, and its record of
+  those that are not made;
 - ``shared_failure`` and ``shared_record``: step 7, the failure of another
   build of the same key since the root build of this chain started;
 - ``chain_failure`` and ``caused_record``: step 9 and resume, a dependency
   that failed earlier in this chain;
 - ``reason_record``: steps 1, 2 and 5, a build that failed before it built.
 
-A record never says whether a variant exists: the pointer does. A record only
+A record never says whether a step is made: its manifest does. A record only
 saves a waiting build from compiling in vain, and lets a consumer name the
-cause::
+cause. Canonical JSON::
 
-    {"schema": 1, "project": "...", "key": "<key>", "plan": "<root build uuid>",
-     "build": {"id": "...", "number": 0, "url": "https://...", "pipeline": "..."},
-     "reason": "generator_failed" | "rule" | "not_declared" | null,
-     "failed": [{"variant": "...", "step": "...", "outcome": "hard_failed"}],
-     "caused_by": [{"project": "...", "key": "<key>", "variants": ["..."]}],
-     "shared_with": {"id": ..., "number": ..., "url": ..., "pipeline": ...} | null,
-     "recorded_at": "<UTC ISO 8601>", "recorded_at_epoch": 0}
+    {"build": {"id": "<uuid>", "number": <n>, "url": "<url>"},
+     "caused_by": [{"key": "<key>", "missing": [{"step": "<step id>", "variant": "<platform>"}],
+                    "project": "<slug>"}],
+     "failed": [{"outcome": "hard_failed", "step": "<step id>", "step_key": "<Buildkite key>",
+                 "variant": "<platform>"}],
+     "plan": "<plan id>", "reason": "generator_failed" | "rule" | "not_declared" | null,
+     "recorded_at": "<UTC ISO 8601, ms, Z>",
+     "shared_with": null | {"id": "<uuid>", "number": <n>, "url": "<url>"}}
 
-A build is ``pointer.Build``, as a pointer names it. Its ``pipeline`` in the
-JSON is the record's project: the build that writes a record of a key, and a
-build whose failure it shares, are builds of that key's project.
+The project and the key of a record are those of its path; a ``Record`` holds
+them as its reader found it.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
-import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from ..forms import iso_utc
 from ..key import canonical_json
-from ..pointer import Build
-
-SCHEMA = 1
+from ..layout import Folder
+from ..manifest import Build, build_document, build_of
 
 # Why a build failed before it built: its generator failed, its generated
-# pipeline breaks the rule, or it was asked for a variant it does not promote.
+# pipeline breaks the rule, or it was asked for a step it does not make.
 GENERATOR_FAILED = "generator_failed"
 RULE = "rule"
 NOT_DECLARED = "not_declared"
@@ -68,25 +67,26 @@ SHARED_AFTER = 5
 
 @dataclass(frozen=True)
 class Failed:
-    """A variant whose step did not pass: the step's key and its outcome, empty when unfinished."""
+    """A folder whose step did not pass: the step's Buildkite key and its outcome, empty when
+    unfinished."""
 
-    variant: str
-    step: str
+    folder: Folder
+    step_key: str
     outcome: str
 
 
 @dataclass(frozen=True)
 class Cause:
-    """A dependency that did not give the variants a build needs: its project, key and those."""
+    """A dependency that did not make the folders a build needs: its project, key and those."""
 
     project: str
     key: str
-    variants: tuple[str, ...]
+    missing: tuple[Folder, ...]
 
 
 @dataclass(frozen=True)
 class Record:
-    """One failure record; see the module docstring."""
+    """One failure record; see the module docstring. ``project`` and ``key`` are its path's."""
 
     project: str
     key: str
@@ -97,7 +97,6 @@ class Record:
     caused_by: tuple[Cause, ...]
     shared_with: Build | None
     recorded_at: str
-    recorded_at_epoch: int
 
 
 @dataclass(frozen=True)
@@ -124,29 +123,28 @@ def compose_record(
     shared_with: Build | None,
 ) -> Record:
     """The record ``origin`` writes at ``now`` (epoch seconds), its entries sorted."""
-    causes = (Cause(c.project, c.key, tuple(sorted(set(c.variants)))) for c in caused_by)
+    causes = (Cause(c.project, c.key, tuple(sorted(set(c.missing)))) for c in caused_by)
     return Record(
         project=origin.project,
         key=origin.key,
         plan=origin.plan,
         build=origin.build,
         reason=reason,
-        failed=tuple(sorted(failed, key=lambda f: (f.variant, f.step))),
+        failed=tuple(sorted(failed, key=lambda f: (f.folder, f.step_key))),
         caused_by=tuple(sorted(causes, key=lambda c: (c.project, c.key))),
         shared_with=shared_with,
         recorded_at=iso_utc(now),
-        recorded_at_epoch=math.floor(now),
     )
 
 
 def reason_record(origin: Origin, reason: str, now: float) -> Record:
     """The record of a build that failed before it built: its generator, the rule, or a
-    variant it does not promote."""
+    step it does not make."""
     return compose_record(origin, now, reason, (), (), None)
 
 
 def caused_record(origin: Origin, causes: Sequence[Cause], now: float) -> Record:
-    """The record of a build that a dependency left without the variants it needs."""
+    """The record of a build that a dependency left without the steps it needs."""
     return compose_record(origin, now, None, (), causes, None)
 
 
@@ -155,91 +153,91 @@ def caused_record(origin: Origin, causes: Sequence[Cause], now: float) -> Record
 # ---------------------------------------------------------------------------
 
 
-def build_document(b: Build, pipeline: str) -> dict[str, Any]:
-    return {"id": b.id, "number": b.number, "url": b.url, "pipeline": pipeline}
+def folder_document(f: Folder) -> dict[str, str]:
+    return {"step": f.step, "variant": f.platform}
+
+
+def folder_of(d: Mapping[str, Any]) -> Folder:
+    return Folder(d["variant"], d["step"])
 
 
 def record_document(r: Record) -> dict[str, Any]:
     return {
-        "schema": SCHEMA,
-        "project": r.project,
-        "key": r.key,
-        "plan": r.plan,
-        "build": build_document(r.build, r.project),
-        "reason": r.reason,
-        "failed": [{"variant": f.variant, "step": f.step, "outcome": f.outcome} for f in r.failed],
+        "build": build_document(r.build),
         "caused_by": [
-            {"project": c.project, "key": c.key, "variants": list(c.variants)} for c in r.caused_by
+            {"key": c.key, "missing": [folder_document(f) for f in c.missing], "project": c.project}
+            for c in r.caused_by
         ],
-        "shared_with": None if r.shared_with is None else build_document(r.shared_with, r.project),
+        "failed": [
+            {"outcome": f.outcome, "step_key": f.step_key, **folder_document(f.folder)}
+            for f in r.failed
+        ],
+        "plan": r.plan,
+        "reason": r.reason,
         "recorded_at": r.recorded_at,
-        "recorded_at_epoch": r.recorded_at_epoch,
+        "shared_with": None if r.shared_with is None else build_document(r.shared_with),
     }
 
 
 def encode_record(r: Record) -> str:
-    """The record as compact JSON with sorted keys, as it is written into the bucket."""
+    """The record as canonical JSON, as it is written into the bucket."""
     return canonical_json(record_document(r)).decode("utf-8")
 
 
-def build_of(d: Mapping[str, Any]) -> Build:
-    """A build as a record names it; its ``pipeline`` is the record's project."""
-    return Build(id=d["id"], number=d["number"], url=d["url"])
-
-
-def decode_record(text: str) -> Record:
-    """The record in ``text``, as ``encode_record`` wrote it."""
+def decode_record(text: str, project: str, key: str) -> Record:
+    """The record in ``text``, as ``encode_record`` wrote it, of ``project`` at ``key``."""
     d = json.loads(text)
     shared = d["shared_with"]
     return Record(
-        project=d["project"],
-        key=d["key"],
+        project=project,
+        key=key,
         plan=d["plan"],
         build=build_of(d["build"]),
         reason=d["reason"],
-        failed=tuple(Failed(f["variant"], f["step"], f["outcome"]) for f in d["failed"]),
+        failed=tuple(Failed(folder_of(f), f["step_key"], f["outcome"]) for f in d["failed"]),
         caused_by=tuple(
-            Cause(c["project"], c["key"], tuple(c["variants"])) for c in d["caused_by"]
+            Cause(c["project"], c["key"], tuple(folder_of(m) for m in c["missing"]))
+            for c in d["caused_by"]
         ),
         shared_with=None if shared is None else build_of(shared),
         recorded_at=d["recorded_at"],
-        recorded_at_epoch=d["recorded_at_epoch"],
     )
 
 
 # ---------------------------------------------------------------------------
-# Leave: the variants whose step did not pass
+# Leave: the folders whose step did not pass
 # ---------------------------------------------------------------------------
 
 
-def unpassed(promotes: Mapping[str, str], outcomes: Mapping[str, str]) -> list[str]:
-    """The variants of ``promotes`` whose step did not pass, sorted.
+def unpassed(promotes: Mapping[Folder, str], outcomes: Mapping[str, str]) -> list[Folder]:
+    """The folders of ``promotes`` whose step did not pass, sorted.
 
-    ``promotes`` is ``{variant: step key}`` (meta-data ``snapshot-promotes``),
-    ``outcomes`` the outcome of each step as read, a step not in it not
-    finished. Only ``passed`` passes.
+    ``promotes`` maps each folder the build makes to the Buildkite key of the
+    step that promotes it (meta-data ``snapshot-promotes``), ``outcomes`` the
+    outcome of each step as read, a step not in it not finished. Only
+    ``passed`` passes.
     """
-    return sorted(v for v, step in promotes.items() if outcomes.get(step, "") != PASSED)
+    return sorted(f for f, step in promotes.items() if outcomes.get(step, "") != PASSED)
 
 
 def leave_record(
     origin: Origin,
-    promotes: Mapping[str, str],
+    promotes: Mapping[Folder, str],
     outcomes: Mapping[str, str],
-    present: Iterable[str],
+    made: Iterable[Folder],
     now: float,
 ) -> Record | None:
-    """The leave step's record; None when every variant of ``promotes`` passed or exists.
+    """The leave step's record; None when every folder of ``promotes`` passed or is made.
 
-    ``promotes`` and ``outcomes`` as ``unpassed`` takes them, ``present`` the
-    variants that have a pointer at the key. A variant goes into the record
-    when its step did not pass and it has no pointer.
+    ``promotes`` and ``outcomes`` as ``unpassed`` takes them, ``made`` the
+    folders whose manifest at the key says promoted. A folder goes into the
+    record when its step did not pass and it is not made.
     """
-    exists = frozenset(present)
+    done = frozenset(made)
     failed = [
-        Failed(v, promotes[v], outcomes.get(promotes[v], ""))
-        for v in unpassed(promotes, outcomes)
-        if v not in exists
+        Failed(f, promotes[f], outcomes.get(promotes[f], ""))
+        for f in unpassed(promotes, outcomes)
+        if f not in done
     ]
     return compose_record(origin, now, None, failed, (), None) if failed else None
 
@@ -250,11 +248,7 @@ def leave_record(
 
 
 def recorded_time(r: Record) -> float:
-    """When ``r`` was recorded, in epoch seconds to the millisecond: its ``recorded_at``.
-
-    ``recorded_at_epoch`` is the same time to the second, too coarse for the
-    five seconds of step 7.
-    """
+    """When ``r`` was recorded, in epoch seconds to the millisecond: its ``recorded_at``."""
     return datetime.datetime.strptime(r.recorded_at, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
@@ -262,21 +256,21 @@ def _most_recent(records: Iterable[Record]) -> Record | None:
     return max(records, key=lambda r: (recorded_time(r), r.build.id), default=None)
 
 
-def _hard_failed(r: Record) -> frozenset[str]:
-    return frozenset(f.variant for f in r.failed if f.outcome == HARD_FAILED)
+def _hard_failed(r: Record) -> frozenset[Folder]:
+    return frozenset(f.folder for f in r.failed if f.outcome == HARD_FAILED)
 
 
 def shared_failure(
-    records: Iterable[Record], own_build: str, arrived: float, wanted: Iterable[str]
+    records: Iterable[Record], own_build: str, arrived: float, wanted: Iterable[Folder]
 ) -> Record | None:
     """The record of another build of this key that failed on ``wanted`` since this chain began.
 
     ``records`` are the failure records of the key, ``own_build`` this build's
     uuid, ``arrived`` the ``snapshot-arrived`` of the root build of this
-    build's chain (epoch seconds), ``wanted`` the variants it needs that have
-    no pointer. A record counts when another build recorded it more than
+    build's chain (epoch seconds), ``wanted`` the folders it needs that are
+    not made. A record counts when another build recorded it more than
     ``SHARED_AFTER`` seconds after ``arrived``, to the millisecond
-    (``recorded_time``), and every wanted variant has the outcome
+    (``recorded_time``), and every wanted folder has the outcome
     ``hard_failed`` in it. With nothing wanted nothing is shared. Of several,
     the most recent.
 
@@ -296,10 +290,10 @@ def shared_failure(
     )
 
 
-def shared_record(origin: Origin, source: Record, wanted: Iterable[str], now: float) -> Record:
+def shared_record(origin: Origin, source: Record, wanted: Iterable[Folder], now: float) -> Record:
     """The own record of a shared failure: ``source``'s entries of ``wanted``, and its build."""
     needed = frozenset(wanted)
-    copied = [f for f in source.failed if f.variant in needed]
+    copied = [f for f in source.failed if f.folder in needed]
     return compose_record(origin, now, None, copied, (), source.build)
 
 
