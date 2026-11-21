@@ -433,7 +433,7 @@ def latest_without_git_ref(entry: Mapping[str, Any], project: str, declaration: 
     template = next(
         e.path for e in declared_entries(declaration, LATEST_SUCCESSFUL) if e.project == project
     )
-    return no_git_ref(f"The download entry ({project}, {named_variant(entry)})", project, template)
+    return no_git_ref(project, f"its entry ({project}, {named_variant(entry)}) in {template}")
 
 
 def entry_problem(
