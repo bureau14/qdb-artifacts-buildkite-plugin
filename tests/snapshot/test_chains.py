@@ -680,8 +680,14 @@ def test_key_json_read_down_from_any_key_gives_every_commit_of_its_tree(worlds, 
         assert found["deps"] == sorted(found["deps"])
 
 
-# The name a first build runs under: a story branch, a release line, or a tag.
-FIRST_NAMES = ("feature", "3.14.x", TAG)
+# The name a first build runs under, with a pin of the node by its first dependent, on a commit
+# of its own: a story branch and no pin; the release line 3.14.x and a pin to it; a tag and a
+# pin to another tag, which no dependency of the node has. Each pin goes with the name under
+# which the plan asks git all that the node's own build asks, or that build cannot be planned:
+# a pin under a story branch makes the own build ask its dependencies a ref the plan did not
+# ask, and there the rule's no may come late, as the design accepts.
+PIN_TAG = "v0.9.0"
+NAMES_AND_PINS = (("feature", None), ("3.14.x", "3.14.x"), (TAG, PIN_TAG))
 
 # Where that name lies, on a commit of its own in each project: in the projects below the
 # node and the first build's own, at master's newest commits there, so that a started build
@@ -696,14 +702,14 @@ SPREADS = (
     "below-the-node",
 )
 
-# A pin of the node by its first dependent, on a commit of its own: none, to the release line
-# 3.14.x, or to a tag.
-PIN_TAG = "v0.9.0"
-PINS = (None, "3.14.x", PIN_TAG)
-
 # Whether the first build is played once, or first with the last step of the node's last
 # platform failing and then again, so that the node's build finds its other steps made.
 PLAYED = ("once", "after-a-failed-step")
+
+RULE_CASES = [
+    (name, spread, pin, played)
+    for (name, pin), spread, played in paired(NAMES_AND_PINS, SPREADS, PLAYED)
+]
 
 
 def pin_the_node(world, at, pin: str) -> None:
@@ -768,9 +774,7 @@ def own_build_takes_the_same_commits(world, graph: dict, plan, build) -> bool:
     )
 
 
-@pytest.mark.parametrize(
-    "name, spread, pin, played", paired(FIRST_NAMES, SPREADS, PINS, PLAYED), ids=str
-)
+@pytest.mark.parametrize("name, spread, pin, played", RULE_CASES, ids=str)
 def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_build(
     worlds, graph_node, shape, name, spread, pin, played
 ):
@@ -779,10 +783,10 @@ def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_buil
     through its plan step for the steps it finds made, exactly when a first build of its
     project at its ref and commit, played after, takes every project below it at the same
     commit; else it leaves none, also when that build cannot be planned. The fakes know no
-    merge-base, so every branch leaves master, as the rule takes it. Every case is one in
-    which the plan was told all that the own build asks: a pin to a branch neither the first
-    build's nor a release line, or one that moves a project with dependencies off the first
-    build's name, is not generated, as the rule counts what it was not told as no."""
+    merge-base, so every branch leaves master, as the rule takes it. In every case the plan
+    asked git all that the own build asks, or the own build cannot be planned (the tag pin):
+    a pin under a story branch, under which the rule's no may come late, is not generated
+    (``NAMES_AND_PINS``)."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
