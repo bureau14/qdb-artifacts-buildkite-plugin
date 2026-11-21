@@ -14,7 +14,7 @@ decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
 over its ``Edge``. A trigger step starts the build it asks for, with its branch,
 commit and environment, and plays it to its end. A command step is a simulated
 job of the plugin, through the library's own store functions: it finds the steps
-each download takes (``download.entry_steps``), compiles (or fails, when the test
+each download takes (``download.resolved_steps``), compiles (or fails, when the test
 broke that step), captures its files (``upload.capture_step``) and promotes after a
 passed command (``promote.promote_folder``).
 """
@@ -40,7 +40,7 @@ from fakes import (
 from world import paired
 
 from lib import layout, manifest
-from lib.download import Entry, entry_steps
+from lib.download import Entry, resolved_steps
 from lib.errors import ArtifactsError
 from lib.forms import iso_utc
 from lib.key import KeyJson, create_key_json, key_of
@@ -535,7 +535,7 @@ class World:
         key = self.own_key(build, options)
         for e in options.get("DOWNLOAD", {}).get("PROJECTS", []):
             found = entry_of(e, build, key)
-            for s in entry_steps(self.store, "", found, f"{build.project} {found.variant}"):
+            for s in resolved_steps(self.store, "", found, f"{build.project} {found.variant}"):
                 made = made_by(s.manifest)
                 self.downloads.append(Download(build, s.project, s.folder, s.key, made))
         variant = (options.get("UPLOAD") or options["PROMOTE"])["VARIANT"]

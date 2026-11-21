@@ -254,7 +254,7 @@ def upload_arguments():
         raise ArtifactsError(f"missing required variant in upload config: {upload_config}")
     return {
         "project": job_pipeline(),
-        "key_of_build": functools.cache(own_key),
+        "key_of_build": own_key,
         "folder": Folder(variant, step_id(variant, "uploads")),
         "uploaded": Uploaded(job_branch(), job_build()),
         "patterns": upload_config["files"],

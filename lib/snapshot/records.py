@@ -44,7 +44,7 @@ from typing import Any
 
 from ..forms import iso_utc
 from ..key import canonical_json
-from ..layout import Folder
+from ..layout import Folder, folder_document, folder_of
 from ..manifest import Build, build_document, build_of
 
 # Why a build failed before it built: its generator failed, its generated
@@ -151,14 +151,6 @@ def caused_record(origin: Origin, causes: Sequence[Cause], now: float) -> Record
 # ---------------------------------------------------------------------------
 # Encoding and decoding
 # ---------------------------------------------------------------------------
-
-
-def folder_document(f: Folder) -> dict[str, str]:
-    return {"step": f.step, "variant": f.platform}
-
-
-def folder_of(d: Mapping[str, Any]) -> Folder:
-    return Folder(d["variant"], d["step"])
 
 
 def record_document(r: Record) -> dict[str, Any]:

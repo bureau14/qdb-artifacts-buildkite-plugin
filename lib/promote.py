@@ -19,12 +19,10 @@ from . import layout
 from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import ArtifactsError
-from .forms import BRANCH_PREFIX, iso_utc
+from .forms import BRANCH_PREFIX, SNAPSHOT_BRANCH_PREFIX, iso_utc
 from .log import log
 from .manifest import Promoted, promoted_by, read_manifest_at, write_manifest
 from .objects import destination_store
-
-SNAPSHOT_BRANCH_PREFIX = "snapshot/"
 
 
 def writes_latest(branch):

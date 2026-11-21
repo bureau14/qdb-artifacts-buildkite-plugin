@@ -78,12 +78,10 @@ from .edge import (
     Edge,
     chain_plan,
     chain_records,
-    create_planned_key_json,
+    create_own_key_json,
     made_only,
     manifests_at,
     opened_store,
-    origin_of,
-    own_planned,
     root_arrival,
     stored_records,
 )
@@ -140,20 +138,13 @@ def reason_refusal(
     return Refusal(message, refusal_annotation(reason, job.project, job.build, message), record)
 
 
-def chain_origin(job: Job, edge: Edge) -> Origin | None:
-    """What a record of this build says of it, for a chain node with a key; None for a root.
-
-    A root knows no key before it made its plan (step 3). A chain node creates
-    ``key.json`` of its key before its record.
-    """
+def create_chain_key_json(job: Job, edge: Edge) -> Origin | None:
+    """For a chain node, which has its plan from the start, ``create_own_key_json`` before the
+    record of a refusal in step 1 or 2; the origin of that record. None for a root: it knows
+    no key before it made its plan (step 3), so it records nothing there."""
     if not is_chain_node(job):
         return None
-    p = chain_plan(job, edge)
-    n = own_planned(job, edge, p)
-    if n.key is None:
-        return None
-    create_planned_key_json(edge, p, job.project)
-    return origin_of(job, p, n.key)
+    return create_own_key_json(job, edge, chain_plan(job, edge))
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +159,7 @@ def check_command(job: Job, edge: Edge) -> None:
             f"the command exited {job.exit_status}: it generates the pipeline into "
             f"{job.pipeline}, which this step plans"
         )
-        origin = chain_origin(job, edge)
+        origin = create_chain_key_json(job, edge)
         raise reason_refusal(job, GENERATOR_FAILED, message, origin, edge.clock())
 
 
@@ -191,13 +182,15 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
     try:
         declaration = read_declaration(files, job.project)
     except TemplateError as exc:
-        raise reason_refusal(job, RULE, str(exc), chain_origin(job, edge), edge.clock()) from exc
+        origin = create_chain_key_json(job, edge)
+        raise reason_refusal(job, RULE, str(exc), origin, edge.clock()) from exc
     downloads = pipeline_downloads(doc)
     # The build's own ref, as the generator writes it from BUILDKITE_BRANCH.
     violations = rule_violations(downloads, declaration, job.project, branch_ref(job.branch))
     if violations:
         message = "\n".join(violation_message(v) for v in violations)
-        raise reason_refusal(job, RULE, message, chain_origin(job, edge), edge.clock())
+        origin = create_chain_key_json(job, edge)
+        raise reason_refusal(job, RULE, message, origin, edge.clock())
     return Generated(doc, declaration)
 
 
@@ -471,17 +464,15 @@ def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     check_command(job, edge)
     generated = generated_pipeline(job, edge)
     p = plan_of(job, edge, generated)
-    n = own_planned(job, edge, p)
-    if n.key is None:
+    origin = create_own_key_json(job, edge, p)
+    if origin is None:
         # 4. Only a root can be here: its declaration holds a latest successful dependency.
         edge.log(f"{job.project} has no snapshot: it is built, and never reused")
         return Prepared(generated, p, None, None, frozenset(), frozenset())
-    create_planned_key_json(edge, p, job.project)
-    origin = origin_of(job, p, n.key)
     d = promoted(job, edge, generated, origin)
-    asked_for = asked(job, d)
-    check_declared(job, edge, asked_for, d, origin)
-    return Prepared(generated, p, n.key, origin, d, asked_for)
+    n = asked(job, d)
+    check_declared(job, edge, n, d, origin)
+    return Prepared(generated, p, origin.key, origin, d, n)
 
 
 def own_manifests(job: Job, edge: Edge, prepared: Prepared) -> dict[Folder, Manifest | None]:

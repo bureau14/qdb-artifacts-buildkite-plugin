@@ -157,7 +157,7 @@ def download_artifacts(
     return bucket, resolved, objects
 
 
-def entry_steps(store, prefix, e: Entry, name: str):
+def resolved_steps(store, prefix, e: Entry, name: str):
     """The steps entry ``e`` takes, in the order of their ids.
 
     The plan step's keys; else, for an entry of the build's own project and
@@ -195,7 +195,7 @@ def download(entries, dirs_to_clean, parallel=4, concurrency=32):
     store, prefix = destination_store(cfg, auth)
     for n, e in enumerate(entries, start=1):
         name = entry_name(n, e.project, e.variant)
-        steps = entry_steps(store, prefix, e, name)
+        steps = resolved_steps(store, prefix, e, name)
         rules = parse_rules(e.files)
         taken = [(s, selected(s, rules, e.exclude)) for s in steps]
         if not any(objects for _, objects in taken):

@@ -11,7 +11,7 @@ import json
 import time
 
 from ..clients import aws_clients
-from ..layout import Folder
+from ..layout import Folder, folder_of
 from ..log import log
 from .agent import MetaDataAbsent, RealAgent
 from .annotation import failure_annotation
@@ -53,7 +53,7 @@ def build_mode(edge: Edge) -> str | None:
 def step_promotes(edge: Edge) -> dict[Folder, str]:
     """``snapshot-promotes``: the Buildkite key of the step that promotes each folder."""
     listed = json.loads(edge.agent.meta_data_get(PROMOTES))
-    return {Folder(e["variant"], e["step"]): e["step_key"] for e in listed}
+    return {folder_of(e): e["step_key"] for e in listed}
 
 
 def leave_decisions(job: Job, edge: Edge) -> None:
@@ -62,16 +62,16 @@ def leave_decisions(job: Job, edge: Edge) -> None:
         edge.log(f"the mode is {mode}: nothing to record")
         return
     p = chain_plan(job, edge)
-    n = own_planned(job, edge, p)
-    if n.key is None:
+    own = own_planned(job, edge, p)
+    if own.key is None:
         edge.log(f"{job.project} has no snapshot: nothing to record")
         return
     promotes = step_promotes(edge)
     outcomes = {s: edge.agent.step_outcome(s) for s in sorted(set(promotes.values()))}
-    made = made_only(manifests_at(edge, job.project, n.key, unpassed(promotes, outcomes)))
-    record = leave_record(origin_of(job, p, n.key), promotes, outcomes, made, edge.clock())
+    made = made_only(manifests_at(edge, job.project, own.key, unpassed(promotes, outcomes)))
+    record = leave_record(origin_of(job, p, own.key), promotes, outcomes, made, edge.clock())
     if record is None:
-        edge.log(f"every step of {job.project} at {n.key} passed or is made")
+        edge.log(f"every step of {job.project} at {own.key} passed or is made")
         return
     create_record(edge, record)
     edge.agent.annotate(failure_annotation(p, record, {}), "error", LEAVE_CONTEXT)

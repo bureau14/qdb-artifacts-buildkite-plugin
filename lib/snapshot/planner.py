@@ -82,6 +82,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
+from ..forms import SNAPSHOT_BRANCH_PREFIX
 from .buildkite import PipelineFacts, PipelineNotFound
 from .declaration import (
     BUILDKITE_DIR,
@@ -111,9 +112,6 @@ from .shape import has_shape
 PIPELINE_PY = ".buildkite/pipeline.py"
 DIRECTORY = BUILDKITE_DIR.rstrip("/")
 LATEST_SUCCESSFUL_ENTRY = "latest: true"
-
-# What the branch of a node that does not run as itself starts with.
-SNAPSHOT_BRANCH_PREFIX = "snapshot/"
 
 # The branches a dependency without a pin is taken from when its repository
 # has neither the root's branch nor the root's line, in order: as the
@@ -649,7 +647,7 @@ def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], context: str
     return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + context
 
 
-def planned_of(n: Member, branch: str) -> Planned:
+def planned_node(n: Member, branch: str) -> Planned:
     """The node ``n`` as the plan holds it, before its key."""
     p = n.place
     return Planned(p.ref, p.commit, None, branch, tuple(deps_of(n)), n.declaration.steps)
@@ -682,7 +680,7 @@ def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> P
         rebuild=root.rebuild,
         first=First(root.project, root.build_number),
         projects={
-            p: planned_of(tree[p], runs_under(p, as_itself[p], tree, root.branch)) for p in order
+            p: planned_node(tree[p], runs_under(p, as_itself[p], tree, root.branch)) for p in order
         },
     )
     return keyed(unkeyed, {p for p in order if not has_snapshot(tree[p].declaration)})

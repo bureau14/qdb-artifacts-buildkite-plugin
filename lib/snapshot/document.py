@@ -35,7 +35,7 @@ from typing import Any
 
 import yaml
 
-from ..layout import Folder
+from ..layout import Folder, folder_document
 from ..manifest import Manifest
 from .configuration import (
     GIT_REF,
@@ -242,7 +242,7 @@ def promote_entries(doc: Any) -> list[dict[str, str]]:
     keyless = sorted(f for f, k in keys.items() if k is None)
     if keyless:
         raise DocumentError(f"the step that promotes {keyless[0]} has no key")
-    return [{"step": f.step, "step_key": k, "variant": f.platform} for f, k in sorted(keys.items())]
+    return [{**folder_document(f), "step_key": k} for f, k in sorted(keys.items())]
 
 
 # ---------------------------------------------------------------------------

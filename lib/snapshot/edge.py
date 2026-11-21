@@ -14,9 +14,10 @@ back:
 
 The reads here are those of more than one step: the manifests of folders at a
 key, the failure records of a key, the arrival of the chain's root at the
-gate, and the plan of the build's chain. Each meta-data read here is of a value
-that is set before it is read, so an absent value fails the step as any failed
-call does.
+gate, and the plan of the build's chain; and so are the writes: a failure
+record, and the ``key.json`` of the build's key. Each meta-data read here is
+of a value that is set before it is read, so an absent value fails the step as
+any failed call does.
 """
 
 from __future__ import annotations
@@ -106,14 +107,6 @@ def create_record(edge: Edge, r: Record) -> None:
         edge.log(f"s3://{edge.store.bucket}/{where} exists; left as it is")
 
 
-def create_planned_key_json(edge: Edge, plan: Plan, project: str) -> None:
-    """Create ``key.json`` of the key the plan fixed for ``project`` unless it is there: what
-    the plan says that key stands for, of which the key is the hash."""
-    key = plan.projects[project].key
-    if create_key_json(edge.store, edge.prefix, key, key_json_of(plan, project)):
-        edge.log(f"wrote s3://{edge.store.bucket}/{layout.key_json(edge.prefix, project, key)}")
-
-
 def chain_records(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str, Record]:
     """The record of this chain of every key the causes name, and the keys their records name."""
     found: dict[str, Record] = {}
@@ -162,3 +155,18 @@ def own_planned(job: Job, edge: Edge, p: Plan) -> Planned:
 def origin_of(job: Job, p: Plan, key: str) -> Origin:
     """What every record this build writes at ``key`` says of it."""
     return Origin(job.project, key, p.id, job.build)
+
+
+def create_own_key_json(job: Job, edge: Edge, p: Plan) -> Origin | None:
+    """Create ``key.json`` of the key the plan fixed for this build unless it is there: what
+    the plan says that key stands for, of which the key is the hash. Then the origin of the
+    records this build writes at that key, which find its ``key.json`` there before them.
+
+    None for a first build without a snapshot: it has no key.
+    """
+    key = own_planned(job, edge, p).key
+    if key is None:
+        return None
+    if create_key_json(edge.store, edge.prefix, key, key_json_of(p, job.project)):
+        edge.log(f"wrote s3://{edge.store.bucket}/{layout.key_json(edge.prefix, job.project, key)}")
+    return origin_of(job, p, key)
