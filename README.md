@@ -141,7 +141,7 @@ steps:
 Which steps an entry takes, and at which key:
 
 - `step` names one step id or a list of them; `step: []` is the same as no `step`.
-- `keys`, which the plan step of a build with snapshot dependencies writes, gives the key of each step the entry takes.
+- `keys`, which the plan step writes into an entry of another project, gives the key of each step the entry takes.
 - An entry of the pipeline's own project (no `project_id`, or `BUILDKITE_PIPELINE_SLUG`) whose `git_ref` is absent or the build's own ref takes the steps it names at the build's own key.
 - Any other entry takes the latest successful build of its `git_ref`: a named step takes the key its own latest file names, and an entry without `step` takes every step whose latest file names the newest key of the platform. A key counts only when the step's manifest says promoted. When the ref has none, the download tries `refs/heads/master`, then `refs/heads/main`, unless the entry is of one of those or says `require_strict_ref_match: true`.
 - An entry fails only when none of its steps gives a file that matches. Steps are downloaded in the order of their ids; of two files of one path the last stays.
@@ -251,17 +251,17 @@ steps:
 
 ### Top-level keys
 
-| Key        | Type    | Description                                                                                                                                                                                                                                      |
-| ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `step`     | string  | The step id of a step that uploads or promotes. Required for those steps. See [Usage](#usage).                                                                                                                                                   |
-| `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                                          |
-| `upload`   | object  | Upload configuration block.                                                                                                                                                                                                                      |
-| `download` | object  | Download configuration block.                                                                                                                                                                                                                    |
-| `promote`  | object  | Makes an upload of its platform official, of this step's id or of the one its `step` names, and moves the branch's latest file.                                                                                                                  |
-| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                               |
-| `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the plan step of a build with snapshot dependencies, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies).                     |
-| `resume`   | string  | Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                                |
-| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the last step of a build with snapshot dependencies, which runs after every other step and records which steps did not pass. See [Snapshot dependencies](#snapshot-dependencies). |
+| Key        | Type    | Description                                                                                                                                                                                                                                                                |
+| ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`     | string  | The step id of a step that uploads or promotes. Required for those steps. See [Usage](#usage).                                                                                                                                                                             |
+| `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                                                                    |
+| `upload`   | object  | Upload configuration block.                                                                                                                                                                                                                                                |
+| `download` | object  | Download configuration block.                                                                                                                                                                                                                                              |
+| `promote`  | object  | Makes an upload of its platform official, of this step's id or of the one its `step` names, and moves the branch's latest file.                                                                                                                                            |
+| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                                                         |
+| `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the plan step, the first step of a build of a `pipeline.py` that hands its pipeline to the runner, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
+| `resume`   | string  | Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                                                          |
+| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the last step of a build with a plan step, which runs after every other step and records which steps did not pass. See [Snapshot dependencies](#snapshot-dependencies).                                     |
 
 ### `upload` object keys
 
@@ -345,7 +345,7 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 `pre-command` and `post-command` start `artifacts.py` with the Python of the venv that `post-checkout` made, and the name of their phase; `lib/cli.py` decides what the phase runs.
 
-On the plan step of a build with snapshot dependencies, its second run and its last step (option `plan`, `resume` or `leave`), `post-command` runs that step's command of the plugin, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform. Those steps make their venv in `<plugin-dir>/.venv-snapshot`: every job of one plugin commit on a host shares the plugin's checkout and makes its venv again, and no other job's venv then replaces theirs.
+On the plan step, its second run and the last step of a build (option `plan`, `resume` or `leave`), `post-command` runs that step's command of the plugin, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform. Those steps make their venv in `<plugin-dir>/.venv-snapshot`: every job of one plugin commit on a host shares the plugin's checkout and makes its venv again, and no other job's venv then replaces theirs.
 
 ### Failed builds
 
@@ -369,14 +369,14 @@ project's commit, a dash, and the first 32 hex digits of the SHA-256 of
 key read for each step a latest successful download takes, each pair once,
 sorted. It holds no name of a branch or a tag, so builds of one commit that
 take the same keys share a key under any name. A key of one build's own also
-holds
-`"build": "<build id>"`, so that no other build has it. The plan step of a
-build with snapshot dependencies computes the keys of its build and of the
-builds it starts, writes its own as the option `key` into every
-configuration of the plugin, and creates `key.json` once. A build without a
-plan step has no `key` option: each of its jobs computes the key of its own
-build (its project, the commit of its checkout, no dependency, its build id),
-and its first upload creates that `key.json`.
+holds `"build": "<build id>"`, so that no other build has it. The plan step of
+the first build of a chain computes the key of every build of the chain; a
+build started for a dependency takes its key from the plan. Each build's plan
+step writes its key as the option `key` into every configuration of the
+plugin, and creates `key.json` once. A build without a plan step has no `key`
+option: each of its jobs computes the key of its own build (its project, the
+commit of its checkout, no dependency, its build id), and its first upload
+creates that `key.json`.
 
 **The manifest** of a step's folder, canonical JSON:
 `{"files": [{"path", "size"}, ...], "promoted": null or {"at", "branch", "id", "number", "url"}, "uploaded": {"branch", "id", "number", "url"}}`.
@@ -390,28 +390,30 @@ A promote that finds the folder promoted already leaves it as it is.
 **The branch's latest file** names the key of the latest build of a branch
 that made a step for a platform. A promote writes it right after it promoted,
 under `refs/heads/<BUILDKITE_BRANCH>`, also when that name is a tag's; the
-last writer wins. The plan step of a build with snapshot dependencies writes
-it too, for each step it finds made at its key, when git names the build's
-commit as the newest of its branch, or as its tag's: so a branch cut at, or a
-tag put on, built commits gets its latest files at its first build. A build
-under a `snapshot/` name, which a plan step starts for a dependency, writes
-none.
+last writer wins. The plan step writes it too, for each step it finds made at
+its key, when git names the build's commit as the newest of its branch, or as
+its tag's: so a branch cut at, or a tag put on, built commits gets its latest
+files at its first build. A build under a `snapshot/` name, which a plan step
+starts for a dependency, writes none.
 
 ### What a build shows of its downloads
 
-The job's log names, for each download entry and each step it takes, before
-the step's files: the branch and the latest file it read, when it took the
-latest successful build; the key; the commit, which is the key's first 40
-hex digits; and the build that promoted the step, by number and URL. A step
-of the job's own build that a later step promotes is still captured when it
-is read, and its line names the build that uploaded it.
+The job's log names, for each download entry and each step it takes, as soon
+as it finds the step and before its files: the branch and the latest file it
+read, when it read one, which a job does for an entry of its own project at
+another branch and for an entry of another project in a build without a plan
+step; the key; the commit, which is the key's first 40 hex digits; and the
+build that promoted the step, by number and URL. An entry none of whose steps
+gives a file fails after these lines. A step of the job's own build that a
+later step promotes is still captured when it is read, and its line names the
+build that uploaded it.
 
 ```text
-Download entry 1 (quasardb, linux-amd64-release), step build:
-  branch   = main, latest file quasardb/refs/heads/main/linux-amd64-release/build
-  key      = <commit>-<32 hex>
-  commit   = <commit>
-  promoted = build 1234 https://buildkite.com/<organization>/quasardb/builds/1234
+[artifacts] Download entry 1 (quasardb, linux-amd64-release), step build:
+[artifacts]   branch   = main, latest file quasardb/refs/heads/main/linux-amd64-release/build
+[artifacts]   key      = <commit>-<32 hex>
+[artifacts]   commit   = <commit>
+[artifacts]   promoted = build 1234 https://buildkite.com/<organization>/quasardb/builds/1234
 ```
 
 After its last entry the job annotates the build, under the context
@@ -511,10 +513,10 @@ The plan step of a first build asks git once whether its name is a branch or
 a tag of its repository, with the commit of each, an annotated tag peeled. A
 name that is both is the branch.
 
-- **On a branch**, a dependency without a pin is taken from the branch of
-  that name when its repository has one, else from the release line of the
-  first build's commit (a branch named `master`, `main` or
-  `<digits>.<digits>.x`), else `master`, else `main`.
+- **On a branch**, a dependency without a pin is taken from the first of
+  these that its repository has: the branch of that name, the release line
+  of the first build's commit (a branch named `master`, `main` or
+  `<digits>.<digits>.x`), `master`, `main`.
 - **At a tag** (a build at a tag: start it with the tag's name in Buildkite's
   branch field, and its tag field empty), every dependency without a pin is
   taken from the same tag and from nothing else. A repository without the tag
