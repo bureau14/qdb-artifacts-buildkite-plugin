@@ -6,7 +6,7 @@ function of git commits alone. The pointer of a variant of a snapshot is
 
     <prefix>/_snapshot/v1/pointers/<project>/<key>/<variant>.json
 
-    {"schema":1,"project":"...","key":"v1-...","variant":"...",
+    {"schema":1,"project":"...","key":"<commit>-<32 hex>","variant":"...",
      "git_ref":"refs/heads/...","commit":"<40 hex digits>",
      "build":{"id":"<uuid>","number":0,"url":"https://..."},
      "written_at":"<UTC, ISO 8601 to the millisecond>"}

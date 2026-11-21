@@ -60,8 +60,8 @@ reached, their dependencies sorted):
    found late can still move a project to a commit that gives a snapshot.
 5. A cycle fails the plan and is named. Then, dependencies first:
 
-   - the keys: ``canonical.snapshot_key`` of the node's commit and the keys of
-     its snapshot dependencies, with the plan id when ``SNAPSHOT_REBUILD``
+   - the keys: ``key.key_of`` the node's commit and the keys of its snapshot
+     dependencies, with the plan id as its build when ``SNAPSHOT_REBUILD``
      forces the node (the root under ``one``, every node under ``all``); None
      for a root that has no snapshot;
    - the labels: the branch a triggered build runs under, uploads under and
@@ -80,8 +80,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
+from ..key import KeyJson, key_of
 from .buildkite import PipelineFacts, PipelineNotFound
-from .canonical import snapshot_key
 from .declaration import (
     BUILDKITE_DIR,
     LATEST_SUCCESSFUL,
@@ -582,9 +582,9 @@ def compute_keys(
     keys: dict[str, str | None] = {}
     for p in order:
         n = tree[p]
-        deps = {d: keys[d] for d in deps_of(n)}
-        snapshot = has_snapshot(n.declaration)
-        keys[p] = snapshot_key(p, n.place.commit, deps, forced_by(root, p)) if snapshot else None
+        deps = tuple((d, keys[d]) for d in deps_of(n))
+        stands_for = KeyJson(p, n.place.commit, deps, forced_by(root, p))
+        keys[p] = key_of(stands_for) if has_snapshot(n.declaration) else None
     return keys
 
 

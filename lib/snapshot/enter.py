@@ -29,6 +29,7 @@ from typing import Any, NoReturn
 from ..clients import aws_clients
 from ..config import env_or_ssm
 from ..errors import ArtifactsError
+from ..key import canonical_json
 from ..log import log
 from ..pointer import Pointer
 from .agent import RealAgent
@@ -42,7 +43,6 @@ from .annotation import (
     reused_annotation,
 )
 from .buildkite import PipelineFacts, fetch_pipeline
-from .canonical import canonical_json
 from .declaration import (
     Declaration,
     TemplateError,

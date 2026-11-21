@@ -43,7 +43,7 @@ FEATURE = "refs/heads/feature"
 TAG = "refs/tags/v1.0.0"
 REFS = (TAG, FEATURE, MASTER)
 BACKENDS = ("s3", "r2")
-KEY = "v1-" + "5" * 32
+KEY = "5" * 40 + "-" + "5" * 32
 
 
 def upload_and_promote(variant="linux", ref=MASTER, names=None, **upload) -> dict:
@@ -543,7 +543,7 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
 # ---------------------------------------------------------------------------
 
 ROOT = 9
-KEYS = {"app": "v1-" + "1" * 32, "widget": "v1-" + "2" * 32, "engine": "v1-" + "3" * 32}
+KEYS = {p: d * 40 + "-" + d * 32 for p, d in (("app", "1"), ("widget", "2"), ("engine", "3"))}
 ENGINE_COMMIT = "e" * 40
 ENGINE_LATER = "01900000-0000-7000-8000-0000000000e8"
 OUTCOMES = ("every-variant-passes", "the-last-variant-fails")

@@ -20,11 +20,11 @@ A record never says whether a variant exists: the pointer does. A record only
 saves a waiting build from compiling in vain, and lets a consumer name the
 cause::
 
-    {"schema": 1, "project": "...", "key": "v1-...", "plan": "<root build uuid>",
+    {"schema": 1, "project": "...", "key": "<key>", "plan": "<root build uuid>",
      "build": {"id": "...", "number": 0, "url": "https://...", "pipeline": "..."},
      "reason": "generator_failed" | "rule" | "not_declared" | null,
      "failed": [{"variant": "...", "step": "...", "outcome": "hard_failed"}],
-     "caused_by": [{"project": "...", "key": "v1-...", "variants": ["..."]}],
+     "caused_by": [{"project": "...", "key": "<key>", "variants": ["..."]}],
      "shared_with": {"id": ..., "number": ..., "url": ..., "pipeline": ...} | null,
      "recorded_at": "<UTC ISO 8601>", "recorded_at_epoch": 0}
 
@@ -43,8 +43,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..forms import iso_utc
+from ..key import canonical_json
 from ..pointer import Build
-from .canonical import canonical_json
 
 SCHEMA = 1
 

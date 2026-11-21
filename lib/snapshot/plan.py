@@ -19,7 +19,7 @@ a dependency without a pin. The ref each node was taken from is in it::
      "rebuild": "none|one|all",
      "root": {"project": "...", "build_number": 0},
      "nodes": {"<project>": {"ref": "refs/heads/..." or "refs/tags/...",
-                             "commit": "<sha>", "key": "v1-..." or null,
+                             "commit": "<sha>", "key": "<key>" or null,
                              "label": "<branch>", "deps": ["<project>", ...]}}}
 """
 
@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .canonical import canonical_json
+from ..key import canonical_json
 
 SCHEMA = 3
 

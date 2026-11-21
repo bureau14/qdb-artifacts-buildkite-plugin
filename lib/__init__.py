@@ -14,7 +14,8 @@ module can be read, and tested, with nothing below it:
     config      StoreConfig: which store, read from the environment, then SSM
     clients     boto3 clients for that store, and the credentials they use
     layout      every object key the plugin reads or writes
-    objects     the store of the destination; its small objects: get, put, create once, list
+    key         the key of a build, and key.json, the canonical JSON it is a hash of
+    objects    the store of the destination; its small objects: get, put, create once, list
     rules       file patterns: "archive!entries", excludes
     manifest    manifest.json of a build: compose, write, read
     resolve     which build a download gets: the pointer, the walk over refs

@@ -45,7 +45,7 @@ configuration:
           description: "Skip upload without error when no files match or all are excluded (default: false)"
         snapshot:
           type: string
-          pattern: "^v1-[0-9a-f]{32}$"
+          pattern: "^[0-9a-f]{40}-[0-9a-f]{32}$"
           description: "Written by the plan step, never by a person: the key of the snapshot this build makes. The upload then also records in manifest.json where its files were made (source) and which builds the job downloaded (downloads)."
       required:
         - variant
@@ -65,7 +65,7 @@ configuration:
           description: "Git ref to promote (e.g. 'refs/heads/main')"
         snapshot:
           type: string
-          pattern: "^v1-[0-9a-f]{32}$"
+          pattern: "^[0-9a-f]{40}-[0-9a-f]{32}$"
           description: "Written by the plan step, never by a person: the key of the snapshot this build makes. After moving LATEST_SUCCESSFUL, promote then creates the snapshot pointer of the variant, once: the first build of the key to promote the variant holds it."
       required:
         - variant

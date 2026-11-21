@@ -1,16 +1,15 @@
 """The planning half of snapshot dependencies (story sc-20192).
 
 Ordinary upload and download jobs never import this package. Its modules
-import each other and, of the rest of ``lib/``, the pointer, the library's
-error and its retry, and the job side's forms, checkout commit and repository
-URL (``pointer``, ``errors``, ``retry``, ``forms``, ``options``), so that the
-plan step and the jobs read and write one pointer and name one repository
-alike. Only the modules of the gate steps (``job``, ``edge``, ``failing``,
-``enter``, ``leave``) read the job's variables and open the store as a job
-opens it. ``leave`` and the modules it imports read no document, so the step
-of leave runs without PyYAML.
+import each other and, of the rest of ``lib/``, the key, the pointer, the
+library's error and its retry, and the job side's forms, checkout commit and
+repository URL (``key``, ``pointer``, ``errors``, ``retry``, ``forms``,
+``options``), so that the plan step and the jobs compute one key, read and
+write one pointer and name one repository alike. Only the modules of the gate
+steps (``job``, ``edge``, ``failing``, ``enter``, ``leave``) read the job's
+variables and open the store as a job opens it. ``leave`` and the modules it
+imports read no document, so the step of leave runs without PyYAML.
 
-- ``canonical``: canonical JSON and the key of a snapshot.
 - ``configuration``: the artifacts plugin's configuration as written in a
   document, read by its structure: option keys, blocks and download entries,
   wherever they sit.

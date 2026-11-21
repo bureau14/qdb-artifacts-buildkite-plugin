@@ -40,7 +40,7 @@ from lib.snapshot.lines import release_line
 from lib.snapshot.planner import Root, make_plan
 
 MASTER = "refs/heads/master"
-KEY = "v1-" + "0" * 32
+KEY = "0" * 40 + "-" + "0" * 32
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,13 @@ def options_of(doc: dict) -> list[tuple[str, dict]]:
 def held_by(project: str, variant: str, number: int) -> Pointer:
     build = Build(f"01890000-0000-7000-9000-{number:012d}", number, f"https://ci.example/{number}")
     return Pointer(
-        project, "v1-" + "1" * 32, variant, MASTER, "c" * 40, build, "2026-11-19T00:00:00.000Z"
+        project,
+        "c" * 40 + "-" + "1" * 32,
+        variant,
+        MASTER,
+        "c" * 40,
+        build,
+        "2026-11-19T00:00:00.000Z",
     )
 
 
