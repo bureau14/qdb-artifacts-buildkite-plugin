@@ -20,7 +20,18 @@ import json
 
 import pytest
 import yaml
-from chain import LOWER_NODES, MATRICES, SHAPED, SHAPES, STEP_IDS, above, below, folders, tree
+from chain import (
+    GRAPH_NODES,
+    LOWER_NODES,
+    MATRICES,
+    SHAPED,
+    SHAPES,
+    STEP_IDS,
+    above,
+    below,
+    folders,
+    tree,
+)
 from fakes import url
 from world import paired
 
@@ -835,6 +846,13 @@ STORIES = {
 # platform failing and then again, so that the project's build finds its other steps made.
 PLAYED = ("once", "after-a-failed-step")
 
+# Every project of a graph whose first build starts a build that has a dependency of its own:
+# where none has, no own build takes a project elsewhere, and only a rule that never writes
+# can fail.
+NODES_WHOSE_FIRST_BUILD_STARTS_A_DEPENDENT = [
+    a for a in GRAPH_NODES if any(a.graph[d] for d in below(a.graph, a.root))
+]
+
 # How the own build of a build started for a dependency takes the projects below it, against
 # the plan: each at the same commit, one at another, or it cannot be planned.
 SAME, OTHER, NO_PLAN = "same", "other", "no-plan"
@@ -908,6 +926,7 @@ def assumed_line(world, plan, told, root: str, p: str) -> str | None:
     return line if known else None
 
 
+@pytest.mark.parametrize("graph_node", NODES_WHOSE_FIRST_BUILD_STARTS_A_DEPENDENT, ids=str)
 @pytest.mark.parametrize(
     "story, shaped, played", paired(sorted(STORIES), sorted(SHAPES), PLAYED), ids=str
 )
