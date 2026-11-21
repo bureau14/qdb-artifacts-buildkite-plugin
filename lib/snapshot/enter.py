@@ -4,7 +4,8 @@ A gated build runs them in the post-command of the steps that carry the
 plugin's options ``plan`` (enter) and ``resume``, after the step's command
 generated the pipeline:
 
-- enter: reuse what is made, trigger the builds of dependencies that lack a
+- enter: point the branch's latest files at the steps made at the build's key,
+  then reuse what is made, trigger the builds of dependencies that lack a
   step, or upload the pipeline with the key of every step a download takes
   written into it;
 - resume, after the triggered builds ended: build, or fail with the cause.
@@ -34,6 +35,7 @@ from ..key import canonical_json
 from ..layout import Folder
 from ..log import log
 from ..manifest import Manifest
+from ..promote import write_latest_file, writes_latest
 from .agent import RealAgent
 from .annotation import (
     PLAN_REFUSED,
@@ -126,7 +128,8 @@ TEMPLATE_DIRECTORY = ".buildkite"
 class PlanEdge(Edge):
     """The edge of enter and resume: every gate step's, and what only the plan step reaches.
 
-    ``git``: other repositories. ``pipelines``: Buildkite's facts of a
+    ``git``: other repositories, and the newest commit of the build's own
+    branch. ``pipelines``: Buildkite's facts of a
     pipeline slug. ``plugin_commit``: the commit of the plugin's own checkout,
     which the plan step writes into what it uploads.
     """
@@ -304,6 +307,36 @@ def check_declared(
 # ---------------------------------------------------------------------------
 # Steps 6 and 7, of enter
 # ---------------------------------------------------------------------------
+
+
+def newest_commit(job: Job, edge: PlanEdge) -> str | None:
+    """The newest commit of the branch the build runs under, asked of git now; None when its
+    repository has no such branch."""
+    ref = branch_ref(job.branch)
+    return edge.git.commits_of(job.repository, [ref]).get(ref)
+
+
+def point_latest_files(job: Job, edge: PlanEdge, key: str, made: Mapping[Folder, Manifest]) -> None:
+    """6. Point the latest file of every step made at ``key`` at it, under the branch the build
+    runs under, when git names the build's commit as that branch's newest: so a branch cut at
+    built commits gets its latest files at its first build, and an older build that runs
+    again does not move them back. A build under a ``snapshot/`` name writes none.
+
+    Git is asked now, not the plan: a started build can run long after the
+    chain began, while its branch moved.
+    """
+    if not made or not writes_latest(job.branch):
+        return
+    newest = newest_commit(job, edge)
+    if newest != edge.checkout.head_commit():
+        edge.log(
+            f"{job.branch} is at {newest or 'no commit'}, not at this build's commit: no latest "
+            f"file moves to {key}"
+        )
+        return
+    for f in sorted(made):
+        write_latest_file(edge.store, edge.prefix, job.project, job.branch, f, key)
+    edge.log(f"the latest files of {job.branch} name {key} for {shown_folders(sorted(made))}")
 
 
 def is_reused(d: frozenset[Folder], n: frozenset[Folder], m: frozenset[Folder]) -> bool:
@@ -547,6 +580,7 @@ def enter_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge, entered_plan)
     found = own_manifests(job, edge, prepared)
     made = made_only(found)
+    point_latest_files(job, edge, prepared.origin.key, made)
     m = frozenset(found) - frozenset(made)
     if is_reused(prepared.d, prepared.n, m):
         reuse(job, edge, prepared.plan, made, prepared.n)
@@ -591,8 +625,9 @@ def enter(job: Job, edge: PlanEdge) -> int:
        step of a dependency that has no step ids: record ``rule``; fail.
        ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A folder of
        ``N`` not in ``D``: record ``not_declared`` with what it refuses; fail.
-    6. ``D`` is not empty and every folder of ``N`` is made at ``K``: mode
-       reused; done.
+    6. The latest files of the folders of ``D`` made at ``K`` name ``K``,
+       when git names the build's commit as its branch's newest. ``D`` is not
+       empty and every folder of ``N`` is made at ``K``: mode reused; done.
     7. Another build of ``K`` failed on the wanted folders after the chain's
        root arrived at the gate: record its failure as shared; fail.
     8. For each direct snapshot dependency, the folders the kept steps take,

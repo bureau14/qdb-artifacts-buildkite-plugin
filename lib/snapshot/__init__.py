@@ -2,11 +2,12 @@
 
 Ordinary upload and download jobs never import this package. Its modules
 import each other and, of the rest of ``lib/``, the layout, the key, the
-manifest, the walk over latest files, the library's error and its retry, and
-the job side's forms, checkout commit and reading of a boolean (``layout``,
-``key``, ``manifest``, ``resolve``, ``errors``, ``retry``, ``forms``,
-``options``), so that the plan step and the jobs compute one key, read one
-manifest and walk the latest files alike. Only the modules of the gate
+manifest, the walk over latest files and the writing of one, the library's
+error and its retry, and the job side's forms, checkout commit and reading of
+a boolean (``layout``, ``key``, ``manifest``, ``resolve``, ``promote``,
+``errors``, ``retry``, ``forms``, ``options``), so that the plan step and the
+jobs compute one key, read one manifest and walk and write the latest files
+alike. Only the modules of the gate
 steps (``job``, ``edge``, ``failing``, ``enter``, ``leave``) read the job's
 variables and open the store as a job opens it. ``leave`` and the modules it
 imports read no document, so the step of leave runs without PyYAML.

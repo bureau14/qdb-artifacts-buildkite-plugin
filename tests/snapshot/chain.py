@@ -499,6 +499,7 @@ class World:
         return Job(
             pipeline=path,
             project=build.project,
+            repository=url(build.project),
             build=build.info,
             branch=build.branch,
             command="generate",

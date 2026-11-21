@@ -85,6 +85,10 @@ class Hosting:
     def head(self, project: str, branch: str = "master") -> str:
         return self.refs[(url(project), branch_ref(branch))]
 
+    def cut(self, project: str, branch: str, start: str = "master") -> None:
+        """A new branch ``branch`` at the head of ``start``."""
+        self.refs[(url(project), branch_ref(branch))] = self.head(project, start)
+
 
 def files_under(
     tree: Mapping[str, bytes], directory: str, wanted: Callable[[str], bool]

@@ -19,7 +19,7 @@ import json
 
 import pytest
 import yaml
-from chain import LOWER_NODES, MATRICES, SHAPED, above, below, folders, tree
+from chain import LOWER_NODES, MATRICES, SHAPED, STEP_IDS, above, below, folders, tree
 from fakes import url
 from world import paired
 
@@ -582,3 +582,44 @@ def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
         == (set() if b.branch.startswith("snapshot/") else {"refs/heads/" + b.branch})
         for b in triggered
     )
+
+
+# Where a branch is cut at the commits a chain built: in every project of the tree, or in the
+# node of the failed step and the projects above it, so that the node is not the build its own
+# pipeline would make for the branch, unless nothing lies below it.
+CUTS = ("every-project", "the-node-and-above")
+
+
+@pytest.mark.parametrize("cut", CUTS)
+def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, graph_node, cut):
+    """After a chain in which one step of one platform of a node failed, a branch is cut at
+    the same commits, and the root's build on it builds that step again. Every build of that
+    chain that runs under the branch, at its newest commit, leaves the branch's latest file
+    of every step of its project naming its key, of the steps it found made as well as those
+    it promoted; one under a snapshot/ name leaves none, and neither does a project the chain
+    did not build."""
+    graph, node, root = graph_node.graph, graph_node.node, graph_node.root
+    matrix, step_ids = MATRICES["three"], STEP_IDS["build-notes"]
+    world = worlds(graph, matrix, step_ids)
+    world.broken.add((node, Folder(matrix[-1], step_ids[-1])))
+    world.build(root)
+    world.broken.clear()
+    projects = tree(graph, root)
+    cut_in = projects if cut == "every-project" else ({node} | above(graph, node)) & projects
+    for p in cut_in:
+        world.hosting.cut(p, "feature")
+
+    top = world.build(root, branch="feature")
+
+    plan, every = world.plan(top), folders(matrix, step_ids)
+    built = {b.project: b.branch for b in top.chain()}
+    named = {p: {f: world.latest(p, "refs/heads/feature", f) for f in every} for p in projects}
+    expected = {
+        p: {f: plan.projects[p].key if built.get(p) == "feature" else None for f in every}
+        for p in projects
+    }
+    snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
+    assert top.state == "passed"
+    assert node in built
+    assert named == expected
+    assert snapshot_refs == set()

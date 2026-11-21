@@ -18,13 +18,15 @@ class Job:
     """What a gate step knows of its job: its option and the variables the agent sets.
 
     ``pipeline`` is the path of the generated pipeline that the option of
-    ``plan`` and ``resume`` names. ``plan_id`` is ``SNAPSHOT_PLAN`` (the root
-    build's uuid) of a chain node, None for a root; ``needs`` and ``rebuild``
-    are ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD`` as given.
+    ``plan`` and ``resume`` names; ``repository`` Buildkite's repository URL of
+    the pipeline. ``plan_id`` is ``SNAPSHOT_PLAN`` (the root build's uuid) of a
+    chain node, None for a root; ``needs`` and ``rebuild`` are
+    ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD`` as given.
     """
 
     pipeline: str | None
     project: str
+    repository: str
     build: Build
     branch: str
     command: str | None
@@ -45,6 +47,7 @@ def job_of(pipeline: str | None) -> Job:
     return Job(
         pipeline=pipeline,
         project=os.environ["BUILDKITE_PIPELINE_SLUG"],
+        repository=os.environ["BUILDKITE_REPO"],
         build=job_build(),
         branch=os.environ.get("BUILDKITE_BRANCH", ""),
         command=os.environ.get("BUILDKITE_COMMAND"),

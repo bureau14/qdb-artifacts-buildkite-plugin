@@ -10,7 +10,9 @@ branch's latest file back. Not there, it fails: the step that uploads it
 uploaded nothing.
 
 A build under a ``snapshot/`` name, which a plan step started for a
-dependency, writes no latest file: that name is no branch.
+dependency, writes no latest file: that name is no branch. The plan step
+writes the latest files of the steps it finds made with the same function
+(``write_latest_file``).
 """
 
 import time
@@ -26,8 +28,15 @@ from .objects import destination_store
 
 
 def writes_latest(branch):
-    """Whether a promote under ``branch`` writes its latest file."""
+    """Whether a build under ``branch`` writes latest files."""
     return not branch.startswith(SNAPSHOT_BRANCH_PREFIX)
+
+
+def write_latest_file(store, prefix, project, branch, folder, key):
+    """Point the latest file of ``folder`` of ``project`` on ``branch`` at ``key``: its text
+    is the key, and the last writer wins."""
+    where = layout.latest_file(prefix, project, BRANCH_PREFIX + branch, folder)
+    store.put(where, key.encode(), "text/plain")
 
 
 def promote_folder(store, prefix, project, key, folder, promotion):
@@ -47,8 +56,7 @@ def promote_folder(store, prefix, project, key, folder, promotion):
     made = promoted_by(held, promotion)
     write_manifest(store, location, made)
     if writes_latest(promotion.branch):
-        ref = BRANCH_PREFIX + promotion.branch
-        store.put(layout.latest_file(prefix, project, ref, folder), key.encode(), "text/plain")
+        write_latest_file(store, prefix, project, promotion.branch, folder, key)
     return made
 
 

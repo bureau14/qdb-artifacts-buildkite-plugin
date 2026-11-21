@@ -281,9 +281,9 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 ### `promote` object keys
 
-| Key       | Type   | Required | Description                                                                                                                                                    |
-| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `variant` | string | yes      | The platform whose upload of this step to make official.                                                                                                       |
+| Key       | Type   | Required | Description                                                                                                                                                                                              |
+| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `variant` | string | yes      | The platform whose upload of this step to make official.                                                                                                                                                 |
 | `step`    | string |          | The step id to promote, when it is not this step's own: what another step of the same pipeline uploaded for the platform. See [Promote what another step uploaded](#promote-what-another-step-uploaded). |
 
 ### `download` object keys
@@ -387,8 +387,12 @@ A promote that finds the folder promoted already leaves it as it is.
 
 **The branch's latest file** names the key of the latest build of a branch
 that made a step for a platform. A promote writes it right after it promoted,
-under `refs/heads/<BUILDKITE_BRANCH>`; the last writer wins. A build under a
-`snapshot/` name, which a plan step starts for a dependency, writes none.
+under `refs/heads/<BUILDKITE_BRANCH>`; the last writer wins. The plan step of
+a build with snapshot dependencies writes it too, for each step it finds made
+at its key, when git names the build's commit as its branch's newest: so a
+branch cut at built commits gets its latest files at its first build. A build
+under a `snapshot/` name, which a plan step starts for a dependency, writes
+none.
 
 ## Snapshot dependencies
 
@@ -536,7 +540,9 @@ and the list to write in it, as `step: [build]`; so does the root.
 2. Enter: its command generates the pipeline, then the plugin plans. A root
    reads the keys of its latest successful downloads, makes the plan and
    keeps it as meta-data of its own build; a chain node reads its root's.
-   Then the build creates its `key.json`, from the plan alone. A build whose
+   Then the build creates its `key.json`, from the plan alone. At its
+   branch's newest commit it points the branch's latest files at its key for
+   every step made there (see [The bucket](#the-bucket)). A build whose
    pipeline promotes at least one step, and whose every step and platform
    asked for is made at its key, is reused and builds nothing. Else the
    dependencies that lack a step are triggered, with a resume step that
@@ -569,15 +575,15 @@ nothing.
 
 ### What is stored, and where
 
-| What                 | Where                                                      | Written                                                         |
-| -------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
-| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload |
-| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote             |
-| branch's latest file | `<project>/refs/heads/<branch>/<platform>/<step id>`       | by each promote, but under a `snapshot/` name                   |
-| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by a gate step of a build that has its plan               |
-| plan                 | meta-data `snapshot-plan` of the root build                | by the root's enter step; a retried enter writes it again       |
-| marks                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the enter and resume steps of each build                     |
-| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the gate                          |
+| What                 | Where                                                      | Written                                                                                                                          |
+| -------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload                                                                  |
+| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote                                                                              |
+| branch's latest file | `<project>/refs/heads/<branch>/<platform>/<step id>`       | by each promote, and by the enter step for the steps it finds made at its branch's newest commit; never under a `snapshot/` name |
+| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by a gate step of a build that has its plan                                                                                |
+| plan                 | meta-data `snapshot-plan` of the root build                | by the root's enter step; a retried enter writes it again                                                                        |
+| marks                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the enter and resume steps of each build                                                                                      |
+| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the gate                                                                                           |
 
 A trigger step hands the build it starts `SNAPSHOT_PLAN`, the root build's
 uuid, and `SNAPSHOT_NEEDS`, the platforms and step ids its consumer
