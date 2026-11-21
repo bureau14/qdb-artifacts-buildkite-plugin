@@ -476,22 +476,34 @@ def test_a_dependency_that_cannot_give_a_snapshot_stops_the_plan(worlds, lower_n
     assert "snapshot-plan" not in world.agents.meta_data[top.id]
 
 
-def test_snapshot_rebuild_builds_the_root_again_and_keeps_what_was_made(worlds, graph_root, shape):
-    """SNAPSHOT_REBUILD=1 compiles the root again although its key is made, compiles no
-    dependency, and leaves what the earlier build made as it was."""
+# What SNAPSHOT_REBUILD builds again of a tree: its root, or every project.
+REBUILT = {"1": lambda graph, root: {root}, "all": tree}
+
+
+@pytest.mark.parametrize("rebuild", sorted(REBUILT))
+def test_snapshot_rebuild_builds_again_and_keeps_what_was_made(worlds, graph_root, shape, rebuild):
+    """SNAPSHOT_REBUILD=1 compiles the root again although its key is made, and no dependency;
+    SNAPSHOT_REBUILD=all compiles every project of the tree again. Either leaves what the
+    earlier build made as it was, and the next build at the branch's tip, which is reused,
+    points the root's latest files back at the earlier key."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     world.build(root)
     done, stored = len(world.compiled), dict(world.store.objects)
 
-    again = world.build(root, SNAPSHOT_REBUILD="1")
+    again = world.build(root, SNAPSHOT_REBUILD=rebuild)
+    compiled = compiled_since(world, done)
+    after = world.build(root)
 
-    latest = {k for k in stored if k.startswith(f"{root}/refs/")}
+    latest = {k for k in stored if k.split("/")[1] == "refs"}
     kept = {k: b for k, b in stored.items() if k not in latest}
-    assert again.state == "passed"
-    assert compiled_since(world, done) == {(root, f) for f in folders(matrix, step_ids)}
+    own = {k: b for k, b in stored.items() if k in latest and k.startswith(f"{root}/")}
+    assert (again.state, after.state) == ("passed", "passed")
+    assert compiled == {(p, f) for p in REBUILT[rebuild](graph, root) for f in folders(*shape)}
+    assert compiled_since(world, done) == compiled
     assert kept.items() <= world.store.objects.items()
+    assert own.items() <= world.store.objects.items()
 
 
 def canonical(document) -> bytes:

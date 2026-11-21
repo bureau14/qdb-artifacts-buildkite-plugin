@@ -566,6 +566,11 @@ whose folders are made is replaced by one that names the build that made them.
 | `SNAPSHOT_REBUILD=all` | Every project of the tree builds again, each under such a key. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
 | `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                                            |
 
+A forced build serves its own chain: later builds of the same commits take the
+earlier keys. Its promotes under a branch's own name move that branch's latest
+files to the forced key, until the next build of that project at the branch's
+newest commit points them back at the earlier one.
+
 The plan step of a root asks Buildkite's API (`read_pipelines`) for the
 repository and the configuration of every pipeline of its tree, with the token
 in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter
