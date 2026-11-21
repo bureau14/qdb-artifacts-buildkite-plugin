@@ -1,4 +1,4 @@
-"""The release line of a root build (specification section 4).
+"""The release line of a root build.
 
 A release line is a branch named ``master``, ``main`` or ``<digits>.<digits>.x``;
 a tag never is one. The root's line is its branch when that is one, else the

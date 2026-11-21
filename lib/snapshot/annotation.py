@@ -1,4 +1,4 @@
-"""What a gate step shows on the build page (specification sections 4, 7 and 9).
+"""What a gate step shows on the build page.
 
 Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 
@@ -289,7 +289,7 @@ def and_list(items: Sequence[str]) -> str:
 
 
 def retry_sentence(builds: Iterable[tuple[str, Build]], root: str) -> str:
-    """The closing sentence of section 9: retry each failed job, then start a new build.
+    """The closing sentence of a failure: retry each failed job, then start a new build.
 
     ``builds`` are the builds to retry, each with its pipeline; none, when no
     job failed or a retry cures nothing, says to start a new build once the

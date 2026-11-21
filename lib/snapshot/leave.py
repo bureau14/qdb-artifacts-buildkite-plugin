@@ -1,4 +1,4 @@
-"""leave: what the step that leaves the gate records (specification section 7).
+"""leave: what the step that leaves the gate records.
 
 It runs in the post-command of the step that carries the plugin's option
 ``leave``, after every other step of the build. It reads no pipeline document,

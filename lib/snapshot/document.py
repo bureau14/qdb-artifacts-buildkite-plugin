@@ -1,6 +1,5 @@
-"""The generated pipeline as data: what the plan step reads from it and writes into it.
-
-Specification section 8, and the trigger and resume steps of section 7.
+"""The generated pipeline as data: what the plan step reads from it and writes into it, and
+the trigger and resume steps it uploads.
 
 The pipeline a repository generates says "download quasardb-build,
 linux-aarch64-release" and leaves the build open. Every job would then find a
@@ -474,7 +473,7 @@ def with_plugin_commit(m: Mapping[Any, Any], commit: str) -> dict[Any, Any]:
 
 
 def planned(doc: Any, r: Rewrite) -> Any:
-    """The document to upload: one resolution for every job (section 8).
+    """The document to upload: one resolution for every job.
 
     ``doc`` is a generated pipeline that keeps the rule
     (``declaration.rule_violations``) and promotes no folder at two places

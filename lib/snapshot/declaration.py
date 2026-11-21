@@ -1,4 +1,4 @@
-"""The declaration of a pipeline and the rule that keeps it true (specification section 2).
+"""The declaration of a pipeline and the rule that keeps it true.
 
 A pipeline depends on what its committed step templates download: every
 download entry of the artifacts plugin with a literal project id of another

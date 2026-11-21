@@ -1,4 +1,4 @@
-"""What Buildkite's REST API says about a pipeline (specification sections 3 and 10).
+"""What Buildkite's REST API says about a pipeline.
 
 One call per pipeline of the closure, in the root's enter step only:
 ``GET <api>/v2/organizations/<organisation>/pipelines/<slug>`` with the token as

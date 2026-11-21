@@ -1,4 +1,4 @@
-"""The plugin's configuration as written in a document (specification section 2).
+"""The plugin's configuration as written in a document.
 
 A step template or a generated pipeline writes the artifacts plugin's
 configuration under a key that names the plugin. The reader of templates, the

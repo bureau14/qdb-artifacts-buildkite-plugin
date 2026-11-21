@@ -1,4 +1,4 @@
-"""Failure records, and what the gate steps decide over them (specification sections 7 and 9).
+"""Failure records, and what the gate steps decide over them.
 
 A failure record says that one build of a key did not make some steps, and
 why. Only a build that has a key writes one, and it carries the plan of its
@@ -6,7 +6,7 @@ chain. It is written once into the bucket, at
 ``<project>/<key>/failures/<build id>.json``, and never changed; where it lives
 and how it is read are the store's business. Here: the record as a value
 (``Record``), its JSON (``encode_record``, ``decode_record``), and the
-decisions of section 7 over records the caller has read:
+decisions of the gate steps over records the caller has read:
 
 - ``unpassed`` and ``leave_record``: the folders (platform and step id) whose
   step did not pass, whose manifests the leave step reads, and its record of

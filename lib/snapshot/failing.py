@@ -1,4 +1,4 @@
-"""How a gate step fails (specification section 7, "fail").
+"""How a gate step fails.
 
 Fail is: log why; write the failure record the decision names, when the build
 has a key; show why on the build page; set the mode ``failed``; end with

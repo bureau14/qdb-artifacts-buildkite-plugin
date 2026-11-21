@@ -1,4 +1,4 @@
-"""The Buildkite agent, as an interface (specification sections 4 and 7).
+"""The Buildkite agent, as an interface.
 
 The plan step and the gate steps talk to Buildkite only through an ``Agent``:
 

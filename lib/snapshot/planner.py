@@ -1,4 +1,4 @@
-"""The plan of a root build (specification sections 2, 3 and 4).
+"""The plan of a root build.
 
 ``make_plan(root, own, latest, git, pipelines)`` fixes, at one instant, the
 commit every project of the root's snapshot tree is built from, its key, and
@@ -46,12 +46,12 @@ reached, their dependencies sorted):
    c. its commit, ``git.commits_of``, a tag peeled; the root's repository and
       ref give the root's own commit. A ref that does not exist refuses the
       project;
-   d. the conditions of section 3, the first that fails refusing the project
-      with its own message (``first_unmet``): Buildkite's configuration runs
-      ``.buildkite/pipeline.py``; that file at the commit has the runner's
-      shape; its declaration holds no latest successful dependency. A
-      template that does not parse fails the plan, naming the project and
-      the file (``declaration.TemplateError``);
+   d. the three conditions of a snapshot dependency, the first that fails
+      refusing the project with its own message (``first_unmet``):
+      Buildkite's configuration runs ``.buildkite/pipeline.py``; that file at
+      the commit has the runner's shape; its declaration holds no latest
+      successful dependency. A template that does not parse fails the plan,
+      naming the project and the file (``declaration.TemplateError``);
    e. a project that meets all three is a node, with its declaration, and so
       with its own snapshot dependencies and pins.
 
@@ -328,7 +328,7 @@ def dependency_of(reached: Reached) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The three conditions of section 3
+# The three conditions of a snapshot dependency
 # ---------------------------------------------------------------------------
 
 

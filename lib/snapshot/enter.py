@@ -1,4 +1,4 @@
-"""enter and resume: what the plan step decides, in order (specification section 7).
+"""enter and resume: what the plan step decides, in order.
 
 A gated build runs them in the post-command of the steps that carry the
 plugin's options ``plan`` (enter) and ``resume``, after the step's command
@@ -197,7 +197,7 @@ class Generated:
 
 
 def generated_pipeline(job: Job, edge: Edge) -> Generated:
-    """2. Check the rule of section 2; failing, record ``rule`` when a chain node; fail.
+    """2. Check the rule of the templates; failing, record ``rule`` when a chain node; fail.
 
     A template of the build's own commit that does not parse fails the build
     that reads it for itself, as the rule does (``TemplateError``).
@@ -256,8 +256,8 @@ class Placed:
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     """3, a root: ask git where its name is, read the keys of its latest successful downloads,
-    make the plan (sections 3 and 4), write it, annotate the build with it and with the
-    downloads of its own project at another ref, which the key leaves out.
+    make the plan, write it, annotate the build with it and with the downloads of its own
+    project at another ref, which the key leaves out.
 
     A download that finds no latest file, and a plan that cannot be made, fail
     the build with their message, before anything runs.
@@ -588,7 +588,7 @@ def build_pipeline(
     key: str,
     made: Mapping[Folder, Manifest],
 ) -> None:
-    """10. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
+    """10. Rewrite the generated pipeline, mark the build ``built``, upload it.
 
     ``snapshot-promotes`` names the step of each folder that is built: a
     replaced step promotes nothing, so leave asks for no outcome of it. The
@@ -677,7 +677,7 @@ def enter(job: Job, edge: PlanEdge) -> int:
     """The plan step: decide what this build does.
 
     1. The command failed: record ``generator_failed`` when a chain node; fail.
-    2. The generated pipeline breaks the rule of section 2: record ``rule``
+    2. The generated pipeline breaks the rule of its templates: record ``rule``
        when a chain node; fail.
     3. A chain node loads the plan and checks its commit; a root asks git
        once whether its name is a branch or a tag of its repository, reads

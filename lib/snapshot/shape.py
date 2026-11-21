@@ -1,4 +1,4 @@
-"""Whether a pipeline.py has the shape (specification section 3).
+"""Whether a pipeline.py has the shape of one that hands its pipeline to the runner.
 
 The rule::
 

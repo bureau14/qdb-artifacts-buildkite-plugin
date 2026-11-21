@@ -1,4 +1,4 @@
-"""Everything the planning half asks of git (specification sections 2 to 4).
+"""Everything the planning half asks of git.
 
 Two interfaces, one for each caller. ``Git`` is what the planner asks:
 
@@ -51,7 +51,7 @@ from ..options import checkout_commit
 PEELED = "^{}"
 
 # Sent on every command that talks to a remote: git then gives the job's
-# credential helper's answer at once instead of after a 401 (experiment 33).
+# credential helper's answer at once instead of after a 401.
 # Every job has the helper; without one, git fails at once, even on a public
 # repository ("could not read Username").
 PROACTIVE_AUTH = ("-c", "http.proactiveAuth=basic")
@@ -259,11 +259,10 @@ class RealGit:
     ) -> dict[str, bytes]:
         """The files under ``directory`` at ``commit`` of ``url`` that ``wanted`` accepts.
 
-        Experiment 33's recipe r4p, in a new scratch repository: one blobless
-        fetch of the commit, one listing of ``directory``, one fetch of the
-        blobs of the files that count, and ``git cat-file --batch``. Two
-        fetches whatever the number of files; none for blobs when no file
-        counts.
+        In a new scratch repository: one blobless fetch of the commit, one
+        listing of ``directory``, one fetch of the blobs of the files that
+        count, and ``git cat-file --batch``. Two fetches whatever the number of
+        files; none for blobs when no file counts.
         """
         with tempfile.TemporaryDirectory(prefix="snapshot-git-") as d:
             self._ok(["init", "-q"], d)
