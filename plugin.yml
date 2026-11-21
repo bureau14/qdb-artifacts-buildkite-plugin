@@ -117,7 +117,7 @@ configuration:
                 minItems: 1
                 items:
                   type: string
-                description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
+                description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*'; default: '*.tar.zst')"
               exclude:
                 type: array
                 minItems: 1
@@ -126,7 +126,6 @@ configuration:
                 description: "Archive globs to exclude from download after files have matched (e.g. '*-test-javadoc.jar')"
             required:
               - variant
-              - files
       required:
         - projects
     plan:
