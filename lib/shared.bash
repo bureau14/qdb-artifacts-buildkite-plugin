@@ -35,21 +35,6 @@ plugin_read_config() {
   echo "${!var:-$default}"
 }
 
-plugin_read_list() {
-  local prefix="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
-  local i=0
-  local parameter="${prefix}_${i}"
-  if [[ -n "${!parameter:-}" ]]; then
-    while [[ -n "${!parameter:-}" ]]; do
-      echo "${!parameter}"
-      i=$((i+1))
-      parameter="${prefix}_${i}"
-    done
-  elif [[ -n "${!prefix:-}" ]]; then
-    echo "${!prefix}"
-  fi
-}
-
 # True when at least one of the named options is set for this step. Tests each
 # variable itself: through plugin_read_config, echo would take a value such as
 # "-n" for its own option and print nothing.
