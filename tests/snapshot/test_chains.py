@@ -843,7 +843,8 @@ SAME, OTHER, NO_PLAN = "same", "other", "no-plan"
 @dataclasses.dataclass(frozen=True)
 class Own:
     """The own build of a build started for a dependency: how it takes the projects below it,
-    and every ``(repository, ref)`` it asked git of another repository than its own."""
+    and every ``(repository, ref)`` of another repository than its own whose answer it needed
+    (``answering``)."""
 
     takes: str
     asked: frozenset
@@ -854,14 +855,20 @@ def asked_refs(questions) -> frozenset[tuple[str, str]]:
     return frozenset((r, ref) for r, refs in questions for ref in refs)
 
 
+def answering(hosting, repository: str, refs: tuple) -> tuple:
+    """The refs of a question to ``repository`` up to the first one it has, the answer: a ref
+    after it changes nothing, though a plan that knows nothing asks it in the same question."""
+    held = [i for i, ref in enumerate(refs) if (repository, ref) in hosting.refs]
+    return refs[: held[0] + 1] if held else refs
+
+
 def own_build(world, graph: dict, plan, build) -> Own:
     """The own build of ``build``: a first build of its project at its name and commit, played
     now, against ``plan``."""
     before = len(world.git.asked)
     own = world.build(build.project, build.branch, build.commit)
-    asked = frozenset(
-        (r, ref) for r, ref in asked_refs(world.git.asked[before:]) if r != url(build.project)
-    )
+    needed = [(r, answering(world.hosting, r, refs)) for r, refs in world.git.asked[before:]]
+    asked = frozenset((r, ref) for r, ref in asked_refs(needed) if r != url(build.project))
     if "snapshot-plan" not in world.agents.meta_data[own.id]:
         return Own(NO_PLAN, asked)
     projects = world.plan(own).projects
@@ -913,9 +920,9 @@ def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_w
     whose own build takes a project elsewhere leaves them too: on the first build's branch, in
     a repository that has a branch of the first build's release line, which the plan then takes
     as its line, where its branch left another line. A build that leaves none has an own build
-    that takes a project below it at another commit, or that cannot be planned, or that asks
-    what git did not tell the plan: a ref of another repository, or a release line other than
-    the one the plan takes it to have."""
+    that takes a project below it at another commit, or that cannot be planned, or whose
+    answers need what git did not tell the plan: a ref of another repository, or a release line
+    other than the one the plan takes it to have."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = SHAPES[shaped]
     world = worlds(graph, matrix, step_ids)
