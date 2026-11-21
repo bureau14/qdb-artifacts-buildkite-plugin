@@ -250,6 +250,7 @@ class Project:
     steps: tuple = ("build",)
     pins: dict = dataclasses.field(default_factory=dict)  # dependency -> literal ref
     latest: tuple = ()  # projects it takes as latest successful
+    latest_step: list | None = None  # the steps those downloads name; None for every step
     pipeline_py: bytes = SHAPED
     extra: tuple = ()  # (dependency, variant, step) that every step downloads besides
     packaged: tuple = ()  # platforms whose build folder a second step promotes again
@@ -403,7 +404,7 @@ class World:
                 if v in self.projects[d].variants
             ]
             extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
-            return deps + extra + [entry(t, v, latest=True) for t in p.latest]
+            return deps + extra + [entry(t, v, latest=True, step=p.latest_step) for t in p.latest]
 
         first, *checked = p.steps
         built = [

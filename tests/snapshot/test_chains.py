@@ -404,46 +404,64 @@ def tools_made(world, wanted, number: int) -> None:
         world.store.put(layout.latest_file("", "tools", MASTER, f), key.encode(), "")
 
 
+# Which steps of tools a root's latest successful download names: none, so it takes every
+# step of the newest key, or every one by name; and which of them tools' second build
+# promotes: every step, or the first alone, so that two steps of a platform come from two
+# builds.
+TAKEN = ("every-step", "named")
+
+
+@pytest.mark.parametrize("taken", TAKEN)
 def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_files_stay(
-    worlds, graph_root, shape
+    worlds, graph_root, shape, taken
 ):
-    """A root that takes a project as latest successful reads, in its plan step, the key of
-    every step whose latest file names the project's newest key, and writes them into each
-    of those downloads and into its key.json. Built again, it is reused while the latest files
-    name the same keys; once they name others it compiles again, under a key that names
-    those. Its snapshot dependencies are built once."""
+    """A root on a branch that a project it takes as latest successful lacks reads, in its
+    plan step, through that project's latest files of master, the key of each step it takes:
+    without a step, of every step whose latest file names the newest key; of each step it
+    names, the key that step's own latest file names. It writes them into each of those
+    downloads and into its key.json, and its resume step and its jobs take them, although
+    the latest files move while its chain runs. Built again after they moved, it compiles
+    under a key that names the keys they name now; built once more, it is reused. Its
+    snapshot dependencies are built once."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     every = folders(matrix, step_ids)
+    moves = every if taken == "every-step" else folders(matrix, step_ids[:1])
     tools_made(world, every, 7)
     world.projects[root].latest = ("tools",)
+    world.projects[root].latest_step = None if taken == "every-step" else list(step_ids)
     world.commit(root)
+    world.hosting.cut(root, "feature")
+    world.at_gate = lambda build: tools_made(world, moves, 8)
 
-    first, again = world.build(root), world.build(root)
-    tools_made(world, every, 8)
-    moved = world.build(root)
+    first = world.build(root, "feature")
+    world.at_gate = lambda build: None
+    moved, again = world.build(root, "feature"), world.build(root, "feature")
 
-    builds = {first: TOOLS_KEYS[7], moved: TOOLS_KEYS[8]}
-    keys = [world.plan(b).projects[root].key for b in (first, again, moved)]
+    read = {
+        first: {f: TOOLS_KEYS[7] for f in every},
+        moved: {f: TOOLS_KEYS[8 if f in moves else 7] for f in every},
+    }
+    keys = [world.plan(b).projects[root].key for b in (first, moved, again)]
     deps = [json.loads(world.store.objects[layout.key_json("", root, k)])["deps"] for k in keys]
     written = {
         (b.id, tuple(sorted(e["keys"].items())))
-        for b in builds
+        for b in read
         for e in entries_of(world.agents.uploads[b.id][-1], "tools")
     }
     tools = {(d.build.id, d.folder, d.key) for d in world.downloads if d.project == "tools"}
     own = {(c.build.id, c.folder) for c in world.compiled if c.build.project == root}
-    assert [b.state for b in (first, again, moved)] == ["passed"] * 3
-    assert keys[0] == keys[1] != keys[2]
+    assert [b.state for b in (first, moved, again)] == ["passed"] * 3
+    assert keys[0] != keys[1] == keys[2]
     assert [{k for p, k in d if p == "tools"} for d in deps] == [
-        {TOOLS_KEYS[7]},
-        {TOOLS_KEYS[7]},
-        {TOOLS_KEYS[8]},
+        set(read[b].values()) for b in (first, moved, moved)
     ]
-    assert written == {(b.id, tuple((s, k) for s in sorted(step_ids))) for b, k in builds.items()}
-    assert own == {(b.id, f) for b in builds for f in every}
-    assert tools == {(b.id, f, k) for b, k in builds.items() for f in every}
+    assert written == {
+        (b.id, tuple(sorted({f.step: k for f, k in r.items()}.items()))) for b, r in read.items()
+    }
+    assert own == {(b.id, f) for b in read for f in every}
+    assert tools == {(b.id, f, k) for b, r in read.items() for f, k in r.items()}
     assert all(len(world.builds_of(p)) == 1 for p in below(graph, root))
 
 
