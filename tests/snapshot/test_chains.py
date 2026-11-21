@@ -609,7 +609,9 @@ def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, g
     chain that runs under the branch, at its newest commit, leaves the branch's latest file
     of every step of its project naming its key, of the steps it found made as well as those
     it promoted; one under a snapshot/ name leaves none, and neither does a project the chain
-    did not build."""
+    did not build. Once the root's branch has moved on to a newer commit and built it, a
+    build of the older commit, which is reused, leaves the root's latest files naming the
+    newer key."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = MATRICES["three"], STEP_IDS["build-notes"]
     world = worlds(graph, matrix, step_ids)
@@ -622,16 +624,22 @@ def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, g
         world.hosting.cut(p, "feature")
 
     top = world.build(root, branch="feature")
-
     plan, every = world.plan(top), folders(matrix, step_ids)
-    built = {b.project: b.branch for b in top.chain()}
     named = {p: {f: world.latest(p, "refs/heads/feature", f) for f in every} for p in projects}
+    world.commit(root, branch="feature")
+    newer = world.build(root, branch="feature")
+    older = world.play(world.start(root, "feature", top.commit, {}))
+
+    built = {b.project: b.branch for b in top.chain()}
     expected = {
         p: {f: plan.projects[p].key if built.get(p) == "feature" else None for f in every}
         for p in projects
     }
     snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
-    assert top.state == "passed"
+    kept = {f: world.latest(root, "refs/heads/feature", f) for f in every}
+    assert (top.state, newer.state, older.state) == ("passed", "passed", "passed")
     assert node in built
     assert named == expected
     assert snapshot_refs == set()
+    assert (older.children, world.agents.uploads[older.id]) == ([], [])
+    assert kept == {f: world.plan(newer).projects[root].key for f in every}
