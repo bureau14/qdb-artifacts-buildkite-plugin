@@ -38,6 +38,17 @@ def matched_files(patterns):
     )
 
 
+def base_folder(base_dir):
+    """The folder whose path the object keys of the files drop: ``base_dir``, else the
+    checkout."""
+    if not base_dir:
+        return Path.cwd().resolve()
+    base_path = Path(base_dir).resolve()
+    if not base_path.is_dir():
+        raise ArtifactsError(f"--base-dir {base_dir!r} does not exist or is not a directory")
+    return base_path
+
+
 def check_below(files, base_path, base_dir):
     """Every file must lie below ``base_dir``, whose path its object key drops."""
     for f in files:
@@ -47,19 +58,30 @@ def check_below(files, base_path, base_dir):
             raise ArtifactsError(f"file {f} is not under base_dir {base_dir}") from None
 
 
-def kept_files(files, base_path, exclude_patterns):
-    """``files`` less those ``exclude_patterns`` drop by their path below ``base_path``."""
-    return [
-        f for f in files if not is_excluded(f.relative_to(base_path).as_posix(), exclude_patterns)
-    ]
-
-
 def empty_upload(why, allow_empty):
-    """An upload without files: skipped with allow_empty, else an error."""
+    """An upload without files: nothing to upload with allow_empty, else an error."""
     if not allow_empty:
         raise ArtifactsError(why)
     log(f"{why}; skipping artifact upload (allow_empty=true)")
-    return False
+    return []
+
+
+def selected_files(patterns, base_dir, exclude_patterns, allow_empty):
+    """Each file to upload with its path below ``base_dir``, else below the checkout: those
+    ``patterns`` match, less those ``exclude_patterns`` drop by that path. None to upload
+    fails, unless ``allow_empty``."""
+    base_path = base_folder(base_dir)
+    matched = matched_files(patterns)
+    if not matched:
+        return empty_upload(f"no files matched: {patterns}", allow_empty)
+    if base_dir:
+        check_below(matched, base_path, base_dir)
+    below = [(f, f.relative_to(base_path).as_posix()) for f in matched]
+    kept = [(f, rel) for f, rel in below if not is_excluded(rel, exclude_patterns)]
+    if not kept:
+        why = f"no files left after applying exclude patterns: {exclude_patterns or []}"
+        return empty_upload(why, allow_empty)
+    return kept
 
 
 def capture_step(store, location, write_files, manifest):
@@ -86,6 +108,15 @@ def log_promoted(folder, key, held):
         f"The files of {folder} at {key} were promoted by build {b.number} ({b.url}), so this "
         "upload writes nothing."
     )
+
+
+def annotated(held, relative):
+    """The title of the upload's annotation and the files it links (path and size): those of
+    the build that promoted the folder when it ``held`` it, else those this upload wrote."""
+    if held is None:
+        return "Uploaded artifacts", relative
+    files = [(f.path, f.size) for f in held.files]
+    return f"Artifacts promoted by build {held.promoted.build.number}", files
 
 
 def upload(
@@ -118,18 +149,9 @@ def upload(
 
     Creds are minted once before the pool -- for R2, ensure TTL covers the full upload.
     """
-    base_path = Path(base_dir).resolve() if base_dir else Path.cwd().resolve()
-    if base_dir and not base_path.is_dir():
-        raise ArtifactsError(f"--base-dir {base_dir!r} does not exist or is not a directory")
-    matched = matched_files(patterns)
-    if not matched:
-        return empty_upload(f"no files matched: {patterns}", allow_empty)
-    if base_dir:
-        check_below(matched, base_path, base_dir)
-    files = kept_files(matched, base_path, exclude_patterns)
+    files = selected_files(patterns, base_dir, exclude_patterns, allow_empty)
     if not files:
-        why = f"no files left after applying exclude patterns: {exclude_patterns or []}"
-        return empty_upload(why, allow_empty)
+        return False
 
     own = key_of_build()
     _, ssm = aws_clients()
@@ -139,11 +161,11 @@ def upload(
     bucket = store.bucket
     location = layout.step_folder(dest_prefix, project, own.key, folder)
     tc = transfer.transfer_config(concurrency)
-    relative = [(f.relative_to(base_path).as_posix(), f.stat().st_size) for f in files]
+    relative = [(rel, f.stat().st_size) for f, rel in files]
     total_bytes = sum(size for _, size in relative)
 
-    def upload_one(f):
-        rel = f.relative_to(base_path).as_posix()
+    def upload_one(item):
+        f, rel = item
         log(f"  {rel} ({fmt_size(f.stat().st_size)})")
 
         def attempt(client):
@@ -157,8 +179,6 @@ def upload(
 
         transfer.one_file(cfg, auth, rel, attempt)
 
-    elapsed = []
-
     def write_files():
         if own.stands_for is not None:
             create_key_json(store, dest_prefix, own.key, own.stands_for)
@@ -169,20 +189,15 @@ def upload(
         transfer.log_settings(parallel, concurrency)
         if exclude_patterns:
             log(f"  exclude={exclude_patterns}")
-        elapsed.append(transfer.run(upload_one, files, parallel))
+        seconds = transfer.run(upload_one, files, parallel)
+        transfer.log_done("Uploaded", len(files), total_bytes, seconds)
 
     held = capture_step(store, location, write_files, captured(relative, uploaded))
     if held is not None:
         log_promoted(folder, own.key, held)
-        shown = [(f.path, f.size) for f in held.files]
-        title = f"Artifacts promoted by build {held.promoted.build.number}"
-    else:
-        shown, title = relative, "Uploaded artifacts"
     if annotate:
+        title, shown = annotated(held, relative)
         create_buildkite_annotation(cfg.artifacts_domain, location, shown, title)
     else:
         log("  annotate=false; skipping Buildkite annotation")
-    if held is not None:
-        return False
-    transfer.log_done("Uploaded", len(files), total_bytes, elapsed[0])
-    return True
+    return held is None
