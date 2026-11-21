@@ -33,6 +33,7 @@ import yaml
 
 from ..forms import is_tag
 from ..layout import is_step_id, not_a_step_id
+from ..options import no_git_ref
 from .configuration import (
     GIT_REF,
     PLUGIN,
@@ -426,6 +427,15 @@ def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> 
     )
 
 
+def latest_without_git_ref(entry: Mapping[str, Any], project: str, declaration: Declaration) -> str:
+    """Why a latest successful ``entry`` of ``project`` that names no git_ref breaks the rule,
+    in the words a job refuses it with, naming the template that declares the dependency."""
+    template = next(
+        e.path for e in declared_entries(declaration, LATEST_SUCCESSFUL) if e.project == project
+    )
+    return no_git_ref(f"The download entry ({project}, {named_variant(entry)})", project, template)
+
+
 def entry_problem(
     entry: Mapping[str, Any], declaration: Declaration, own: str, own_ref: str
 ) -> str | None:
@@ -433,7 +443,8 @@ def entry_problem(
 
     The entry's type must be the type a template declares the project with.
     A latest successful entry takes the latest successful build of its ref
-    whatever that ref is, so its ref is not looked at.
+    whatever that ref is, so only that it names one is looked at, as a job
+    without a plan step needs it (``options.no_git_ref``).
     """
     project = other_project(entry, own)
     if project is None:
@@ -442,9 +453,9 @@ def entry_problem(
     if project not in declared_projects(declaration, t):
         why = f"which no committed template declares as a {t} dependency"
         return f"downloads from {project} as a {t} dependency, {why}"
-    if t == LATEST_SUCCESSFUL:
-        return None
     ref = option_value(entry, GIT_REF)
+    if t == LATEST_SUCCESSFUL:
+        return None if ref else latest_without_git_ref(entry, project, declaration)
     return _ref_problem(project, ref, declared_pins(declaration, project), own_ref)
 
 

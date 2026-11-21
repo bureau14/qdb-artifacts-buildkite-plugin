@@ -315,6 +315,17 @@ def is_own_build(p, pipeline, ref):
     return project == pipeline and (not p["git_ref"] or ref is None or p["git_ref"] == ref)
 
 
+def no_git_ref(entry, project, template):
+    """Why a download ``entry`` of another ``project`` that names no git_ref is refused, by a job
+    and by the plan step alike: no build of it can be found. ``template`` says where the entry
+    is written."""
+    return (
+        f"{entry} downloads from {project} and names no git_ref, so no build of {project} can "
+        f'be found. {template} writes git_ref in it: "{{git_ref}}" for the build\'s own ref, '
+        "or the ref to take."
+    )
+
+
 def download_entry(n, p, pipeline, ref, own):
     """The ``n``-th download entry, checked; ``own()`` gives the build's key."""
     project = p["project_id"] or pipeline
@@ -327,7 +338,8 @@ def download_entry(n, p, pipeline, ref, own):
             f"them when another step uploads {p['variant']}."
         )
     if not own_build and not p["keys"] and not p["git_ref"]:
-        raise ArtifactsError(f"missing required git_ref in download project config: {p}")
+        entry = f"Download entry {n} ({project}, {p['variant']})"
+        raise ArtifactsError(no_git_ref(entry, project, "Its template"))
     return Entry(
         project=project,
         variant=p["variant"],

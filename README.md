@@ -572,11 +572,13 @@ commits, and its promotes write the latest files of the tag's name,
 - Every download of another project that its generated pipeline makes is in a
   committed template, with the same type; the `git_ref` of a snapshot download
   is the build's own ref, `refs/heads/<BUILDKITE_BRANCH>`, or a pin written in
-  a committed template; every upload and promote names a step id; and no key
-  names the plugin another way (`Bureau14/qdb-artifacts`, say). The plan step
-  fails a build whose pipeline breaks this rule, and names the step and why;
-  a download at `refs/tags/<tag>` comes from Buildkite's tag field, and the
-  message says to start the build with the tag's name in the branch field.
+  a committed template; a latest successful download names a `git_ref`, as a
+  job without a plan step needs; every upload and promote names a step id;
+  and no key names the plugin another way (`Bureau14/qdb-artifacts`, say). The
+  plan step fails a build whose pipeline breaks this rule, and names the step
+  and why; a download at `refs/tags/<tag>` comes from Buildkite's tag field,
+  and the message says to start the build with the tag's name in the branch
+  field.
 - Every step id its pipeline promotes is one its templates write as
   `step_id`, since the builds that depend on it read its steps from them; one
   step promotes each step id of a platform.
