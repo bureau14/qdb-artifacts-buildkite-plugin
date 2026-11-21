@@ -839,15 +839,16 @@ A failure the library can explain raises `ArtifactsError`, also exported by
 `vendor.qdb_artifacts.lib`, with the facts in its message: a step that cannot
 be found names every latest file it tried, or the manifest that is missing at
 its key; a step that gives no file names the patterns, the excludes and the
-step's folder; a configuration error names the variable and the SSM parameter. Catch
+step's folder; a configuration error names the variable and the SSM parameter;
+a member of an archive that would be written outside the output directory
+names the archive and the member, and is not tried again. Catch
 `ArtifactsError` to handle such a failure.
 
 Other failures raise the exception of boto3, of zstandard or of the standard
 library: a request the store still refuses after its retries, an archive that
-does not decompress, a tar member that would be written outside the output
-directory. A Ctrl-C during the transfers of `download_artifacts` ends the
-process at once with status 130, without running the caller's `finally` blocks
-or exit handlers.
+does not decompress. A Ctrl-C during the transfers of `download_artifacts` ends
+the process at once with status 130, without running the caller's `finally`
+blocks or exit handlers.
 
 ## Backend configuration
 

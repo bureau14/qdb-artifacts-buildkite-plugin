@@ -1,5 +1,5 @@
-"""Unpack a downloaded archive into the output dir, refusing tar members that
-would land outside it.
+"""Unpack a downloaded archive into the output dir, refusing members that would
+land outside it.
 
 The download puts an archive in a temporary file in the output dir, through
 boto3's transfer manager (parallel ranged GETs), and this module unpacks it
@@ -8,6 +8,9 @@ from there:
     .tar.gz             tarfile, seekable
     .tar.zst, .tar.zstd zstandard's stream reader into tarfile's stream mode
     .zip, .jar          zipfile, seekable
+
+A refused member raises ArtifactsError: another attempt of the transfer would
+meet the same member, so the transfer does not try again.
 """
 
 import shutil
@@ -28,17 +31,31 @@ def _filter_tar_member(member, entry_rules):
     return member if member.name else None
 
 
-def _extract_tar(tar, out, entry_filter=None, strip_prefix=None, entry_rules=None):
-    """Extract tar members with optional filtering, through tarfile's data filter:
-    it roots absolute paths in the output dir, and refuses special files and the
-    members and links that would land outside it. Streaming mode means
+def _extract_tar(tar, out, rel, entry_filter=None, strip_prefix=None, entry_rules=None):
+    """Extract the tar members of the archive ``rel`` with optional filtering, through
+    tarfile's data filter: it roots absolute paths in the output dir, and refuses special
+    files and the members and links that would land outside it. Streaming mode means
     sequential-only access -- skipped members still consume I/O from the stream."""
     entry_rules = entry_rules or [(entry_filter, strip_prefix)]
     for member in tar:
         member = _filter_tar_member(member, entry_rules)
         if member is None:
             continue
-        tar.extract(member, path=out, filter="data")
+        try:
+            tar.extract(member, path=out, filter="data")
+        except tarfile.FilterError as exc:
+            raise ArtifactsError(f"{rel}: {exc}") from exc
+
+
+def _zip_destination(out, rel, name):
+    """Where the zip or jar member ``name`` of the archive ``rel`` lands in ``out``. A member
+    whose path leaves ``out``, through a parent path or as an absolute name, is refused."""
+    dest = (out / name).resolve()
+    if not dest.is_relative_to(out.resolve()):
+        raise ArtifactsError(
+            f"{rel}: {name!r} would be extracted to {str(dest)!r}, which is outside the destination"
+        )
+    return dest
 
 
 def extract_local_archive(
@@ -55,7 +72,7 @@ def extract_local_archive(
 
     if rel.endswith(".tar.gz"):
         with tarfile.open(path, mode="r:gz") as tar:
-            _extract_tar(tar, out, entry_rules=entry_rules)
+            _extract_tar(tar, out, rel, entry_rules=entry_rules)
 
     elif rel.endswith((".tar.zst", ".tar.zstd")):
         dctx = zstandard.ZstdDecompressor()
@@ -64,7 +81,7 @@ def extract_local_archive(
             dctx.stream_reader(fh) as reader,
             tarfile.open(fileobj=reader, mode="r|") as tar,
         ):
-            _extract_tar(tar, out, entry_rules=entry_rules)
+            _extract_tar(tar, out, rel, entry_rules=entry_rules)
 
     elif rel.endswith((".zip", ".jar")):
         with zipfile.ZipFile(path, "r") as zf:
@@ -75,7 +92,7 @@ def extract_local_archive(
                 name = select_entry_path(name, entry_rules)
                 if not name:
                     continue
-                dest = out / name
+                dest = _zip_destination(out, rel, name)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(dest, "wb") as dst:
                     shutil.copyfileobj(src, dst)

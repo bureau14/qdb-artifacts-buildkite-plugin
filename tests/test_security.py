@@ -9,6 +9,7 @@ import io
 import json
 import os
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,18 @@ from lib.snapshot.buildkite import Response
 from lib.snapshot.enter import buildkite_pipelines
 
 # ---------------------------------------------------------------------------
-# Tar members that would leave the output directory
+# Archive members that would leave the output directory
 # ---------------------------------------------------------------------------
 
-ESCAPES = ("parent-path", "symbolic-link", "hard-link", "absolute-path")
 COMPRESSIONS = {".tar.gz": gzip.compress, ".tar.zst": zstandard.ZstdCompressor().compress}
+TAR_ESCAPES = ("parent-path", "symbolic-link", "hard-link", "absolute-path")
+# The ways a member of each archive format would leave the output directory: a member of a
+# zip or a jar is a file, never a link.
+ESCAPES = {
+    **{suffix: TAR_ESCAPES for suffix in COMPRESSIONS},
+    ".zip": ("parent-path", "absolute-path"),
+    ".jar": ("parent-path", "absolute-path"),
+}
 
 
 def member(
@@ -60,6 +68,11 @@ def escaping(escape: str, outside: Path, prefix: str) -> list:
 
 def archived(members: list, suffix: str) -> bytes:
     raw = io.BytesIO()
+    if suffix not in COMPRESSIONS:
+        with zipfile.ZipFile(raw, "w") as archive:
+            for info, data in members:
+                archive.writestr(info.name, data or b"")
+        return raw.getvalue()
     with tarfile.open(fileobj=raw, mode="w") as archive:
         for info, data in members:
             archive.addfile(info, io.BytesIO(data) if data is not None else None)
@@ -79,13 +92,18 @@ def everything_but(root: Path, out: Path) -> dict:
     }
 
 
-@pytest.mark.parametrize("suffix", sorted(COMPRESSIONS))
-@pytest.mark.parametrize("escape", ESCAPES)
+@pytest.mark.parametrize(
+    "suffix, escape", [(suffix, e) for suffix, found in sorted(ESCAPES.items()) for e in found]
+)
 @pytest.mark.parametrize("rule", ["whole archive", "prefix stripped"])
-def test_no_tar_member_is_written_outside_the_output_directory(tmp_path, suffix, escape, rule):
-    """Extracting a downloaded tar archive whose member would land outside the output directory,
-    through a parent path, a link or an absolute path, creates and changes nothing outside it,
-    with or without an entry rule that strips a prefix."""
+def test_no_archive_member_is_written_outside_the_output_directory(
+    tmp_path, monkeypatch, suffix, escape, rule
+):
+    """Extracting a downloaded archive, tar, zip or jar, whose member would land outside the
+    output directory, through a parent path, a link or an absolute path, creates and changes
+    nothing outside it, with or without an entry rule that strips a prefix; and its transfer
+    extracts it once, since another attempt would meet the same member."""
+    monkeypatch.setattr(retry, "BACKOFF_BASE", 0)  # the pause before a retry, in seconds
     out, outside = tmp_path / "out", tmp_path / "outside"
     out.mkdir()
     outside.mkdir()
@@ -94,11 +112,17 @@ def test_no_tar_member_is_written_outside_the_output_directory(tmp_path, suffix,
     archive = tmp_path / f"w{suffix}"
     archive.write_bytes(archived(escaping(escape, outside, prefix), suffix))
     before = everything_but(tmp_path, out)
+    attempts: list[str] = []
 
-    with contextlib.suppress(Exception):
+    def extracted() -> None:
+        attempts.append(archive.name)
         extract_local_archive(str(archive), archive.name, out, entry_rules=rules)
 
+    with contextlib.suppress(Exception):
+        retry.with_retry(extracted, archive.name)
+
     assert everything_but(tmp_path, out) == before
+    assert attempts == [archive.name]
 
 
 # ---------------------------------------------------------------------------

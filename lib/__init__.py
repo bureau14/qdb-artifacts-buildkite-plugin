@@ -22,7 +22,7 @@ module can be read, and tested, with nothing below it:
     manifest    manifest.json of a step's folder: its files, who uploaded and promoted them
     resolve     which steps a download takes: at a given key, or by the walk over latest files
     transfer    many files at once, each with its own client and retries
-    extract     unpack an archive, refusing tar members that leave the target
+    extract     unpack an archive, refusing members that leave the target
     annotation  on the build page, a step's files and the build each download took
     upload      select files, capture them and their manifest, annotate
     download    an entry's steps, their files, transfer, extract, annotate
