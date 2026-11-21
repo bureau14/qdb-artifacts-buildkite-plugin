@@ -261,9 +261,10 @@ class Naming:
     """How a downloading step names steps of linux that the build under test made on its ref:
     its pipeline, whether it is a job of that build (else of build 9 on ``own_ref``), its entry
     for that ref, whether the notes step of the build under test passed, which build made each
-    step the entry takes (``taken``: the build under test, or the earlier one), and whether a
+    step the entry takes (``taken``: the build under test, or the earlier one), whether a
     later build of the ref was promoted before it downloads, so that the latest files name
-    another key than the one it names."""
+    another key than the one it names, and whether the walk finds its steps through the ref's
+    latest files, else their keys are known."""
 
     name: str
     pipeline: str
@@ -273,6 +274,7 @@ class Naming:
     taken: dict
     later_promoted: bool = False
     own_ref: str = MASTER
+    walks: bool = True
 
     def __str__(self) -> str:
         return self.name
@@ -287,6 +289,7 @@ NAMINGS = [
         False,
         {"build": SUBJECT, "notes": SUBJECT},
         later_promoted=True,
+        walks=False,
     ),
     Naming(
         "keys",
@@ -296,6 +299,7 @@ NAMINGS = [
         True,
         {"build": SUBJECT, "notes": SUBJECT},
         later_promoted=True,
+        walks=False,
     ),
     Naming(
         "one-step",
@@ -405,8 +409,9 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     those steps at the keys they name, at the paths the options name, and nothing else there;
     an entry of a branch whose latest files name a key at which no step is promoted gets every
     step of master's newest key. Its job's log and its build page name each step it took with
-    its key, the key's commit and the build whose files it took. The uploads annotate their
-    build unless told not to."""
+    its key, the key's commit and the build whose files it took, and each step the walk found
+    with the branch whose latest file named it, the log also with that file. The uploads
+    annotate their build unless told not to."""
     store.put_all(history(payload, ref))
     maker = jobs("widget", SUBJECT, ref)
     for s in STEPS:
@@ -463,13 +468,21 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
         (key if n == SUBJECT else made_up_key("widget", n, ref), build_url("widget", n))
         for n in naming.taken.values()
     } | {(made_up_key("widget", EARLIER, MASTER), build_url("widget", EARLIER))}
+    linux = naming.taken if naming.walks else {}
+    walked = {
+        (name_of(r), layout.latest_file("", "widget", r, Folder(v, s)))
+        for r, v, steps in ((latest_ref(ref), "linux", linux), (MASTER, "macos", STEPS))
+        for s in steps
+    }
     assert [o.code for o in (*outcomes, fetched)] == [0, 0, 0], [
         o.output for o in (*outcomes, fetched)
     ]
     assert consumer.files("in") == expected
     assert consumer.files("in-macos") == macos
     assert names_each(fetched.stderr, taken)
+    assert all(latest in fetched.stderr for _, latest in walked)
     assert len(shown) == 1 and names_each(shown[0], taken)
+    assert all(branch in shown[0] for branch, _ in walked)
     assert bool(annotations) == transfer.annotates
 
 
