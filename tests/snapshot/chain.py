@@ -5,8 +5,8 @@ of ``fakes.py``.
 Every project is a repository with a step template and a ``pipeline.py`` of the
 runner's shape. Its template has, per platform, one step per step id, which writes
 ``step_id``, downloads the same platform of each snapshot dependency without naming a
-step, and uploads. The step of the first step id promotes what it uploaded; each other
-is promoted by a check step that waits for it and names it in its promote block. A test
+step, and uploads. A step promotes what it uploaded, but one of a step id of ``CHECKED``,
+which a check step promotes that waits for it and names it in its promote block. A test
 may add a step that promotes a folder again (``Project.packaged``). The project's
 generator does what the runner's ``load_template`` does: the key
 ``<step id>-<platform>``, and the plugin's ``step``.
@@ -86,8 +86,16 @@ GRAPHS = {
     "real": REAL,
 }
 MATRICES = {"linux": ("linux",), "three": ("linux", "macos", "windows")}
-# The step ids every platform of a project makes: one, or two.
-STEP_IDS = {"build": ("build",), "build-notes": ("build", "notes")}
+# The step ids every platform of a project makes: one; two, of which a check step promotes the
+# second; or two that each promote themselves, as the archives of a packaging pipeline do.
+STEP_IDS = {
+    "build": ("build",),
+    "build-notes": ("build", "notes"),
+    "each-promoted": ("api", "server"),
+}
+# The step ids a check step promotes, after the step that uploads them; the step that uploads
+# any other promotes it itself.
+CHECKED = ("notes",)
 
 
 def below(graph: dict, p: str) -> frozenset[str]:
@@ -192,11 +200,11 @@ def check_step(project: str, variant: str, step: str) -> dict:
     }
 
 
-def promoted_again(project: str, variant: str, entries: list) -> dict:
-    """A step that promotes the folder ``variant``/build a second time, written as a pipeline
-    without ``pipeline.py`` writes it: its key, and the plugin's ``step`` by hand."""
+def promoted_again(project: str, variant: str, step: str, entries: list) -> dict:
+    """A step that promotes the folder ``variant``/``step`` a second time, written as a
+    pipeline without ``pipeline.py`` writes it: its key, and the plugin's ``step`` by hand."""
     options = {
-        "step": "build",
+        "step": step,
         "upload": {"variant": variant, "files": "out/*"},
         "promote": {"variant": variant},
     }
@@ -407,14 +415,13 @@ class World:
             extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
             return deps + extra + [entry(t, v, latest=True, step=p.latest_step) for t in p.latest]
 
-        first, *checked = p.steps
         built = [
-            build_step(name, v, entries(v), step=s, promotes=s == first)
+            build_step(name, v, entries(v), step=s, promotes=s not in CHECKED)
             for v in p.variants
             for s in p.steps
         ]
-        checks = [check_step(name, v, s) for v in p.variants for s in checked]
-        packaged = [promoted_again(name, v, entries(v)) for v in p.packaged]
+        checks = [check_step(name, v, s) for v in p.variants for s in p.steps if s in CHECKED]
+        packaged = [promoted_again(name, v, p.steps[0], entries(v)) for v in p.packaged]
         return {"steps": built + checks + packaged}
 
     def commit(self, name: str, branch: str | None = "master") -> str:
@@ -663,7 +670,7 @@ def lower_node(request) -> At:
 
 
 # The platforms every project builds and the step ids every platform makes, each value of
-# each once: one platform of one step id, three platforms of two.
+# each once, without the cross product.
 SHAPES = {
     f"{m}-{s}": (MATRICES[m], STEP_IDS[s]) for m, s in paired(sorted(MATRICES), sorted(STEP_IDS))
 }
