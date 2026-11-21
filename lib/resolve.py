@@ -306,8 +306,8 @@ def resolve_artifacts(cfg, auth, project_id, variant, step, build, patterns, exc
     folder = Folder(variant, step)
     name = f"The download of {project_id} ({variant})"
     resolved = library_step(store, prefix, project_id, folder, build, name)
+    log_step(name, resolved)
     objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
         raise nothing_matched(name, patterns, exclude_patterns, [resolved])
-    log_step(name, resolved)
     return store.bucket, resolved, objects

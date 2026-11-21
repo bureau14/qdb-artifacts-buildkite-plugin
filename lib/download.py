@@ -4,8 +4,9 @@ An entry takes one or several steps of a project's platform; ``resolve``
 finds each at its key. "No file matched" is judged over the whole entry: it
 fails only when no step gives a file. Steps are fetched in the order of their
 ids, so of two files of one path the last stays. The files travel through
-``transfer``, as uploads do. The log names, before its files, the build each
-step is taken of; after the last entry the build page names them all.
+``transfer``, as uploads do. The log names the build each step is taken of
+as soon as the step is found, so an entry that then fails names them too;
+after the last entry the build page names them all.
 """
 
 from __future__ import annotations
@@ -197,12 +198,13 @@ def download(entries, dirs_to_clean, parallel=4, concurrency=32):
     for n, e in enumerate(entries, start=1):
         name = entry_name(n, e.project, e.variant)
         steps = resolved_steps(store, prefix, e, name)
-        rules = parse_rules(e.files)
-        taken = [(s, selected(s, rules, e.exclude)) for s in steps]
-        if not any(objects for _, objects in taken):
-            raise nothing_matched(name, e.files, e.exclude, steps)
-        for s, objects in taken:
+        for s in steps:
             log_step(name, s)
+        rules = parse_rules(e.files)
+        taken = [selected(s, rules, e.exclude) for s in steps]
+        if not any(taken):
+            raise nothing_matched(name, e.files, e.exclude, steps)
+        for objects in taken:
             if objects:
                 fetch(
                     cfg, auth, store.bucket, objects, e.output_dir, e.extract, parallel, concurrency
