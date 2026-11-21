@@ -408,8 +408,8 @@ def point_latest_files(
     """5. Point the latest file of every step made at the build's key at it, under the name the
     build runs under, when git names the build's commit as its ref's: so a branch cut at, or a
     tag put on, built commits gets its latest files at its first build, and an older build
-    that runs again does not move them back. A build that does not speak for its branch
-    (``SNAPSHOT_BRANCH_BUILD``) writes none, as its promotes write none.
+    that runs again does not move them back. A build whose ``SNAPSHOT_BRANCH_BUILD`` is false
+    writes none, as its promotes write none.
     """
     if not made or not is_branch_build(job.branch_build):
         return

@@ -623,8 +623,8 @@ class World:
         if promotes is not None and held is None:
             # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
             promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
-            speaks = is_branch_build(build.env.get(BRANCH_BUILD))
-            promote_folder(self.store, "", build.project, own.key, promotes, promotion, speaks)
+            writes = is_branch_build(build.env.get(BRANCH_BUILD))
+            promote_folder(self.store, "", build.project, own.key, promotes, promotion, writes)
         return "passed"
 
     # -- what a test reads -------------------------------------------------

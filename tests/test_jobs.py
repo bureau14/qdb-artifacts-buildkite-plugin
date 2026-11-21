@@ -616,9 +616,9 @@ BRANCH_BUILDS = (None, "true", "false")
 )
 def test_storage_is_additive(jobs, store, prefix, ref, producer, branch_build):
     """An upload and a promote on a branch add exactly the step's files, its manifest, the
-    branch's latest file (none in a build started for a dependency that does not speak for its
-    branch) and, in a build without a plan step, the key.json of the key the job computed; and
-    leave every other object as it was."""
+    branch's latest file (none in a build whose SNAPSHOT_BRANCH_BUILD is false) and, in a build
+    without a plan step, the key.json of the key the job computed; and leave every other object
+    as it was."""
     under = prefix
     files = {"a.bin": b"a", "sub/b.bin": b"bb"}
     folder = Folder("linux", "build")

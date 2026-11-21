@@ -800,7 +800,7 @@ def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_buil
     started = [b for b in world.builds if "SNAPSHOT_PLAN" in b.env]
     last = {b.project: b for b in started}
     left = {p: world.objects(f"{p}/refs/") for p in last}
-    speaks = {p: own_build_takes_the_same_commits(world, graph, plan, b) for p, b in last.items()}
+    writes = {p: own_build_takes_the_same_commits(world, graph, plan, b) for p, b in last.items()}
 
     def latest_files(p: str) -> dict[str, bytes]:
         ref, key = branch_ref(name_of(plan.projects[p].ref)), plan.projects[p].key
@@ -808,7 +808,7 @@ def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_buil
 
     assert top.state == "passed"
     assert [b.branch for b in started] == [name_of(plan.projects[b.project].ref) for b in started]
-    assert left == {p: latest_files(p) if speaks[p] else {} for p in last}
+    assert left == {p: latest_files(p) if writes[p] else {} for p in last}
 
 
 # Where a name is put on the commits a chain built: a branch cut in every project of the tree,

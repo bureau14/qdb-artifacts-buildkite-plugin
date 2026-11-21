@@ -526,15 +526,15 @@ def read_needs(value: str) -> frozenset[Folder]:
     return frozenset(Folder(platform, step) for platform, step in json.loads(value))
 
 
-def branch_build_value(speaks: bool) -> str:
-    """``SNAPSHOT_BRANCH_BUILD``: whether a started build speaks for its branch, as the text
-    ``true`` or ``false`` that ``options.is_branch_build`` reads."""
-    return "true" if speaks else "false"
+def branch_build_value(writes: bool) -> str:
+    """``SNAPSHOT_BRANCH_BUILD``: whether a started build writes its branch's latest files, as
+    the text ``true`` or ``false`` that ``options.is_branch_build`` reads."""
+    return "true" if writes else "false"
 
 
 def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Sequence[str]) -> dict:
     """The step that builds ``project`` as the plan says and hands down ``needs``, and whether
-    the build speaks for its branch.
+    the build writes its branch's latest files.
 
     ``after`` are the keys of the trigger steps it waits for. ``soft_fail``
     is set: the manifests say whether the dependency is usable, not the

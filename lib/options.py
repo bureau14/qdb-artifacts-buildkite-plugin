@@ -291,7 +291,7 @@ def upload_arguments():
 
 def promote_arguments():
     """The promote block, completed with the job's project, branch, build and key, and whether
-    the build speaks for its branch."""
+    the build writes its branch's latest files."""
     variant = os.environ.get(f"{PREFIX}PROMOTE_VARIANT")
     return {
         "project": job_pipeline(),
@@ -299,7 +299,7 @@ def promote_arguments():
         "folder": Folder(variant, promote_step_id(variant)),
         "branch": job_branch(),
         "build": job_build(),
-        "branch_build": is_branch_build(os.environ.get(BRANCH_BUILD)),
+        "writes_latest_file": is_branch_build(os.environ.get(BRANCH_BUILD)),
     }
 
 

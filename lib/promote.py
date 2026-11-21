@@ -9,11 +9,10 @@ writes no latest file, so the retry of a job that promoted never moves a
 branch's latest file back. Not there, it fails: the step that uploads it
 uploaded nothing.
 
-A build that does not speak for its branch writes no latest file
-(``branch_build``): one a plan step started for a dependency, whose
-``SNAPSHOT_BRANCH_BUILD`` says so. The plan step writes the latest files of
-the steps it finds made with the same function (``write_latest_file``), on the
-same condition.
+A build started for a dependency whose ``SNAPSHOT_BRANCH_BUILD`` is false
+writes no latest file (``writes_latest_file``). The plan step writes the latest
+files of the steps it finds made with the same function (``write_latest_file``),
+on the same condition.
 """
 
 import time
@@ -35,11 +34,11 @@ def write_latest_file(store, prefix, project, branch, folder, key):
     store.put(where, key.encode(), "text/plain")
 
 
-def promote_folder(store, prefix, project, key, folder, promotion, branch_build):
+def promote_folder(store, prefix, project, key, folder, promotion, writes_latest_file):
     """Promote ``folder`` of ``project`` at ``key`` as ``promotion`` says, unless a build
     promoted it already; the manifest that holds afterwards. The latest file of the branch
-    moves only for a build that speaks for its branch (``branch_build``). A folder without a
-    manifest raises."""
+    moves only for a build that writes its branch's latest files (``writes_latest_file``). A
+    folder without a manifest raises."""
     location = layout.step_folder(prefix, project, key, folder)
     held = read_manifest_at(store, location)
     if held is None:
@@ -52,25 +51,26 @@ def promote_folder(store, prefix, project, key, folder, promotion, branch_build)
         return held
     made = promoted_by(held, promotion)
     write_manifest(store, location, made)
-    if branch_build:
+    if writes_latest_file:
         write_latest_file(store, prefix, project, promotion.branch, folder, key)
     return made
 
 
-def promote(project, key, folder, branch, build, branch_build):
+def promote(project, key, folder, branch, build, writes_latest_file):
     """Promote the step ``folder`` (platform and step id) of ``project`` at ``key`` for
-    ``build``, which runs under ``branch`` and speaks for it when ``branch_build``."""
+    ``build``, which runs under ``branch`` and writes its latest files when
+    ``writes_latest_file``."""
     _, ssm = aws_clients()
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
     store, prefix = destination_store(cfg, auth)
 
     promotion = Promoted(iso_utc(time.time()), branch, build)
-    held = promote_folder(store, prefix, project, key, folder, promotion, branch_build)
+    held = promote_folder(store, prefix, project, key, folder, promotion, writes_latest_file)
     if held.promoted != promotion:
         b = held.promoted.build
         log(f"{folder} at {key} was promoted by build {b.number} ({b.url}); left as it is")
-    elif branch_build:
+    elif writes_latest_file:
         log(f"Promoted {folder} at {key}; the latest file of {branch} names it")
     else:
         log(
