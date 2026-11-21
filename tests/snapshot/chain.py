@@ -20,7 +20,8 @@ job of the plugin, through the library's own functions: it reads its download en
 (``options.download_entry``), finds the steps each takes (``download.resolved_steps``),
 compiles and captures its files when it uploads (``upload.capture_step``), and promotes
 after a passed command (``promote.promote_folder``), unless its upload found the folder
-promoted. The job of the step that promotes a folder the test broke fails.
+promoted, moving its branch's latest file as its build's ``SNAPSHOT_BRANCH_BUILD`` says. The
+job of the step that promotes a folder the test broke fails.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ from lib.forms import branch_ref, iso_utc
 from lib.key import KeyJson, create_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
-from lib.options import OwnKey, download_entry
+from lib.options import BRANCH_BUILD, OwnKey, download_entry, is_branch_build
 from lib.promote import promote_folder
 from lib.snapshot.buildkite import PipelineFacts
 from lib.snapshot.enter import PlanEdge, enter, resume
@@ -531,6 +532,7 @@ class World:
             plan_id=build.env.get("SNAPSHOT_PLAN"),
             needs=build.env.get("SNAPSHOT_NEEDS"),
             rebuild=build.env.get("SNAPSHOT_REBUILD"),
+            branch_build=build.env.get(BRANCH_BUILD),
         )
 
     def outcome(self, build: Build, call) -> str:
@@ -621,7 +623,8 @@ class World:
         if promotes is not None and held is None:
             # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
             promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
-            promote_folder(self.store, "", build.project, own.key, promotes, promotion)
+            speaks = is_branch_build(build.env.get(BRANCH_BUILD))
+            promote_folder(self.store, "", build.project, own.key, promotes, promotion, speaks)
         return "passed"
 
     # -- what a test reads -------------------------------------------------

@@ -604,15 +604,21 @@ def test_the_first_promote_wins(jobs, store, order):
     assert store.get(f"{folder}/out/a.bin") == f"attempt {holder} of build {number}".encode()
 
 
+# SNAPSHOT_BRANCH_BUILD of the build: unset, as in a build a person or a push starts, or as
+# the trigger step of a plan step writes it.
+BRANCH_BUILDS = (None, "true", "false")
+
+
 @pytest.mark.parametrize(
-    "prefix, ref, producer",
-    paired(["", "ci/artifacts"], (*REFS, "refs/heads/snapshot/feature"), PRODUCERS),
+    "prefix, ref, producer, branch_build",
+    paired(["", "ci/artifacts"], REFS, PRODUCERS, BRANCH_BUILDS),
     ids=case_id,
 )
-def test_storage_is_additive(jobs, store, prefix, ref, producer):
+def test_storage_is_additive(jobs, store, prefix, ref, producer, branch_build):
     """An upload and a promote on a branch add exactly the step's files, its manifest, the
-    branch's latest file (none under a snapshot/ name) and, in a build without a plan step,
-    the key.json of the key the job computed; and leave every other object as it was."""
+    branch's latest file (none in a build started for a dependency that does not speak for its
+    branch) and, in a build without a plan step, the key.json of the key the job computed; and
+    leave every other object as it was."""
     under = prefix
     files = {"a.bin": b"a", "sub/b.bin": b"bb"}
     folder = Folder("linux", "build")
@@ -624,6 +630,7 @@ def test_storage_is_additive(jobs, store, prefix, ref, producer):
     }
     store.put_all(others)
     job = jobs("widget", 1, ref, destination=f"s3://{BUCKET}/{prefix}".rstrip("/"))
+    job = job.with_env(SNAPSHOT_BRANCH_BUILD=branch_build)
     job.write({f"dist/{rel}": data for rel, data in files.items()})
     planned = {"key": PLANNED_KEY} if producer == "its-plan-step" else {}
     options = {**planned, **upload_and_promote(files="dist/**/*", base_dir="dist")}
@@ -638,7 +645,7 @@ def test_storage_is_additive(jobs, store, prefix, ref, producer):
     expected = {
         *written,
         layout.manifest(location),
-        *([] if "/snapshot/" in ref else [latest]),
+        *([] if branch_build == "false" else [latest]),
         *([] if planned else [layout.key_json(under, "widget", key)]),
     }
     objects = store.objects()

@@ -36,9 +36,10 @@ from typing import Any
 
 import yaml
 
+from ..forms import SNAPSHOT_BRANCH_PREFIX
 from ..layout import Folder, folder_document
 from ..manifest import Manifest
-from ..options import read_bool
+from ..options import BRANCH_BUILD, read_bool
 from .configuration import (
     GIT_REF,
     KEY,
@@ -525,14 +526,22 @@ def read_needs(value: str) -> frozenset[Folder]:
     return frozenset(Folder(platform, step) for platform, step in json.loads(value))
 
 
+def branch_build_value(speaks: bool) -> str:
+    """``SNAPSHOT_BRANCH_BUILD``: whether a started build speaks for its branch, as the text
+    ``true`` or ``false`` that ``options.is_branch_build`` reads."""
+    return "true" if speaks else "false"
+
+
 def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Sequence[str]) -> dict:
-    """The step that builds ``project`` as the plan says and hands down ``needs``.
+    """The step that builds ``project`` as the plan says and hands down ``needs``, and whether
+    the build speaks for its branch.
 
     ``after`` are the keys of the trigger steps it waits for. ``soft_fail``
     is set: the manifests say whether the dependency is usable, not the
     colour of its build.
     """
     planned_project = plan.projects[project]
+    speaks = not planned_project.branch.startswith(SNAPSHOT_BRANCH_PREFIX)
     message = f"snapshot dependency of {plan.first.project} build {plan.first.build_number}"
     step: dict[str, Any] = {
         "label": trigger_label(plan, project),
@@ -546,7 +555,11 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: Seque
         "branch": planned_project.branch,
         "commit": planned_project.commit,
         "message": message,
-        "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": needs_value(needs)},
+        "env": {
+            "SNAPSHOT_PLAN": plan.id,
+            "SNAPSHOT_NEEDS": needs_value(needs),
+            BRANCH_BUILD: branch_build_value(speaks),
+        },
     }
     return step
 

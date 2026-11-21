@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass
 
 from ..manifest import Build
-from ..options import command_exit_status, job_build
+from ..options import BRANCH_BUILD, command_exit_status, job_build
 from .buildkite import https_repository
 
 
@@ -24,8 +24,8 @@ class Job:
     (``buildkite.https_repository``). ``name`` is the name the build runs
     under (``BUILDKITE_BRANCH``), a branch's or a tag's. ``plan_id`` is
     ``SNAPSHOT_PLAN`` (the root build's uuid) of a chain node, None for a root;
-    ``needs`` and ``rebuild`` are ``SNAPSHOT_NEEDS`` and ``SNAPSHOT_REBUILD``
-    as given.
+    ``needs``, ``rebuild`` and ``branch_build`` are ``SNAPSHOT_NEEDS``,
+    ``SNAPSHOT_REBUILD`` and ``SNAPSHOT_BRANCH_BUILD`` as given.
     """
 
     pipeline: str | None
@@ -38,6 +38,7 @@ class Job:
     plan_id: str | None
     needs: str | None
     rebuild: str | None
+    branch_build: str | None
 
 
 def is_chain_node(job: Job) -> bool:
@@ -59,4 +60,5 @@ def job_of(pipeline: str | None) -> Job:
         plan_id=os.environ.get("SNAPSHOT_PLAN"),
         needs=os.environ.get("SNAPSHOT_NEEDS"),
         rebuild=os.environ.get("SNAPSHOT_REBUILD"),
+        branch_build=os.environ.get(BRANCH_BUILD),
     )

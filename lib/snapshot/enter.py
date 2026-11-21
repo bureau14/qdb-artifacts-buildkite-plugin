@@ -36,7 +36,8 @@ from ..key import canonical_json
 from ..layout import Folder
 from ..log import log
 from ..manifest import Manifest
-from ..promote import write_latest_file, writes_latest
+from ..options import is_branch_build
+from ..promote import write_latest_file
 from .agent import RealAgent
 from .annotation import (
     PLAN_REFUSED,
@@ -407,9 +408,10 @@ def point_latest_files(
     """5. Point the latest file of every step made at the build's key at it, under the name the
     build runs under, when git names the build's commit as its ref's: so a branch cut at, or a
     tag put on, built commits gets its latest files at its first build, and an older build
-    that runs again does not move them back. A build under a ``snapshot/`` name writes none.
+    that runs again does not move them back. A build that does not speak for its branch
+    (``SNAPSHOT_BRANCH_BUILD``) writes none, as its promotes write none.
     """
-    if not made or not writes_latest(job.name):
+    if not made or not is_branch_build(job.branch_build):
         return
     key = prepared.origin.key
     newest = newest_commit(job, edge, prepared.plan, prepared.refs_of_name)

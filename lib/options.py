@@ -170,6 +170,19 @@ def job_branch():
     return os.environ.get("BUILDKITE_BRANCH", "")
 
 
+# Set by the trigger step that starts a build for a dependency. A variable of the build, not an
+# option of the plugin, so that a pipeline step which acts on its branch's name reads the same
+# answer as the promotes and the plan step.
+BRANCH_BUILD = "SNAPSHOT_BRANCH_BUILD"
+
+
+def is_branch_build(value):
+    """Whether a build whose ``SNAPSHOT_BRANCH_BUILD`` is ``value`` (None when unset) speaks
+    for its branch, and so writes its branch's latest files. Unset, as in a build a person or
+    a push starts, it does."""
+    return read_bool(value, default=True)
+
+
 @dataclass(frozen=True)
 class OwnKey:
     """The key of the job's build; ``stands_for`` is the key.json to create when the job
@@ -277,7 +290,8 @@ def upload_arguments():
 
 
 def promote_arguments():
-    """The promote block, completed with the job's project, branch, build and key."""
+    """The promote block, completed with the job's project, branch, build and key, and whether
+    the build speaks for its branch."""
     variant = os.environ.get(f"{PREFIX}PROMOTE_VARIANT")
     return {
         "project": job_pipeline(),
@@ -285,6 +299,7 @@ def promote_arguments():
         "folder": Folder(variant, promote_step_id(variant)),
         "branch": job_branch(),
         "build": job_build(),
+        "branch_build": is_branch_build(os.environ.get(BRANCH_BUILD)),
     }
 
 
