@@ -13,8 +13,7 @@ Two interfaces, one for each caller. ``Git`` is what the planner asks:
 - ``merge_base_times(url, commits)``: for each of ``commits`` of ``url``, the
   committer time of its merge-base with the commit checked out in the current
   directory. None for a commit that shares no history with it (a release line
-  begun from another root commit) and from an answerer that knows no history
-  (the fakes); ``lines`` reads it as no time.
+  begun from another root commit); ``lines`` reads it as no time.
 
 ``Checkout`` is what a build asks of its own checkout, in the current
 directory:
