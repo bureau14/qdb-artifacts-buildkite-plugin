@@ -393,8 +393,10 @@ under `refs/heads/<BUILDKITE_BRANCH>`, also when that name is a tag's; the
 last writer wins. The plan step writes it too, for each step it finds made at
 its key, when git names the build's commit as the newest of its branch, or as
 its tag's: so a branch cut at, or a tag put on, built commits gets its latest
-files at its first build. A build under a `snapshot/` name, which a plan step
-starts for a dependency, writes none.
+files at its first build. A build started for a dependency writes none when
+its plan says that its own build would take a project below it at another
+commit (see [Snapshot dependencies](#snapshot-dependencies)); its variable
+`SNAPSHOT_BRANCH_BUILD` carries that answer to its promotes and its plan step.
 
 ### What a build shows of its downloads
 
@@ -444,15 +446,24 @@ project each step downloads, and the step id of each step that uploads.
 - The **first build of a chain** is a build with a plan step that no plan
   step started: one a person, a push or a schedule started, without
   `SNAPSHOT_PLAN` in its environment. Its plan step makes the **plan**: the
-  commit, the key, the step ids and the name a build runs under of every
-  project of its snapshot tree, and the keys it read for its own latest
-  successful downloads. A **build started for a dependency** is one a plan
-  step started, with `SNAPSHOT_PLAN`, the first build's id, in its
-  environment; a **chain** is a first build and the builds started for it.
-- A build started for a dependency runs under the name of the ref the plan
-  took it from, a branch's or a tag's, when it is the build that project's own
-  pipeline would make under that name; else under `snapshot/<first build's
-name>`, a name no branch has, under which it writes no latest file.
+  commit, the key and the step ids of every project of its snapshot tree,
+  whether a build of it writes its branch's latest files, and the keys it
+  read for its own latest successful downloads. A **build started for a
+  dependency** is one a plan step started, with `SNAPSHOT_PLAN`, the first
+  build's id, in its environment; a **chain** is a first build and the builds
+  started for it.
+- Every build runs under the name of its git ref: a build started for a
+  dependency under the name of the ref the plan took it from, a branch's or
+  a tag's, so a build taken from `refs/heads/master` runs as `master`.
+- The first build writes its branch's latest files. A build started for a
+  dependency writes them when its **own build**, the one a person would start
+  on its branch at its commit, takes every project below it at the commit the
+  plan takes it at. The plan step plans that own build as it plans its own,
+  pins and all, from what git told it, asks git nothing more, and counts what
+  git did not tell it as no. The own build's release line is taken as its
+  branch when that is a release line; on the first build's branch, as the
+  first build's line when its repository has a branch of that name; else it
+  has none, and only its own branch counts.
 
 ### Two types of dependency
 
@@ -607,14 +618,15 @@ first build.
    successful downloads, makes the plan and keeps it as meta-data of its own
    build; a build started for a dependency reads the first build's. Then the
    build creates its `key.json`, from the plan alone. When git names its
-   commit as the newest of its branch, or as its tag's, it points the latest
-   files of its name at its key for every step made there (see
-   [The bucket](#the-bucket)). A build whose pipeline promotes at least one
-   step, and whose every step and platform asked for is made at its key, is
-   reused and builds nothing. Else the dependencies that lack a step are
-   triggered, with the plan step's second run, which carries `resume`. Else
-   the pipeline is uploaded with the key of every step a download of another
-   project takes, and its own key, written into it.
+   commit as the newest of its branch, or as its tag's, and the build writes
+   its branch's latest files, it points the latest files of its name at its
+   key for every step made there (see [The bucket](#the-bucket)). A build
+   whose pipeline promotes at least one step, and whose every step and
+   platform asked for is made at its key, is reused and builds nothing. Else
+   the dependencies that lack a step are triggered, with the plan step's
+   second run, which carries `resume`. Else the pipeline is uploaded with the
+   key of every step a download of another project takes, and its own key,
+   written into it.
 3. The second run: once the triggered builds have ended, it uploads the
    pipeline, or fails and names the dependency that failed.
 4. The jobs download, upload and promote at those keys. A step that promotes
@@ -628,10 +640,10 @@ whose folders are made is replaced by one that names the build that made them.
 
 The page of a plan step, of a first build or of a build started for a
 dependency alike, lists the build's project and each project below it in the
-plan, with its commit, ref, key and the name its build runs under, and each
-download of the pipeline's own project at another branch, which its job reads
-when it runs: the key leaves such a download out, so a reused build does not
-take it again.
+plan, with its commit, ref, key and whether its build writes the latest files
+of its branch, and each download of the pipeline's own project at another
+branch, which its job reads when it runs: the key leaves such a download out,
+so a reused build does not take it again.
 
 ### Variables a person can set
 
@@ -641,9 +653,9 @@ take it again.
 | `SNAPSHOT_REBUILD=all` | Every project of the tree builds again, each under a key of the first build's own. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
 
 A forced build serves its own chain: later builds of the same commits take the
-earlier keys. Its promotes under a branch's own name move that branch's latest
-files to the forced key, until the next build of that project at the branch's
-newest commit points them back at the earlier one.
+earlier keys. In a build that writes its branch's latest files, its promotes
+move them to the forced key, until the next build of that project at the
+branch's newest commit points them back at the earlier one.
 
 The plan step of a first build asks Buildkite's API (`read_pipelines`) for the
 repository and the configuration of every pipeline of its tree, with the token
@@ -654,20 +666,31 @@ dependency asks nothing of Buildkite's API.
 
 ### What is stored, and where
 
-| What                 | Where                                                      | Written                                                                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload                                                                                      |
-| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote                                                                                                  |
-| branch's latest file | `<project>/refs/heads/<name>/<platform>/<step id>`         | by each promote, and by the plan step for the steps it finds made at the newest commit of its branch or at its tag's; never under a `snapshot/` name |
-| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by the plan step, its second run or the last step of a build that has its plan                                                                 |
-| plan                 | meta-data `snapshot-plan` of the first build               | by the first build's plan step; a retried plan step writes it again                                                                                  |
-| state                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the plan step and its second run, for the last step                                                                                               |
-| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the plan step                                                                                                          |
+| What                 | Where                                                      | Written                                                                                                                                                                         |
+| -------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload                                                                                                                 |
+| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote                                                                                                                             |
+| branch's latest file | `<project>/refs/heads/<name>/<platform>/<step id>`         | by each promote, and by the plan step for the steps it finds made at the newest commit of its branch or at its tag's; never in a build whose `SNAPSHOT_BRANCH_BUILD` is `false` |
+| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by the plan step, its second run or the last step of a build that has its plan                                                                                            |
+| plan                 | meta-data `snapshot-plan` of the first build               | by the first build's plan step; a retried plan step writes it again                                                                                                             |
+| state                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the plan step and its second run, for the last step                                                                                                                          |
+| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the plan step                                                                                                                                     |
 
-A trigger step hands the build it starts `SNAPSHOT_PLAN`, the first build's
-uuid, and `SNAPSHOT_NEEDS`, the platforms and step ids its dependent
-downloads. The plan goes away with the first build; what lies under a key
-stays.
+The plan goes away with the first build; what lies under a key stays. A build
+has four variables of this plugin:
+
+| Variable                | Set by                                                                                                     | Read by                                                                                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SNAPSHOT_PLAN`         | the trigger step that starts a build for a dependency: the first build's uuid                              | the plan step, which reads the plan from that build's meta-data                                                                                                          |
+| `SNAPSHOT_NEEDS`        | the same trigger step: the platforms and step ids its dependent downloads                                  | the plan step                                                                                                                                                            |
+| `SNAPSHOT_BRANCH_BUILD` | the same trigger step: `true` or `false`, whether the plan says the build writes its branch's latest files | every promote, and the plan step for the steps it finds made; unset, as in a build a person or a push starts, or a build of only part of a pipeline, it counts as `true` |
+| `SNAPSHOT_REBUILD`      | a person (see [Variables a person can set](#variables-a-person-can-set))                                   | the plan step of a first build                                                                                                                                           |
+
+`SNAPSHOT_BRANCH_BUILD` is the build's answer for both writers of its latest
+files, so they agree also when the first build's plan was written again after
+the build was started. A pipeline step that acts on its branch's name, such as
+a push of an image under `master`, reads it too: a build started for a
+dependency runs under that name whether or not it speaks for the branch.
 
 ### What a failed build shows
 
@@ -700,7 +723,10 @@ built at most once.
   its build message) runs without the plan step.
 - In a build without a plan step, what a download of another project takes is
   decided when its job runs.
-- No repository may have a branch under `snapshot/`; nothing checks that.
+- A branch of one name is taken to have left the same release line in every
+  repository that has that line. Where it did not, a build started for a
+  dependency on the first build's branch may write latest files that its
+  branch's own build would not, until that build runs.
 
 ## Resolve and download artifacts outside the plugin
 
