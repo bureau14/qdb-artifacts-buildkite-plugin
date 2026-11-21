@@ -62,11 +62,6 @@ def reads_as(key: Any, option: str) -> bool:
     return option_name(key) == option
 
 
-def option_items(options: Mapping[Any, Any], option: str) -> list[tuple[Any, Any]]:
-    """The keys and values of ``options`` that the plugin reads as ``option``, in order."""
-    return [(k, v) for k, v in options.items() if reads_as(k, option)]
-
-
 def option_value(options: Mapping[Any, Any], option: str) -> Any:
     """The value of ``option`` in ``options`` under the first key the plugin reads as it; None
     if absent."""

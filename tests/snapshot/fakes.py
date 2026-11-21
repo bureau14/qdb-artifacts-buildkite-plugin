@@ -19,7 +19,7 @@ import hashlib
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 
-from lib.objects import Listed, StoredObject
+from lib.objects import Listed
 from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
 from lib.snapshot.git import branch_of, branch_ref
@@ -42,9 +42,8 @@ class MemoryStore:
         self.objects[key] = body
         self.times[key] = EPOCH + datetime.timedelta(milliseconds=next(self.writes))
 
-    def get(self, key: str) -> StoredObject | None:
-        body = self.objects.get(key)
-        return None if body is None else StoredObject(body, self.times[key])
+    def get(self, key: str) -> bytes | None:
+        return self.objects.get(key)
 
     def put(self, key: str, body: bytes, content_type: str) -> None:
         self.write(key, body)

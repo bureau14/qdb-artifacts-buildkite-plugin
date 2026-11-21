@@ -133,8 +133,8 @@ def decode_manifest(body: bytes) -> Manifest:
 
 def read_manifest_at(store, step_folder: str) -> Manifest | None:
     """The manifest of a step's folder; None when no upload wrote one."""
-    stored = store.get(layout.manifest(step_folder))
-    return None if stored is None else decode_manifest(stored.body)
+    body = store.get(layout.manifest(step_folder))
+    return None if body is None else decode_manifest(body)
 
 
 def write_manifest(store, step_folder: str, m: Manifest) -> None:

@@ -94,7 +94,7 @@ def stored_records(edge: Edge, project: str, key: str) -> list[Record]:
     """Every failure record of ``project`` at ``key``."""
     listed = edge.store.list(layout.failure_records(edge.prefix, project, key))
     found = (edge.store.get(item.key) for item in listed)
-    return [decode_record(s.body.decode("utf-8"), project, key) for s in found if s is not None]
+    return [decode_record(b.decode("utf-8"), project, key) for b in found if b is not None]
 
 
 def create_record(edge: Edge, r: Record) -> None:

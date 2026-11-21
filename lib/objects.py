@@ -27,17 +27,11 @@ TAKEN = ("PreconditionFailed",)
 
 
 @dataclass(frozen=True)
-class StoredObject:
-    body: bytes
-    last_modified: datetime.datetime | None
-
-
-@dataclass(frozen=True)
 class Listed:
     """An object a listing names: its key, and when it was last written."""
 
     key: str
-    last_modified: datetime.datetime | None
+    last_modified: datetime.datetime
 
 
 def error_code(error: ClientError) -> str | None:
@@ -51,11 +45,11 @@ class Store:
     client: object
     bucket: str
 
-    def get(self, key: str) -> StoredObject | None:
-        """The object at key, or None when the bucket has none there."""
+    def get(self, key: str) -> bytes | None:
+        """The body of the object at key, or None when the bucket has none there."""
         try:
             response = self.client.get_object(Bucket=self.bucket, Key=key)
-            return StoredObject(response["Body"].read(), response.get("LastModified"))
+            return response["Body"].read()
         except ClientError as error:
             if error_code(error) in ABSENT:
                 return None
@@ -92,7 +86,7 @@ class Store:
             Bucket=self.bucket, Prefix=prefix, Delimiter="/"
         )
         return [
-            Listed(item["Key"], item.get("LastModified"))
+            Listed(item["Key"], item["LastModified"])
             for page in pages
             for item in page.get("Contents", [])
         ]

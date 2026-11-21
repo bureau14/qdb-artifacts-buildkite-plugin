@@ -579,7 +579,7 @@ class World:
 
     def latest(self, project: str, ref: str, folder: Folder) -> str | None:
         found = self.store.get(layout.latest_file("", project, ref, folder))
-        return None if found is None else found.body.decode()
+        return None if found is None else found.decode()
 
 
 # ---------------------------------------------------------------------------

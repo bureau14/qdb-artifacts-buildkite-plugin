@@ -21,7 +21,6 @@ and fetch the objects each its own way.
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -34,8 +33,6 @@ from .objects import destination_store
 from .rules import is_excluded, match_rules, parse_rules
 
 MASTER_REFS = ("refs/heads/master", "refs/heads/main")
-# A latest file without a time sorts before every other.
-NO_TIME = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -105,8 +102,8 @@ def walked_refs(ref: str, strict: bool) -> tuple[str, ...]:
 
 def named_key(store, where: str) -> str | None:
     """The key a latest file names; None when there is no such file."""
-    stored = store.get(where)
-    return None if stored is None else stored.body.decode("utf-8").strip()
+    body = store.get(where)
+    return None if body is None else body.decode("utf-8").strip()
 
 
 def made_step(
@@ -138,9 +135,7 @@ def newest_steps_at(
     two at one time, the key that sorts last.
     """
     listed = store.list(layout.latest_files(prefix, project, ref, platform))
-    named = [
-        (item.last_modified or NO_TIME, named_key(store, item.key), item.key) for item in listed
-    ]
+    named = [(item.last_modified, named_key(store, item.key), item.key) for item in listed]
     named = [(time, key, where) for time, key, where in named if key is not None]
     if not named:
         return []
@@ -263,10 +258,8 @@ def resolve_artifacts(
     name = f"The download of {project_id} ({variant})"
     if key is not None:
         resolved = keyed_step(store, prefix, project_id, key, folder, name)
-    elif git_ref is not None:
-        resolved = walk_named(store, prefix, project_id, git_ref, require_strict_ref_match, folder)
     else:
-        raise ArtifactsError(f"{name} names neither a git_ref nor a key")
+        resolved = walk_named(store, prefix, project_id, git_ref, require_strict_ref_match, folder)
     objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
         raise nothing_matched(name, patterns, exclude_patterns, [resolved])
