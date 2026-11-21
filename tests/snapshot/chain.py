@@ -507,6 +507,10 @@ class World:
             return self.gate(build, step, "resume", resume)
         return self.job(build, options)
 
+    def git_at(self, commit: str) -> FakeGit:
+        """Git in a checkout of ``commit``, whose questions join the world's (``git.asked``)."""
+        return dataclasses.replace(self.git, head=commit)
+
     def edge(self, build: Build) -> PlanEdge:
         return PlanEdge(
             store=self.store,
@@ -515,7 +519,7 @@ class World:
             checkout=FakeCheckout(self.hosting, build.commit),
             clock=self.clock,
             log=build.outputs.append,
-            git=self.git,
+            git=self.git_at(build.commit),
             pipelines=self.pipelines,
             plugin_commit=lambda: PLUGIN_COMMIT,
         )

@@ -3,9 +3,9 @@
 - ``MemoryStore``: ``objects.Store`` (get, put, create once, list one level in key
   order), each object with the time it was last written, one millisecond after
   the write before.
-- ``Hosting``: repositories as commits of files, branches and tags. ``FakeGit`` asks
-  it what ``git.Git`` asks git; ``FakeCheckout`` is one commit of it, as
-  ``git.Checkout``.
+- ``Hosting``: repositories as commits of files, each after the commit it follows,
+  branches and tags. ``FakeGit`` asks it what ``git.Git`` asks git; ``FakeCheckout``
+  is one commit of it, as ``git.Checkout``.
 - ``BuildAgent``: ``agent.Agent`` of one build, over ``AgentState``, the
   meta-data, step outcomes, uploads and annotations of every build.
 - ``FakePipelines``: ``planner.Pipelines``, Buildkite's facts by slug.
@@ -69,23 +69,41 @@ def as_bytes(content: str | bytes) -> bytes:
 
 
 class Hosting:
-    """Every project's repository at ``url(project)``: its branches, its tags and the files of
-    each commit."""
+    """Every project's repository at ``url(project)``: its branches, its tags, the files of
+    each commit, and the commit each follows (``parents``)."""
 
     def __init__(self) -> None:
         self.refs: dict[tuple[str, str], str] = {}
         self.trees: dict[str, dict[str, bytes]] = {}
+        self.parents: dict[str, str | None] = {}
         self.count = itertools.count(1)
+
+    def follows(self, project: str, branch: str | None) -> str | None:
+        """The commit a new commit on ``branch`` follows: the branch's head; master's when the
+        branch is new or there is none; none for the repository's first commit."""
+        own = None if branch is None else self.refs.get((url(project), branch_ref(branch)))
+        return own or self.refs.get((url(project), branch_ref("master")))
 
     def commit(
         self, project: str, files: Mapping[str, str | bytes], branch: str | None = "master"
     ) -> str:
-        """A new commit of ``files`` at the head of ``branch``, or on no branch; its id."""
+        """A new commit of ``files`` at the head of ``branch``, or on no branch, after the
+        commit it follows; its id."""
         commit = hashlib.sha1(f"{project} {branch} {next(self.count)}".encode()).hexdigest()
         self.trees[commit] = {path: as_bytes(c) for path, c in files.items()}
+        self.parents[commit] = self.follows(project, branch)
         if branch is not None:
             self.refs[(url(project), branch_ref(branch))] = commit
         return commit
+
+    def history(self, commit: str) -> list[str]:
+        """``commit`` and every commit before it, the newest first."""
+        found: list[str] = []
+        at: str | None = commit
+        while at is not None:
+            found.append(at)
+            at = self.parents[at]
+        return found
 
     def head(self, project: str, branch: str = "master") -> str:
         return self.refs[(url(project), branch_ref(branch))]
@@ -112,12 +130,18 @@ def files_under(
 
 @dataclasses.dataclass(frozen=True)
 class FakeGit:
-    """``git.Git`` over the hosting. No merge-base is known, so a root's release line is
-    ``master`` unless its branch is one. ``asked`` holds each question of ``commits_of``, as
-    ``(repository, refs)``, in order."""
+    """``git.Git`` over the hosting, run in a checkout of ``head``, as the plan step runs git in
+    its build's checkout. ``asked`` holds each question of ``commits_of``, as ``(repository,
+    refs)``, in order.
+
+    The time of the merge-base of ``head`` and a commit is the number of commits the two share:
+    every commit follows one, so the more they share, the newer their merge-base, and a branch
+    belongs to the release line it shares the most with, the one it left.
+    """
 
     hosting: Hosting
     asked: list = dataclasses.field(default_factory=list)
+    head: str = ""
 
     def commits_of(self, repository: str, refs: Sequence[str]) -> dict[str, str]:
         self.asked.append((repository, tuple(refs)))
@@ -133,8 +157,9 @@ class FakeGit:
         found = ((branch_of(r), c) for (u, r), c in self.hosting.refs.items() if u == repository)
         return {b: c for b, c in found if b is not None}
 
-    def merge_base_times(self, repository: str, commits: Sequence[str]) -> dict[str, None]:
-        return {c: None for c in commits}
+    def merge_base_times(self, repository: str, commits: Sequence[str]) -> dict[str, int | None]:
+        mine = set(self.hosting.history(self.head))
+        return {c: len(mine.intersection(self.hosting.history(c))) or None for c in commits}
 
 
 @dataclasses.dataclass(frozen=True)

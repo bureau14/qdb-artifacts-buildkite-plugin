@@ -14,20 +14,22 @@ platform.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 
 import pytest
 import yaml
-from chain import LOWER_NODES, MATRICES, SHAPED, STEP_IDS, above, below, folders, tree
+from chain import LOWER_NODES, MATRICES, SHAPED, SHAPES, STEP_IDS, above, below, folders, tree
 from fakes import url
 from world import paired
 
 from lib import layout
-from lib.forms import branch_ref, name_of, tag_ref
+from lib.forms import branch_of, branch_ref, name_of, tag_ref
 from lib.layout import Folder
 from lib.manifest import Build, Promoted, Uploaded, captured, promoted_by, write_manifest
 from lib.snapshot.buildkite import PipelineFacts
+from lib.snapshot.lines import is_release_line, release_line
 from lib.snapshot.records import RULE
 
 MASTER = "refs/heads/master"
@@ -680,139 +682,274 @@ def test_key_json_read_down_from_any_key_gives_every_commit_of_its_tree(worlds, 
         assert found["deps"] == sorted(found["deps"])
 
 
-# The name a first build runs under, with a pin of the node by its first dependent, on a commit
-# of its own: a story branch and no pin; the release line 3.14.x and a pin to it; a tag and a
-# pin to another tag, which no dependency of the node has. Each pin goes with the name under
-# which the plan asks git all that the node's own build asks, or that build cannot be planned:
-# a pin under a story branch makes the own build ask its dependencies a ref the plan did not
-# ask, and there the rule's no may come late, as the design accepts.
+# The first build's story branch; a branch that a pin names and that is neither a release line
+# nor the first build's, as a test runner's branch is; a release line; and a tag that a pin
+# names besides the first build's.
+X = "feature"
+PIN_BRANCH = "pinned"
+LINE = "3.14.x"
 PIN_TAG = "v0.9.0"
-NAMES_AND_PINS = (("feature", None), ("3.14.x", "3.14.x"), (TAG, PIN_TAG))
 
-# Where that name lies, on a commit of its own in each project: in the projects below the
-# node and the first build's own, at master's newest commits there, so that a started build
-# lacking the name takes them under another ref than the plan; in the node and every project
-# above it; in every project; or in the projects below the node and the first build's own.
-# A project without it lacks the branch, or carries the tag on master's newest commit, since
-# a build at a tag takes every dependency from that tag.
-SPREADS = (
-    "below-the-node-at-masters-commits",
-    "the-node-and-above",
-    "every-project",
-    "below-the-node",
-)
 
-# Whether the first build is played once, or first with the last step of the node's last
-# platform failing and then again, so that the node's build finds its other steps made.
+def branch_off(world, projects, branch: str, line: str = "master") -> None:
+    """Give each of ``projects`` the branch ``branch`` on a commit of its own after the newest
+    commit of ``line``, the line the branch left."""
+    for p in sorted(projects):
+        world.hosting.cut(p, branch, line)
+        world.commit(p, branch=branch)
+
+
+def tag_each(world, projects, tag: str) -> None:
+    """Put ``tag`` on a commit of its own in each of ``projects``."""
+    for p in sorted(projects):
+        world.tag(p, tag)
+
+
+def pin_dependencies(world, at, project: str, ref: str) -> None:
+    """Pin every dependency of ``project`` to ``ref`` in its templates, on a commit of master."""
+    world.projects[project].pins = {d: ref for d in at.graph[project]}
+    world.commit(project)
+
+
+def project_and_above(at) -> frozenset[str]:
+    """The project of ``at`` and every project of its tree above it, the first build's too."""
+    return ({at.node} | above(at.graph, at.node)) & tree(at.graph, at.root)
+
+
+# Each story puts names and pins in the repositories before the first build, a build of
+# ``at.root`` under the name the story returns; "the project" is ``at.node``. Every repository
+# has master, and each story makes a world that no other story makes.
+
+
+def x_only_in_the_first_build(world, at) -> str:
+    """X in the first build's repository alone."""
+    branch_off(world, {at.root}, X)
+    return X
+
+
+def x_in_the_first_build_and_below_the_project(world, at) -> str:
+    """X in the first build's repository and in those below the project, which lacks it."""
+    branch_off(world, below(at.graph, at.node) | {at.root}, X)
+    return X
+
+
+def x_in_the_project_and_above(world, at) -> str:
+    """X in the project and in every repository above it; those below it lack X."""
+    branch_off(world, project_and_above(at), X)
+    return X
+
+
+def x_in_every_project(world, at) -> str:
+    """X in every repository."""
+    branch_off(world, tree(at.graph, at.root), X)
+    return X
+
+
+def the_project_pins_its_dependencies_to_a_branch(world, at) -> str:
+    """The project's templates pin each of its dependencies to a branch of its own, neither a
+    release line nor X; X in the first build's repository alone."""
+    pin_dependencies(world, at, at.node, branch_ref(PIN_BRANCH))
+    branch_off(world, at.graph[at.node], PIN_BRANCH)
+    branch_off(world, {at.root}, X)
+    return X
+
+
+def the_project_pins_its_dependencies_to_a_release_line(world, at) -> str:
+    """The project's templates pin each of its dependencies to 3.14.x, on a commit of its
+    own; X in the first build's repository alone."""
+    pin_dependencies(world, at, at.node, branch_ref(LINE))
+    branch_off(world, at.graph[at.node], LINE)
+    branch_off(world, {at.root}, X)
+    return X
+
+
+def the_first_build_pins_its_dependencies_to_x(world, at) -> str:
+    """X in every repository, and the first build's templates pin each of its dependencies to
+    it."""
+    pin_dependencies(world, at, at.root, branch_ref(X))
+    branch_off(world, tree(at.graph, at.root), X)
+    return X
+
+
+def x_in_a_repository_without_the_first_builds_line(world, at) -> str:
+    """The first build's X left 3.14.x; the project's X left master, in a repository without
+    3.14.x; the repositories below it have 3.14.x and lack X."""
+    branch_off(world, {at.node}, X)
+    branch_off(world, below(at.graph, at.node) | {at.root}, LINE)
+    branch_off(world, {at.root}, X, LINE)
+    return X
+
+
+def x_left_another_line_in_the_project(world, at) -> str:
+    """The first build's X left master; the project's X left 3.14.x, which the repositories
+    below it have too, and they lack X."""
+    branch_off(world, {at.root}, X)
+    branch_off(world, below(at.graph, at.node) | {at.node}, LINE)
+    branch_off(world, {at.node}, X, LINE)
+    return X
+
+
+def x_at_masters_commits_below_the_project(world, at) -> str:
+    """X in the first build's repository, and cut at master's newest commit in those below the
+    project: a build that lacks X takes them from master, at the same commits."""
+    branch_off(world, {at.root}, X)
+    for p in sorted(below(at.graph, at.node)):
+        world.hosting.cut(p, X)
+    return X
+
+
+def a_first_build_on_a_release_line(world, at) -> str:
+    """3.14.x in the project and in every repository above it."""
+    branch_off(world, project_and_above(at), LINE)
+    return LINE
+
+
+def a_first_build_at_a_tag(world, at) -> str:
+    """The tag in every repository, and the project's templates pin each of its dependencies to
+    another tag, on a commit of its own."""
+    pin_dependencies(world, at, at.node, tag_ref(PIN_TAG))
+    tag_each(world, at.graph[at.node], PIN_TAG)
+    tag_each(world, tree(at.graph, at.root), TAG)
+    return TAG
+
+
+STORIES = {
+    story.__name__.replace("_", "-"): story
+    for story in (
+        x_only_in_the_first_build,
+        x_in_the_first_build_and_below_the_project,
+        x_in_the_project_and_above,
+        x_in_every_project,
+        the_project_pins_its_dependencies_to_a_branch,
+        the_project_pins_its_dependencies_to_a_release_line,
+        the_first_build_pins_its_dependencies_to_x,
+        x_in_a_repository_without_the_first_builds_line,
+        x_left_another_line_in_the_project,
+        x_at_masters_commits_below_the_project,
+        a_first_build_on_a_release_line,
+        a_first_build_at_a_tag,
+    )
+}
+
+# Whether the first build is played once, or first with the last step of the project's last
+# platform failing and then again, so that the project's build finds its other steps made.
 PLAYED = ("once", "after-a-failed-step")
 
-RULE_CASES = [
-    (name, spread, pin, played)
-    for (name, pin), spread, played in paired(NAMES_AND_PINS, SPREADS, PLAYED)
-]
+# How the own build of a build started for a dependency takes the projects below it, against
+# the plan: each at the same commit, one at another, or it cannot be planned.
+SAME, OTHER, NO_PLAN = "same", "other", "no-plan"
 
 
-def pin_the_node(world, at, pin: str) -> None:
-    """Pin the node of ``at`` to ``pin``, a branch or a tag on a commit of its own, in the
-    template of its first dependent."""
-    if pin == PIN_TAG:
-        world.tag(at.node, pin)
-        ref = tag_ref(pin)
-    else:
-        world.commit(at.node, branch=pin)
-        ref = branch_ref(pin)
-    consumer = first_consumer(at)
-    world.projects[consumer].pins[at.node] = ref
-    world.commit(consumer)
+@dataclasses.dataclass(frozen=True)
+class Own:
+    """The own build of a build started for a dependency: how it takes the projects below it,
+    and every ``(repository, ref)`` it asked git of another repository than its own."""
+
+    takes: str
+    asked: frozenset
 
 
-def named_projects(at, spread: str) -> frozenset[str]:
-    """The projects of the node's tree that carry the first build's name as ``spread`` says."""
-    graph, node, root = at.graph, at.node, at.root
-    if spread == "the-node-and-above":
-        return ({node} | above(graph, node)) & tree(graph, root)
-    if spread == "every-project":
-        return tree(graph, root)
-    return below(graph, node) | {root}
+def asked_refs(questions) -> frozenset[tuple[str, str]]:
+    """Every ``(repository, ref)`` of ``questions``, as ``FakeGit.asked`` holds them."""
+    return frozenset((r, ref) for r, refs in questions for ref in refs)
 
 
-def put_name(world, project: str, name: str, own_commit: bool) -> None:
-    """Put the branch or the tag ``name`` in the repository of ``project``: on a commit of its
-    own, or on master's newest commit."""
-    if name != TAG and own_commit:
-        world.commit(project, branch=name)
-    elif name != TAG:
-        world.hosting.cut(project, name)
-    elif own_commit:
-        world.tag(project, name)
-    else:
-        world.hosting.tag(project, name, world.hosting.head(project))
-
-
-def name_the_tree(world, at, name: str, spread: str) -> None:
-    """Put the first build's ``name`` on the projects of the node's tree as ``spread`` says."""
-    named = named_projects(at, spread)
-    own_commits = not spread.endswith("at-masters-commits")
-    for p in sorted(tree(at.graph, at.root)):
-        if p in named:
-            put_name(world, p, name, own_commits)
-        elif name == TAG:
-            put_name(world, p, name, False)
-
-
-def own_build_takes_the_same_commits(world, graph: dict, plan, build) -> bool:
-    """Whether a first build of the project of ``build`` at its name and commit, played now,
-    plans every project below it at the commit ``plan`` takes it at; not when that build
-    cannot be planned."""
+def own_build(world, graph: dict, plan, build) -> Own:
+    """The own build of ``build``: a first build of its project at its name and commit, played
+    now, against ``plan``."""
+    before = len(world.git.asked)
     own = world.build(build.project, build.branch, build.commit)
+    asked = frozenset(
+        (r, ref) for r, ref in asked_refs(world.git.asked[before:]) if r != url(build.project)
+    )
     if "snapshot-plan" not in world.agents.meta_data[own.id]:
-        return False
+        return Own(NO_PLAN, asked)
     projects = world.plan(own).projects
-    return all(
+    same = all(
         m in projects and projects[m].commit == plan.projects[m].commit
         for m in below(graph, build.project)
     )
+    return Own(SAME if same else OTHER, asked)
 
 
-@pytest.mark.parametrize("name, spread, pin, played", RULE_CASES, ids=str)
-def test_a_started_build_writes_its_branchs_latest_files_as_its_branchs_own_build(
-    worlds, graph_node, shape, name, spread, pin, played
+def line_of(world, project: str, planned) -> str | None:
+    """The release line of a build of ``project`` at the ref and commit ``planned`` gives it, as
+    its plan step finds it; none at a tag."""
+    branch = branch_of(planned.ref)
+    if branch is None:
+        return None
+    return release_line(world.git_at(planned.commit), url(project), branch)
+
+
+def assumed_line(world, plan, told, root: str, p: str) -> str | None:
+    """The release line the plan takes the own build of ``p`` to have: its branch when that is
+    a release line; on the first build's branch, the first build's line, when git told the plan
+    that the repository of ``p`` has a branch of that name; else none, at a tag or not known."""
+    at, first = plan.projects[p], plan.projects[root]
+    branch = branch_of(at.ref)
+    if branch is None or is_release_line(branch):
+        return branch
+    if at.ref != first.ref:
+        return None
+    line = line_of(world, root, first)
+    known = (url(p), branch_ref(line)) in told & world.hosting.refs.keys()
+    return line if known else None
+
+
+@pytest.mark.parametrize(
+    "story, shaped, played", paired(sorted(STORIES), sorted(SHAPES), PLAYED), ids=str
+)
+def test_a_started_build_writes_its_branchs_latest_files_only_as_its_own_build_would(
+    worlds, graph_node, story, shaped, played
 ):
     """Every build started for a dependency runs under the name of its ref, and leaves that
     branch's latest files, on every platform and of every step, through its promotes and
-    through its plan step for the steps it finds made, exactly when a first build of its
-    project at its ref and commit, played after, takes every project below it at the same
-    commit; else it leaves none, also when that build cannot be planned. The fakes know no
-    merge-base, so every branch leaves master, as the rule takes it. In every case the plan
-    asked git all that the own build asks, or the own build cannot be planned (the tag pin):
-    a pin under a story branch, under which the rule's no may come late, is not generated
-    (``NAMES_AND_PINS``)."""
+    through its plan step for the steps it finds made, or none. Its own build is a first build
+    of its project at its ref and commit, played after, over a git that knows which release
+    line each branch left.
+
+    A build that leaves them has an own build that takes every project below it at the commit
+    the plan takes it at, but in the one case the README names among its limits: on the first
+    build's branch, in a repository that has a branch of the first build's release line, which
+    the plan then takes as its line, where its branch left another line. A build that leaves
+    none has an own build that takes a project below it at another commit, or that cannot be
+    planned, or that asks what git did not tell the plan: a ref of another repository, or a
+    release line other than the one the plan takes it to have."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
-    matrix, step_ids = shape
+    matrix, step_ids = SHAPES[shaped]
     world = worlds(graph, matrix, step_ids)
-    if pin is not None and node != root:
-        pin_the_node(world, graph_node, pin)
-    name_the_tree(world, graph_node, name, spread)
+    name = STORIES[story](world, graph_node)
     if played == "after-a-failed-step":
         world.broken.add((node, Folder(matrix[-1], step_ids[-1])))
         world.build(root, name)
         world.broken.clear()
+    asked = len(world.git.asked)
 
     top = world.build(root, name)
 
     plan, every = world.plan(top), folders(matrix, step_ids)
+    told = asked_refs(world.git.asked[asked:])
     started = [b for b in world.builds if "SNAPSHOT_PLAN" in b.env]
     last = {b.project: b for b in started}
     left = {p: world.objects(f"{p}/refs/") for p in last}
-    writes = {p: own_build_takes_the_same_commits(world, graph, plan, b) for p, b in last.items()}
+    own = {p: own_build(world, graph, plan, b) for p, b in last.items()}
+    found = {p: line_of(world, p, plan.projects[p]) for p in last}
+    assumed = {p: assumed_line(world, plan, told, root, p) for p in last}
 
     def latest_files(p: str) -> dict[str, bytes]:
         ref, key = branch_ref(name_of(plan.projects[p].ref)), plan.projects[p].key
         return {layout.latest_file("", p, ref, f): key.encode() for f in every}
 
+    writes = {p for p in last if left[p]}
+    wrong = {p for p in writes if own[p].takes != SAME}
+    late = {p for p in last.keys() - writes if own[p].takes == SAME}
+    accepted = {p for p in last if assumed[p] is not None and found[p] != assumed[p]}
+    untold = {p for p in last if own[p].asked - told or found[p] != assumed[p]}
     assert top.state == "passed"
     assert [b.branch for b in started] == [name_of(plan.projects[b.project].ref) for b in started]
-    assert left == {p: latest_files(p) if writes[p] else {} for p in last}
+    assert left == {p: latest_files(p) if p in writes else {} for p in last}
+    assert wrong <= accepted
+    assert late <= untold
 
 
 # Where a name is put on the commits a chain built: a branch cut in every project of the tree,
