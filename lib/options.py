@@ -171,8 +171,8 @@ def job_branch():
 
 
 # Set by the trigger step that starts a build for a dependency. A variable of the build, not an
-# option of the plugin, so that a pipeline step which acts on its branch's name reads the same
-# answer as the promotes and the plan step.
+# option of the plugin: it travels as SNAPSHOT_PLAN and SNAPSHOT_NEEDS do, and needs nothing in
+# plugin.yml or in a job's configuration.
 BRANCH_BUILD = "SNAPSHOT_BRANCH_BUILD"
 
 

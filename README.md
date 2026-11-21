@@ -690,9 +690,7 @@ has four variables of this plugin:
 
 `SNAPSHOT_BRANCH_BUILD` is the build's answer for both writers of its latest
 files, so they agree also when the first build's plan was written again after
-the build was started. A pipeline step that acts on its branch's name, such as
-a push of an image under `master`, reads it too: a build started for a
-dependency runs under that name whether or not it speaks for the branch.
+the build was started.
 
 ### What a failed build shows
 
