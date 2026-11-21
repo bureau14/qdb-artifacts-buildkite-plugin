@@ -7,7 +7,8 @@ runner's shape. Its template has, per platform, one step per step id, which writ
 ``step_id``, downloads the same platform of each snapshot dependency without naming a
 step, and uploads. A step promotes what it uploaded, but one of a step id of ``CHECKED``,
 which a check step promotes that waits for it and names it in its promote block. A test
-may add a step that promotes a folder again (``Project.packaged``). The project's
+may add a step that promotes a folder again (``Project.packaged``), and downloads of the
+project's own steps at other branches (``Project.elsewhere``). The project's
 generator does what the runner's ``load_template`` does: the key
 ``<step id>-<platform>``, and the plugin's ``step``.
 
@@ -261,6 +262,7 @@ class Project:
     latest_step: list | None = None  # the steps those downloads name; None for every step
     pipeline_py: bytes = SHAPED
     extra: tuple = ()  # (dependency, variant, step) that every step downloads besides
+    elsewhere: tuple = ()  # (step, ref): every step downloads its own platform of it at that ref
     packaged: tuple = ()  # platforms whose build folder a second step promotes again
 
 
@@ -413,7 +415,9 @@ class World:
                 if v in self.projects[d].variants
             ]
             extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
-            return deps + extra + [entry(t, v, latest=True, step=p.latest_step) for t in p.latest]
+            own = [entry(name, v, ref, step=s) for s, ref in p.elsewhere]
+            latest = [entry(t, v, latest=True, step=p.latest_step) for t in p.latest]
+            return deps + extra + own + latest
 
         built = [
             build_step(name, v, entries(v), step=s, promotes=s not in CHECKED)

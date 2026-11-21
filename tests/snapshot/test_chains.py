@@ -515,6 +515,38 @@ def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_f
     assert all(len(world.builds_of(p)) == 1 for p in below(graph, root))
 
 
+# The branches at which every step of a root's pipeline also downloads its own project, as a
+# compatibility test does, besides the build's own branch.
+ELSEWHERE = ("3.14.x", "runner")
+
+
+def test_the_plan_steps_page_names_each_download_of_its_own_project_at_another_branch(
+    worlds, graph_root, shape
+):
+    """When every step of a root's pipeline also downloads its own project at other branches,
+    and the root pins a dependency to another branch, the page of the root's plan step names
+    each download of its own project at another branch, with the step, its platform and that
+    branch, on a line of its own, and no other download."""
+    graph, root = graph_root.graph, graph_root.node
+    matrix, step_ids = shape
+    world = worlds(graph, matrix, step_ids)
+    world.build(root)
+    pinned = graph[root][0]
+    world.commit(pinned, branch="3.14.x")
+    world.projects[root].pins[pinned] = "refs/heads/3.14.x"
+    world.projects[root].elsewhere = tuple((step_ids[0], branch_ref(b)) for b in ELSEWHERE)
+    world.commit(root)
+
+    top = world.build(root)
+
+    _, page = world.agents.annotations[top.id]["snapshot-plan"]
+    expected = {(f"{s}-{v}", v, b) for v in matrix for s in step_ids for b in ELSEWHERE}
+    naming = [line for line in page.splitlines() if any(k in line for k, _, _ in expected)]
+    assert top.state == "passed"
+    assert len(naming) == len(expected)
+    assert all(any(all(x in line for x in e) for line in naming) for e in expected)
+
+
 def cannot_give_a_snapshot(world, at, condition: str) -> str:
     """Make the node ``at`` names, or for a latest successful download its root, unable to give
     what the plan needs by ``condition``; the name the root builds under."""
