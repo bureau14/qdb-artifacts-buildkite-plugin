@@ -567,7 +567,6 @@ whose folders are made is replaced by one that names the build that made them.
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `SNAPSHOT_REBUILD=1`   | The root builds again, under a key of the root build's own; its dependencies are reused.                             |
 | `SNAPSHOT_REBUILD=all` | Every project of the tree builds again, each under such a key. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
-| `SNAPSHOT_DISABLE=1`   | The root runs its plain pipeline, without the gate (the runner reads it).                                            |
 
 A forced build serves its own chain: later builds of the same commits take the
 earlier keys. Its promotes under a branch's own name move that branch's latest
@@ -624,10 +623,8 @@ most once.
   that upload, download and promote run on every platform, as before.
 - A plan is one meta-data value; the plugin sets no limit on its size, and a
   value that the agent refuses fails the root with the agent's message.
-- A root whose pipeline is a selection (`QDB_PIPELINE_FILTER`, or a build
-  message that selects), one with `SNAPSHOT_DISABLE=1`, and one on a branch its
-  repository does not have (a release build on a tag) run their plain pipeline.
-  A chain node never does.
+- A build of only part of its pipeline (picked by `QDB_PIPELINE_FILTER`, or by
+  its build message) runs without the plan step.
 - In a build without a plan step, what a download of another project takes is
   decided when its job runs.
 - No repository may have a branch under `snapshot/`; nothing checks that.
