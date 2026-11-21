@@ -113,11 +113,14 @@ def files_under(
 @dataclasses.dataclass(frozen=True)
 class FakeGit:
     """``git.Git`` over the hosting. No merge-base is known, so a root's release line is
-    ``master`` unless its branch is one."""
+    ``master`` unless its branch is one. ``asked`` holds each question of ``commits_of``, as
+    ``(repository, refs)``, in order."""
 
     hosting: Hosting
+    asked: list = dataclasses.field(default_factory=list)
 
     def commits_of(self, repository: str, refs: Sequence[str]) -> dict[str, str]:
+        self.asked.append((repository, tuple(refs)))
         known = self.hosting.refs
         return {r: known[(repository, r)] for r in refs if (repository, r) in known}
 

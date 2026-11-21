@@ -32,6 +32,8 @@ from lib.snapshot.records import RULE
 
 MASTER = "refs/heads/master"
 TAG = "v1.0.0"
+# A name no repository has, as a Rebuild of a build of a deleted branch runs under.
+NEITHER = "gone"
 
 
 def compiled_since(world, done: int) -> set[tuple[str, Folder]]:
@@ -77,12 +79,11 @@ def held_responsible(world, root_build) -> set[tuple[str, object]]:
 def taken_at(world, graph: dict, named: str) -> tuple[str, dict[str, str]]:
     """The name a root of ``graph`` builds under, and the commit its plan takes each project at:
     the branch master, at its head; a tag every project carries, on a commit of its own; a name
-    no repository has, as a Rebuild of a build of a deleted branch runs under, at master's
-    head."""
+    no repository has, at master's head."""
     if named == "tag":
         return TAG, {p: world.tag(p, TAG) for p in sorted(graph)}
     heads = {p: world.hosting.head(p) for p in graph}
-    return ("master" if named == "branch" else "gone"), heads
+    return ("master" if named == "branch" else NEITHER), heads
 
 
 @pytest.mark.parametrize("named", ["branch", "tag", "neither"])
@@ -120,40 +121,48 @@ def test_a_first_build_builds_every_project_of_its_tree_once_dependencies_first(
     assert all(d.key == plan.projects[d.project].key for d in world.downloads)
 
 
-# The names of two builds of a root at one set of commits: a branch twice, or a branch and a
-# tag that every project carries on those commits, in either order.
+# The names of two builds of a root at one set of commits: a branch twice; a branch and a tag
+# that every project carries on those commits, in either order; or a branch, then a name no
+# repository has.
 TWICE = {
     "branch-then-branch": ("master", "master"),
     "branch-then-tag": ("master", TAG),
     "tag-then-branch": (TAG, "master"),
+    "branch-then-neither": ("master", NEITHER),
 }
 
 
 @pytest.mark.parametrize("twice", sorted(TWICE))
 def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, shape, twice):
-    """A root built again without a new commit, under the same name, or under a tag on the same
-    commits as a branch, either way round, is reused: it compiles nothing, triggers nothing,
-    uploads no pipeline, and its plan names the keys the first build made; it writes nothing
-    into the bucket but the latest files of its steps under its own name, naming its key."""
+    """A root built again without a new commit, under the same name, under a tag on the same
+    commits as a branch, either way round, or under a name that is neither a branch nor a tag,
+    is reused: it compiles nothing, triggers nothing, uploads no pipeline, and its plan names
+    the keys the first build made; it writes nothing into the bucket but the latest files of
+    its steps under its own name, naming its key, and none under a name that is neither. Each
+    of the two builds asks git about the root's repository once."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     for p in graph:
         world.hosting.tag(p, TAG, world.hosting.head(p))
     names = TWICE[twice]
+    asked = len(world.git.asked)
     first = world.build(root, names[0])
-    done, stored = len(world.compiled), dict(world.store.objects)
+    done, stored, between = len(world.compiled), dict(world.store.objects), len(world.git.asked)
 
-    again = world.build(root, names[1])
+    again = world.build(root, names[1], commit=first.commit)
 
     projects, every = tree(graph, root), folders(matrix, step_ids)
     key = world.plan(again).projects[root].key.encode()
-    pointed = {layout.latest_file("", root, branch_ref(names[1]), f): key for f in every}
+    written = every if names[1] != NEITHER else set()
+    pointed = {layout.latest_file("", root, branch_ref(names[1]), f): key for f in written}
+    questions = (world.git.asked[asked:between], world.git.asked[between:])
     assert again.state == "passed"
     assert (again.children, world.agents.uploads[again.id]) == ([], [])
     assert compiled_since(world, done) == set()
     assert world.store.objects == {**stored, **pointed}
     assert makers(world, again, projects, every) == makers(world, first, projects, every)
+    assert [[r for r, _ in q if r == url(root)] for q in questions] == [[url(root)]] * 2
 
 
 def test_a_new_commit_builds_exactly_its_node_and_the_nodes_above(worlds, graph_node, shape):
@@ -760,40 +769,49 @@ def test_a_node_runs_under_its_own_name_only_as_its_own_build(worlds, graph_node
 
 # Where a name is put on the commits a chain built: a branch cut in every project of the tree,
 # or in the node of the failed step and the projects above it, so that the node is not the
-# build its own pipeline would make for the branch, unless nothing lies below it; or a tag on
-# every project of the tree.
-CUTS = {
-    "every-project": "feature",
-    "the-node-and-above": "feature",
-    "a-tag-on-every-project": TAG,
+# build its own pipeline would make for the branch, unless nothing lies below it; or a tag put
+# on every project of the tree, which, once, moves off the node's commit while the node's
+# build waits at its gate, and is put back after the chain.
+PUT_ON = {
+    "every-project": ("feature", False),
+    "the-node-and-above": ("feature", False),
+    "a-tag-on-every-project": (TAG, False),
+    "a-tag-that-moves-while-the-node-waits": (TAG, True),
 }
 
 
-@pytest.mark.parametrize("cut", sorted(CUTS))
-def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, graph_node, cut):
+@pytest.mark.parametrize("put_on", sorted(PUT_ON))
+def test_a_build_at_its_names_commit_points_its_latest_files_at_its_key(worlds, graph_node, put_on):
     """After a chain in which one step of one platform of a node failed, a branch is cut, or a
     tag put, at the same commits, and the root's build under that name builds that step
-    again. Every build of that chain that runs under the name, at the commit git names for
-    it, leaves the name's latest file of every step of its project naming its key, of the
-    steps it found made as well as those it promoted; one under a snapshot/ name leaves none,
-    and neither does a project the chain did not build. Once the root's name has moved on to a
-    newer commit and built it, a build of the older commit under the name, which is reused,
-    leaves the root's latest files naming the newer key."""
+    again. Every build of that chain that runs under the name leaves the name's latest file of
+    every step it promoted naming its key, and of every step it found made when git names its
+    commit for the name as it starts, and not when the name moved off its commit while it
+    waited; one under a snapshot/ name leaves none, and neither does a project the chain did
+    not build. Once the root's name has moved on to a newer commit and built it, a build of
+    the older commit under the name, which is reused, leaves the root's latest files naming
+    the newer key."""
     graph, node, root = graph_node.graph, graph_node.node, graph_node.root
     matrix, step_ids = MATRICES["three"], STEP_IDS["build-notes"]
     world = worlds(graph, matrix, step_ids)
-    world.broken.add((node, Folder(matrix[-1], step_ids[-1])))
+    failed = Folder(matrix[-1], step_ids[-1])
+    world.broken.add((node, failed))
     world.build(root)
     world.broken.clear()
-    projects, name = tree(graph, root), CUTS[cut]
-    cut_in = projects if cut != "the-node-and-above" else ({node} | above(graph, node)) & projects
-    for p in cut_in:
+    projects, (name, moves) = tree(graph, root), PUT_ON[put_on]
+    node_and_above = ({node} | above(graph, node)) & projects
+    for p in node_and_above if put_on == "the-node-and-above" else projects:
         if name == TAG:
             world.hosting.tag(p, TAG, world.hosting.head(p))
         else:
             world.hosting.cut(p, name)
+    if moves:
+        world.at_gate = lambda b: world.tag(node, TAG) if b.project == node else None
 
     top = world.build(root, branch=name)
+    world.at_gate = lambda b: None
+    if moves:
+        world.hosting.tag(node, TAG, world.hosting.head(node))
     plan, every = world.plan(top), folders(matrix, step_ids)
     named = {p: {f: world.latest(p, branch_ref(name), f) for f in every} for p in projects}
     if name == TAG:
@@ -804,8 +822,14 @@ def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, g
     older = world.play(world.start(root, name, top.commit, {}))
 
     built = {b.project: b.branch for b in top.chain()}
+    waited = {node} - {root} if moves else set()
     expected = {
-        p: {f: plan.projects[p].key if built.get(p) == name else None for f in every}
+        p: {
+            f: plan.projects[p].key
+            if built.get(p) == name and (p not in waited or f == failed)
+            else None
+            for f in every
+        }
         for p in projects
     }
     snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
