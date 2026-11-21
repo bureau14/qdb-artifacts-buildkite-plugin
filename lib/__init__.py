@@ -14,6 +14,7 @@ module can be read, and tested, with nothing below it:
     config      StoreConfig: which store, read from the environment, then SSM
     clients     boto3 clients for that store, and the credentials they use
     layout      every object key the plugin reads or writes, and the step id
+    forms       the forms of a ref and of a time
     key         the key of a build, and key.json, the canonical JSON it is a hash of
     objects     the store of the destination; its small objects: get, put, create once, list
     rules       file patterns: "archive!entries", excludes
@@ -21,10 +22,9 @@ module can be read, and tested, with nothing below it:
     resolve     which steps a download takes: at a given key, or by the walk over latest files
     transfer    many files at once, each with its own client and retries
     extract     unpack an archive, refusing tar members that leave the target
-    annotation  a step's files on the build page
+    annotation  on the build page, a step's files and the build each download took
     upload      select files, capture them and their manifest, annotate
-    download    an entry's steps, their files, transfer, extract
-    forms       the forms of a branch's ref and of a time
+    download    an entry's steps, their files, transfer, extract, annotate
     promote     promote a step's folder once, and write the branch's latest file
     options     the plugin's options as a job sees them in its environment
     snapshot/   the planning of snapshot dependencies; only the gate steps import it

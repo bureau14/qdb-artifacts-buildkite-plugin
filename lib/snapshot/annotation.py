@@ -3,8 +3,9 @@
 Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 
 - the plan (``plan_annotation``): the tree of a node, each node with its
-  commit, ref, key and the branch it runs under; for a build that is reused,
-  also the builds that made its steps (``reused_annotation``);
+  commit, ref, key and the branch it runs under, and each download of the
+  root's own project at another ref, which the key leaves out; for a build
+  that is reused, also the builds that made its steps (``reused_annotation``);
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
+from ..forms import name_of
 from ..layout import Folder
 from ..manifest import Build
 from .plan import Plan, short_commit, trigger_label
@@ -77,10 +79,22 @@ def tree_lines(plan: Plan, project: str) -> list[str]:
     return lines
 
 
-def plan_annotation(plan: Plan, project: str) -> str:
-    """The plan as ``project`` builds it: the root's branch and rebuild setting, and its tree."""
+def outside_line(project: str, step: str, platform: str, ref: str) -> str:
+    """A download of the build's own project at another ref, which the key leaves out."""
+    return (
+        f"not in the key: step {step} takes {project} {platform} of branch {name_of(ref)}; its "
+        "job reads that branch's latest build when it runs"
+    )
+
+
+def plan_annotation(plan: Plan, project: str, outside: Sequence[tuple[str, str, str]]) -> str:
+    """The plan as ``project`` builds it: the root's branch and rebuild setting, its tree, and
+    each download of ``outside``, ``(step, platform, ref)`` of the project's own at another
+    ref."""
     context = f"branch {plan.context}, rebuild {plan.rebuild}"
-    return f"{plan_heading(plan, project)}\n\n{fenced([context, *tree_lines(plan, project)])}"
+    left_out = [outside_line(project, *o) for o in outside]
+    lines = [context, *tree_lines(plan, project), *left_out]
+    return f"{plan_heading(plan, project)}\n\n{fenced(lines)}"
 
 
 def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) -> str:
@@ -90,7 +104,7 @@ def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) 
     """
     made = [f"{f} made by build {b.number} {b.url}" for f, b in sorted(builds.items())]
     heading = f"`{project}` is reused: every step it was asked for is made, so nothing is built"
-    return f"{heading}\n\n{fenced(made)}\n\n{plan_annotation(plan, project)}"
+    return f"{heading}\n\n{fenced(made)}\n\n{plan_annotation(plan, project, ())}"
 
 
 # ---------------------------------------------------------------------------

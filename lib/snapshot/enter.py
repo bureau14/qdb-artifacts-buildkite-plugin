@@ -72,6 +72,7 @@ from .document import (
     latest_dependencies,
     load_document,
     needed_folders,
+    outside_the_key,
     planned,
     promote_entries,
     promotions,
@@ -254,7 +255,8 @@ class Placed:
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
     """3, a root: ask git where its name is, read the keys of its latest successful downloads,
-    make the plan (sections 3 and 4), write it, annotate the build with it.
+    make the plan (sections 3 and 4), write it, annotate the build with it and with the
+    downloads of its own project at another ref, which the key leaves out.
 
     A download that finds no latest file, and a plan that cannot be made, fail
     the build with their message, before anything runs.
@@ -278,7 +280,8 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Placed:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
     edge.agent.meta_data_set(PLAN, encode_plan(p))
-    edge.agent.annotate(plan_annotation(p, job.project), "info", PLAN_CONTEXT)
+    outside = outside_the_key(generated.doc, job.project, branch_ref(job.branch))
+    edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
     return Placed(p, named)
 
 

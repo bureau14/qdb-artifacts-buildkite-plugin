@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import platform
+import re
 import subprocess
 import sys
 import tarfile
@@ -38,7 +39,7 @@ from world import (
 )
 
 from lib import layout
-from lib.key import KeyJson, encode_key_json, key_of
+from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import (
     Build,
@@ -384,6 +385,16 @@ TRANSFERS = [
 PRODUCERS = ("its-plan-step", "each-job")
 
 
+def names_each(text: str, taken: set[tuple[str, str]]) -> bool:
+    """Whether ``text`` names each step of ``taken``, ``(key, URL of the build whose files it
+    holds)``: its key, the key's commit apart from it, and that build."""
+
+    def alone(commit: str) -> bool:
+        return re.search(rf"(?<![0-9a-f-]){commit}(?![0-9a-f-])", text) is not None
+
+    return all(key in text and alone(commit_of(key)) and url in text for key, url in taken)
+
+
 @pytest.mark.parametrize(
     "payload, naming, transfer, ref, producer, backend",
     paired(PAYLOADS, NAMINGS, TRANSFERS, REFS, PRODUCERS, BACKENDS),
@@ -397,7 +408,9 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     successful of a ref, by name, as a list, or without a step) gets exactly the files of
     those steps at the keys they name, at the paths the options name, and nothing else there;
     an entry of a branch whose latest files name a key at which no step is promoted gets every
-    step of master's newest key; the uploads annotate their build unless told not to."""
+    step of master's newest key. Its job's log and its build page name each step it took with
+    its key, the key's commit and the build whose files it took. The uploads annotate their
+    build unless told not to."""
     store.put_all(history(payload, ref))
     maker = jobs("widget", SUBJECT, ref)
     for s in STEPS:
@@ -438,7 +451,8 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
         "pre-command"
     )
 
-    annotations = agent.files(maker.env["BUILDKITE_BUILD_ID"], "annotations")
+    annotations = agent.files(maker.env["BUILDKITE_BUILD_ID"], "annotations/artifacts")
+    shown = agent.files(consumer.env["BUILDKITE_BUILD_ID"], "annotations/artifacts-downloads")
     expected = {
         rel: data
         for s, number in sorted(naming.taken.items())
@@ -449,11 +463,17 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
         for s in STEPS
         for rel, data in payload.arrives(stamp(EARLIER, MASTER, "macos", s), s).items()
     }
+    taken = {
+        (key if n == SUBJECT else made_up_key("widget", n, ref), build_url("widget", n))
+        for n in naming.taken.values()
+    } | {(made_up_key("widget", EARLIER, MASTER), build_url("widget", EARLIER))}
     assert [o.code for o in (*outcomes, fetched)] == [0, 0, 0], [
         o.output for o in (*outcomes, fetched)
     ]
     assert consumer.files("in") == expected
     assert consumer.files("in-macos") == macos
+    assert names_each(fetched.stderr, taken)
+    assert len(shown) == 1 and names_each(shown[0], taken)
     assert bool(annotations) == transfer.annotates
 
 

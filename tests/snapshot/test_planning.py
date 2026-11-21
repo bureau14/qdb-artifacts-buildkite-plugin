@@ -1,6 +1,7 @@
 """The plan's inputs and outputs, without builds: the key, the declaration a template makes,
-the step ids the plan carries, and the rewrite that writes the keys of every step a download
-of another project takes.
+the step ids the plan carries, the rewrite that writes the keys of every step a download of
+another project takes, and what the plan step's page says of the downloads the key leaves
+out.
 
 Graphs and templates come from ``chain.py``; the five sanitised real pipelines of
 ``fixtures/`` are read as their repositories would commit them.
@@ -30,6 +31,7 @@ from chain import (
 from fakes import url
 from world import GIT_IDENTITY, git
 
+from lib.snapshot.annotation import plan_annotation
 from lib.snapshot.declaration import (
     LATEST_SUCCESSFUL,
     SNAPSHOT,
@@ -43,6 +45,7 @@ from lib.snapshot.document import (
     latest_dependencies,
     latest_download,
     load_document,
+    outside_the_key,
     planned,
 )
 from lib.snapshot.git import RealGit, run_command
@@ -306,6 +309,39 @@ def test_the_rewrite_writes_the_key_of_every_step_a_download_of_another_project_
             assert e["KEYS"] == {s.upper(): keys[s] for s in steps}
             assert e["VARIANT"] == generated_entry["VARIANT"]
             assert not set(found) & set(e)
+
+
+# ---------------------------------------------------------------------------
+# The plan step's page
+# ---------------------------------------------------------------------------
+
+# The refs at which a pipeline downloads its own project's build step: the build's own, which
+# its key holds, and two other branches, which it leaves out.
+OWN_REFS = {"{git_ref}": None, "refs/heads/3.14.x": "3.14.x", "refs/heads/runner": "runner"}
+PLATFORMS = ("linux", "macos")
+
+
+def test_the_plan_steps_page_names_each_download_of_its_own_project_at_another_branch(
+    worlds, graph_root
+):
+    """The page of a root's plan step names each download its pipeline makes of its own
+    project at another branch, with its step, its platform and that branch, on a line of its
+    own; and no download of its own project at the build's own ref."""
+    graph, root = graph_root.graph, graph_root.node
+    world = worlds(graph)
+    (plan,) = [p for p in plans(world, 1) if p.first.project == root]
+    steps = [
+        build_step(root, v, [entry(root, v, ref, step="build") for ref in OWN_REFS])
+        for v in PLATFORMS
+    ]
+    doc = load_document(generated(yaml.safe_dump({"steps": steps}), MASTER))
+
+    page = plan_annotation(plan, root, outside_the_key(doc, root, MASTER)).splitlines()
+
+    expected = {(f"build-{v}", v, b) for v in PLATFORMS for b in OWN_REFS.values() if b}
+    naming = [line for line in page if any(f"build-{v}" in line for v in PLATFORMS)]
+    assert len(naming) == len(expected)
+    assert all(any(all(x in line for x in e) for line in naming) for e in expected)
 
 
 # ---------------------------------------------------------------------------

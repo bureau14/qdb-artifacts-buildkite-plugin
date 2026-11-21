@@ -19,7 +19,9 @@ download and a caller of the library resolve through these same functions,
 and fetch the objects each its own way; the plan step of a first build reads
 its latest successful downloads through the walk's own finders
 (``named_on_first_ref``, ``newest_on_first_ref``), and says itself what it did
-not find.
+not find. Before a step's files are fetched, the log says which build they
+come from (``log_step``): the branch and latest file the walk read, the key,
+the key's commit, and the build that promoted the step.
 """
 
 from __future__ import annotations
@@ -29,9 +31,11 @@ from dataclasses import dataclass
 
 from . import layout
 from .errors import ArtifactsError
+from .forms import name_of
+from .key import commit_of
 from .layout import Folder
-from .log import fmt_size, log
-from .manifest import Manifest, is_made, read_manifest_at
+from .log import log
+from .manifest import Build, Manifest, is_made, read_manifest_at
 from .objects import destination_store
 from .rules import is_excluded, match_rules, parse_rules
 
@@ -42,8 +46,8 @@ MASTER_REFS = ("refs/heads/master", "refs/heads/main")
 class ResolvedStep:
     """One step a download takes: its project, folder and key, where it lies, its manifest.
 
-    ``latest`` is the latest file the walk found it through; None when its key
-    was given.
+    ``ref`` is the ref whose latest file the walk found it through, ``latest``
+    that file; both None when its key was given.
     """
 
     project: str
@@ -51,7 +55,18 @@ class ResolvedStep:
     key: str
     location: str
     manifest: Manifest
+    ref: str | None = None
     latest: str | None = None
+
+
+def made_by(step: ResolvedStep) -> tuple[str, Build]:
+    """Whose files a download takes of ``step``: ``promoted`` and the build that promoted
+    them; a step of the own build that a later step promotes is captured when it is read, and
+    then ``uploaded`` and the build that uploaded them."""
+    m = step.manifest
+    if m.promoted is not None:
+        return "promoted", m.promoted.build
+    return "uploaded", m.uploaded.build
 
 
 @dataclass(frozen=True)
@@ -110,12 +125,13 @@ def named_key(store, where: str) -> str | None:
 
 
 def made_step(
-    store, prefix: str, project: str, key: str, folder: Folder, latest: str
+    store, prefix: str, project: str, key: str, folder: Folder, ref: str, latest: str
 ) -> ResolvedStep | None:
-    """The step at ``key`` that a latest file named, when its manifest says promoted."""
+    """The step at ``key`` that the latest file ``latest`` of ``ref`` named, when its manifest
+    says promoted."""
     location = layout.step_folder(prefix, project, key, folder)
     m = read_manifest_at(store, location)
-    return ResolvedStep(project, folder, key, location, m, latest) if is_made(m) else None
+    return ResolvedStep(project, folder, key, location, m, ref, latest) if is_made(m) else None
 
 
 def named_step_at(
@@ -125,7 +141,7 @@ def named_step_at(
     that is made."""
     where = layout.latest_file(prefix, project, ref, folder)
     key = named_key(store, where)
-    return None if key is None else made_step(store, prefix, project, key, folder, where)
+    return None if key is None else made_step(store, prefix, project, key, folder, ref, where)
 
 
 def newest_steps_at(
@@ -144,7 +160,9 @@ def newest_steps_at(
         return []
     newest = max((time, key) for time, key, _ in named)[1]
     found = (
-        made_step(store, prefix, project, key, Folder(platform, where.rsplit("/", 1)[1]), where)
+        made_step(
+            store, prefix, project, key, Folder(platform, where.rsplit("/", 1)[1]), ref, where
+        )
         for _, key, where in named
         if key == newest
     )
@@ -234,14 +252,16 @@ def nothing_matched(name: str, patterns, exclude_patterns, steps: Sequence[Resol
     )
 
 
-def log_step(name: str, step: ResolvedStep, objects: Sequence[ResolvedArtifact]) -> None:
-    """Say which key a download takes a step at, how it came to it, and what it takes."""
+def log_step(name: str, step: ResolvedStep) -> None:
+    """Say which build a download takes a step of: the branch and latest file the walk read,
+    when it read one; the key; the key's commit; the build its manifest names."""
     log(f"{name}, step {step.folder.step}:")
-    if step.latest is not None:
-        log(f"  latest file = {step.latest}")
-    log(f"  key         = {step.key}")
-    size = sum(o.size for o in objects)
-    log(f"  takes       = {len(objects)} of {len(step.manifest.files)} file(s), {fmt_size(size)}")
+    if step.ref is not None:
+        log(f"  branch   = {name_of(step.ref)}, latest file {step.latest}")
+    log(f"  key      = {step.key}")
+    log(f"  commit   = {commit_of(step.key)}")
+    by, build = made_by(step)
+    log(f"  {by} = build {build.number} {build.url}")
 
 
 # ---------------------------------------------------------------------------
@@ -282,5 +302,5 @@ def resolve_artifacts(
     objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
         raise nothing_matched(name, patterns, exclude_patterns, [resolved])
-    log_step(name, resolved, objects)
+    log_step(name, resolved)
     return store.bucket, resolved, objects

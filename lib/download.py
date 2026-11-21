@@ -4,7 +4,8 @@ An entry takes one or several steps of a project's platform; ``resolve``
 finds each at its key. "No file matched" is judged over the whole entry: it
 fails only when no step gives a file. Steps are fetched in the order of their
 ids, so of two files of one path the last stays. The files travel through
-``transfer``, as uploads do.
+``transfer``, as uploads do. The log names, before its files, the build each
+step is taken of; after the last entry the build page names them all.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import transfer
+from .annotation import annotate_downloads
 from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .extract import extract_local_archive
@@ -183,7 +185,8 @@ def resolved_steps(store, prefix, e: Entry, name: str):
 
 
 def download(entries, dirs_to_clean, parallel=4, concurrency=32):
-    """Download every entry: its steps, the files of each that match, fetched step by step."""
+    """Download every entry: its steps, the files of each that match, fetched step by step;
+    then annotate the build with every step taken."""
     for d in dirs_to_clean:
         if d.exists():
             log(f"Cleaning {d}")
@@ -193,6 +196,7 @@ def download(entries, dirs_to_clean, parallel=4, concurrency=32):
     cfg = load_store_config(ssm)
     auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     store, prefix = destination_store(cfg, auth)
+    shown = []
     for n, e in enumerate(entries, start=1):
         name = entry_name(n, e.project, e.variant)
         steps = resolved_steps(store, prefix, e, name)
@@ -201,8 +205,10 @@ def download(entries, dirs_to_clean, parallel=4, concurrency=32):
         if not any(objects for _, objects in taken):
             raise nothing_matched(name, e.files, e.exclude, steps)
         for s, objects in taken:
-            log_step(name, s, objects)
+            log_step(name, s)
             if objects:
                 fetch(
                     cfg, auth, store.bucket, objects, e.output_dir, e.extract, parallel, concurrency
                 )
+        shown.extend(steps)
+    annotate_downloads(shown)
