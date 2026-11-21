@@ -489,11 +489,20 @@ planned all the same; no project can take it as a snapshot dependency.
   plan step like a template that does not parse.
 - Every download of another project that its generated pipeline makes is in a
   committed template, with the same type; the `git_ref` of a snapshot download
-  is the build's own ref or a pin written in a committed template; and no key
-  names the plugin another way (`Bureau14/qdb-artifacts`, say). The plan step
-  fails a build whose pipeline breaks this rule, and names the step and why.
+  is the build's own ref or a pin written in a committed template; every
+  upload and promote names a step id; and no key names the plugin another way
+  (`Bureau14/qdb-artifacts`, say). The plan step fails a build whose pipeline
+  breaks this rule, and names the step and why.
+- Every step id its pipeline promotes is one its templates write as
+  `step_id`, since the builds that depend on it read its steps from them; one
+  step promotes each step id of a platform.
+- A snapshot download without `step` takes a dependency whose templates
+  promote step ids; of one that promotes none, it names the steps or goes.
 - A project that others take as a snapshot dependency holds no latest
   successful dependency itself.
+
+The plan step fails a build that breaks one of these, with a failure record of
+reason `rule`, before anything is built.
 
 A dependency that cannot give a snapshot fails the plan of the root before
 anything is triggered. The message names who needs it, which condition failed
@@ -502,6 +511,12 @@ successful dependency. A dependency whose ref its repository does not have
 fails the plan the same way, without a way out. A template of a dependency
 that does not parse fails the plan step with an error that names the project
 and the file.
+
+A build started for a dependency that is asked for a step one of its platforms
+does not make refuses it before anything is built, and its failure record
+names the steps refused and what it makes on that platform. The build that
+asked fails and names the template of its entry, the steps the entry takes,
+and the list to write in it, as `step: [build]`; so does the root.
 
 ### How a build runs
 
@@ -569,7 +584,8 @@ ends with how to retry. For one failed build: "To retry: retry the failed job
 in `<pipeline>` `<number>`. When it passes, start a new build of `<root
 pipeline>`. Everything that passed is reused." For several it names each; with
 none it says to start a new build of the root pipeline when the cause is
-fixed.
+fixed. A build that failed before it built, for its generator, its rule or a
+step it does not make, is no job to retry: a retry cures none of these.
 
 If a snapshot fails, it fails everywhere: a step whose job hard failed fails,
 without compiling it again, every build of that key in a chain whose root

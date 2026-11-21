@@ -133,6 +133,18 @@ def plugin_block(config: Any, block: str) -> dict[str, Any] | None:
     return found if isinstance(found, dict) else None
 
 
+def named_variant(options: Mapping[Any, Any]) -> str | None:
+    """The platform an entry or a block names (``variant``), as text; None when it names none.
+
+    The agent hands a list or a mapping over as variables of other names, so
+    the plugin reads no platform from one.
+    """
+    v = option_value(options, VARIANT)
+    if v is None or v == "" or isinstance(v, (dict, list)):
+        return None
+    return str(v)
+
+
 def named_step(options: Any) -> str | None:
     """The step id a mapping of options names (``step``), as text; None when it names none."""
     v = option_value(options, STEP) if isinstance(options, dict) else None

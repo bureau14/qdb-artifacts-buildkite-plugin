@@ -11,7 +11,8 @@ writes that id as ``step_id``.
 ``read_declaration`` reads both from the files of one commit without running
 anything, for the build's own checkout and for another repository's commit
 alike; reading the files is the caller's business. ``rule_violations``
-compares the download entries of a generated pipeline with that declaration.
+compares the download entries of a generated pipeline with that declaration,
+and holds every upload and promote of it to a step id.
 Both read the plugin's configuration by its structure (the ``configuration``
 module), so what the reader counts and what the rule checks are one notion.
 
@@ -36,9 +37,12 @@ from .configuration import (
     PLUGIN,
     PROJECT_ID,
     PROMOTE,
+    UPLOAD,
+    block_step,
     download_entries,
     misnamed_plugins,
     named_step,
+    named_variant,
     option_value,
     plugin_block,
     plugin_configurations,
@@ -96,8 +100,9 @@ class TemplateError(ValueError):
 class StepDownloads:
     """The download entries of one step of a pipeline, and how messages name the step.
 
-    ``problems`` are the keys of the step that name the plugin another way
-    (``step_downloads``).
+    ``problems`` are what of the step's plugin configuration breaks the rule
+    beside its entries: a key that names the plugin another way, an upload or
+    promote without a step id (``step_downloads``).
     """
 
     step: str
@@ -126,6 +131,12 @@ def declared_entries(d: Declaration, t: str) -> tuple[Entry, ...]:
 def declared_pins(d: Declaration, project: str) -> frozenset[str]:
     """The pins ``d`` declares for ``project``; more than one is the planner's error to report."""
     return frozenset(e.pin for e in d.entries if e.project == project and e.pin is not None)
+
+
+def declared_path(d: Declaration, project: str, t: str) -> str:
+    """The template in which ``d`` declares ``project`` as a dependency of type ``t``, the
+    first found, for messages that name the entry to change."""
+    return next(e.path for e in d.entries if e.project == project and e.type == t)
 
 
 def has_snapshot(d: Declaration) -> bool:
@@ -208,10 +219,42 @@ def step_name(step: Any, position: int) -> str:
     return step_key(step) or step_label(step) or f"step {position}"
 
 
+def step_id_problem(config: Any, block: str) -> str | None:
+    """Why the ``upload`` or ``promote`` block of an artifacts configuration breaks the rule:
+    it names a platform and no step id, or one that is not a step id, so no job and no plan
+    step knows the folder it makes."""
+    b = plugin_block(config, block)
+    platform = None if b is None else named_variant(b)
+    if platform is None:
+        return None
+    value = block_step(config, block)
+    if value is None:
+        act = "uploads" if block == UPLOAD else "promotes"
+        return (
+            f"{act} {platform} and names no step id. Its template writes step_id in place of "
+            "key, with the .buildkite/tools of that change (merge master)."
+        )
+    if not is_step_id(value):
+        return (
+            f'{value} is not a step id. A step id is lower-case letters, digits and "_", and '
+            "starts with a letter."
+        )
+    return None
+
+
+def step_id_problems(step: Any) -> list[str]:
+    """Why each upload or promote block of ``step`` breaks the rule (``step_id_problem``)."""
+    configs = plugin_configurations(step)
+    found = (step_id_problem(c, b) for c in configs for b in (UPLOAD, PROMOTE))
+    return [p for p in found if p is not None]
+
+
 def step_downloads(step: Any, name: str) -> StepDownloads:
     """The download entries of ``step``, which messages name ``name``, and its plugin problems:
-    the keys that name the plugin another way (``misnamed_plugins``)."""
-    return StepDownloads(name, tuple(download_entries(step)), tuple(misnamed_plugins(step)))
+    the keys that name the plugin another way (``misnamed_plugins``), and the upload and
+    promote blocks without a step id (``step_id_problems``)."""
+    problems = (*misnamed_plugins(step), *step_id_problems(step))
+    return StepDownloads(name, tuple(download_entries(step)), problems)
 
 
 def pipeline_downloads(doc: Any) -> list[StepDownloads]:
@@ -410,11 +453,11 @@ def rule_violations(
     ``downloads`` comes from ``pipeline_downloads``; ``own`` is the pipeline's
     own project and ``own_ref`` the build's own git ref, in the form the
     generator writes it (``refs/heads/<branch>``). A step's plugin problems
-    are violations. Every entry of another project must have its project
-    declared in ``declaration`` with the same type; a snapshot entry also a
-    git ref that is ``own_ref`` or a pin declared for that project. The
-    declaration may hold more than the pipeline uses. Each violation is
-    reported once, in order.
+    (``step_downloads``) are violations. Every entry of another project must
+    have its project declared in ``declaration`` with the same type; a
+    snapshot entry also a git ref that is ``own_ref`` or a pin declared for
+    that project. The declaration may hold more than the pipeline uses. Each
+    violation is reported once, in order.
     """
 
     def of_step(sd: StepDownloads) -> list[Violation]:

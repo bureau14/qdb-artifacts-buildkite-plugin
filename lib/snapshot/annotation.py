@@ -8,9 +8,11 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
 - a refusal or a plan error (``message_annotation``, ``refusal_annotation``):
   what failed before anything was built, and the message's plain lines;
 - a failure (``failure_annotation``): a failure record, followed down the
-  records of its causes to the builds that failed, and how to retry;
-  ``caused_annotation`` is the same text for a build that dependencies left
-  without steps it needs, also one without a record of its own.
+  records of its causes to the builds that failed, and how to retry; a
+  dependency that refused steps it does not make is shown with the entry to
+  change (``refused_line``); ``caused_annotation`` is the same text for a
+  build that dependencies left without steps it needs, also one without a
+  record of its own.
 
 A step of a platform is shown as its folder, ``<platform>/<step id>``.
 
@@ -154,10 +156,29 @@ def shown_folders(folders: Iterable[Folder]) -> str:
     return ", ".join(map(str, folders))
 
 
-def cause_line(plan: Plan, c: Cause, depth: int, nested: bool) -> str:
+def which_build(plan: Plan, c: Cause) -> str:
+    """The build of a cause's dependency: its project, commit and key."""
     n = plan.projects.get(c.project)
     commit = short_commit(n.commit) if n is not None else "a commit not in the plan"
-    which = f"{c.project} @ {commit} ({c.key})"
+    return f"{c.project} @ {commit} ({c.key})"
+
+
+def refused_line(plan: Plan, c: Cause, r: Record) -> str:
+    """What leads to the remedy of a dependency whose build ``r`` refused steps it does not
+    make: what it does not make, what it makes on that platform, and the entry to change."""
+    folders = shown_folders(sorted(x.folder for x in r.refused))
+    makes = {x.folder.platform: x.promotes for x in r.refused}
+    made = "; ".join(f"for {p} it makes {', '.join(ids) or 'nothing'}" for p, ids in makes.items())
+    takes = "every step its templates name" if c.takes is None else ", ".join(c.takes)
+    needed = ", ".join(sorted(frozenset.intersection(*map(frozenset, makes.values()))))
+    return (
+        f"{which_build(plan, c)} does not make {folders}; {made}. The entry of {c.project} in "
+        f"{c.template} takes {takes}. Write in it the steps it needs, as step: [{needed}]."
+    )
+
+
+def cause_line(plan: Plan, c: Cause, depth: int, nested: bool) -> str:
+    which = which_build(plan, c)
     missing = shown_folders(c.missing)
     if nested:
         return f"{INDENT * depth}caused by {which}, which has no {missing}."
@@ -175,12 +196,16 @@ def cause_part(
     shown: frozenset[str],
     nested: bool,
 ) -> Part:
-    """A cause, and the record of its key followed down; a record shown before is named."""
-    line = cause_line(plan, c, depth, nested)
+    """A cause, and the record of its key followed down; a record shown before is named. A
+    cause whose dependency refused steps shows what leads to the remedy."""
+    r = records.get(c.key)
+    if c.template is not None and r is not None:
+        line = f"{INDENT * depth}{'caused by ' if nested else ''}{refused_line(plan, c, r)}"
+    else:
+        line = cause_line(plan, c, depth, nested)
     below = INDENT * (depth + 1)
     if c.key in shown:
         return [line, f"{below}its record is shown above"], [], shown
-    r = records.get(c.key)
     if r is None:
         return [line, f"{below}it left no record"], [], shown
     lines, retry, shown = failure_part(plan, r, records, depth + 1, shown | {c.key})
@@ -197,14 +222,14 @@ def content_part(
 ) -> Part:
     """What a record says, each of its causes followed down to the build that failed.
 
-    Its reason; its failed steps, or the build it shares them with; its causes.
+    Its reason, which no retry of the build cures, so it names no build to
+    retry; its failed steps, or the build it shares them with; its causes.
     """
     pad = INDENT * depth
     lines: list[str] = []
     retry: list[tuple[str, Build]] = []
     if r.reason is not None:
         lines.append(pad + REASON_TEXTS[r.reason])
-        retry.append((r.project, r.build))
     if r.shared_with is not None:
         s = r.shared_with
         lines.append(
@@ -241,7 +266,9 @@ def and_list(items: Sequence[str]) -> str:
 def retry_sentence(builds: Iterable[tuple[str, Build]], root: str) -> str:
     """The closing sentence of section 9: retry each failed job, then start a new build.
 
-    ``builds`` are the builds to retry, each with its pipeline.
+    ``builds`` are the builds to retry, each with its pipeline; none, when no
+    job failed or a retry cures nothing, says to start a new build once the
+    cause is fixed.
     """
     jobs = list(dict.fromkeys(f"`{pipeline}` `{b.number}`" for pipeline, b in builds))
     reused = "Everything that passed is reused."

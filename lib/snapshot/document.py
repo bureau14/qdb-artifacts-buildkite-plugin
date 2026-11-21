@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,13 +48,12 @@ from .configuration import (
     STEP,
     STRICT_REF_MATCH,
     UPLOAD,
-    VARIANT,
     block_step,
     download_entries,
     entry_steps,
     is_plugin_key,
     mappings,
-    option_value,
+    named_variant,
     plugin_block,
     plugin_configurations,
     reads_as,
@@ -64,12 +63,13 @@ from .declaration import (
     entry_type,
     leaf_steps,
     other_project,
+    pipeline_downloads,
     pipeline_steps,
     step_key,
     step_label,
     step_name,
 )
-from .plan import Plan, dependencies_first, trigger_label
+from .plan import Plan, Planned, dependencies_first, short_commit, trigger_label
 
 RESUME_OPTION = "resume"
 
@@ -82,8 +82,8 @@ GATE_TIMEOUT_MINUTES = 15
 
 
 class DocumentError(ValueError):
-    """The generated pipeline promotes a folder at two places (``promotions``), or from a
-    step without a key (``promote_entries``)."""
+    """The generated pipeline promotes a folder at two places (``promoting_places``), or from
+    a step without a key (``promote_entries``)."""
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +120,6 @@ def dump_written(doc: Any) -> str:
 # ---------------------------------------------------------------------------
 # Options, read as the agent reads them
 # ---------------------------------------------------------------------------
-
-
-def named_variant(options: Mapping[Any, Any]) -> str | None:
-    """The platform an entry or a block names (``variant``), as text; None when it names none.
-
-    The agent hands a list or a mapping over as variables of other names, so
-    the plugin reads no platform from one.
-    """
-    v = option_value(options, VARIANT)
-    if v is None or v == "" or isinstance(v, (dict, list)):
-        return None
-    return str(v)
 
 
 def without_options(options: Mapping[Any, Any], names: Iterable[str]) -> dict[Any, Any]:
@@ -174,6 +162,44 @@ def taken_folders(entry: Mapping[Any, Any], steps: Sequence[str]) -> frozenset[F
     return frozenset(Folder(platform, s) for s in entry_steps(entry) or steps)
 
 
+def entry_taking(
+    doc: Any, own: str, project: str, steps: Sequence[str], folders: Collection[Folder]
+) -> dict[str, Any]:
+    """The first snapshot entry of ``project`` in ``doc`` that takes one of ``folders``;
+    ``steps`` are the project's step ids, which an entry that names no step takes."""
+    return next(
+        e
+        for p, e in snapshot_dependencies(doc, own)
+        if p == project and taken_folders(e, steps) & frozenset(folders)
+    )
+
+
+def stepless_download(step: str, project: str, n: Planned) -> str:
+    """Why step ``step`` cannot download ``project``, planned as ``n``, without naming a step."""
+    return (
+        f"Step {step} downloads {project} without naming a step, and no template of {project} "
+        f"at {short_commit(n.commit)} writes step_id beside a promote, so {project} has no step "
+        f"ids at that commit. Bring to {n.ref} of {project} the commit that writes them, or "
+        f"remove the download if {project} promotes nothing."
+    )
+
+
+def stepless_downloads(doc: Any, own: str, plan: Plan) -> list[str]:
+    """Why each snapshot entry of ``doc`` that names no step breaks the plan: the templates of
+    its dependency promote no step id at the commit ``plan`` takes it at, so it would take
+    nothing. Each once, in order."""
+    found = []
+    for sd in pipeline_downloads(doc):
+        for e in sd.entries:
+            project = other_project(e, own)
+            if project is None or entry_type(e) != SNAPSHOT or entry_steps(e):
+                continue
+            n = plan.projects[project]
+            if not n.steps:
+                found.append(stepless_download(sd.step, project, n))
+    return list(dict.fromkeys(found))
+
+
 # ---------------------------------------------------------------------------
 # The steps that promote and make
 # ---------------------------------------------------------------------------
@@ -213,13 +239,13 @@ def promoted_twice(f: Folder, first: tuple[int, Any], second: tuple[int, Any]) -
     else:
         who = f"two steps, {step_name(s1, p1)} and {step_name(s2, p2)}"
     return DocumentError(
-        f"{f} is promoted by {who}: the first to pass would promote it while the other still "
-        "uploads"
+        f"{f} is promoted by {who}. Each step id of a platform is promoted by one step only: "
+        "give each its own step_id, or promote it from one of them."
     )
 
 
-def promotions(doc: Any) -> dict[Folder, Any]:
-    """``{folder: the step that promotes it}``; its keys are ``D``, what the pipeline makes.
+def promoting_places(doc: Any) -> dict[Folder, tuple[int, Any]]:
+    """``{folder: (position, step)}`` of the step that promotes each folder.
 
     A folder promoted at two places is an error: the first to pass would
     promote it while the other still uploads.
@@ -230,7 +256,25 @@ def promotions(doc: Any) -> dict[Folder, Any]:
             first = found.setdefault(f, (position, step))
             if first[0] != position:
                 raise promoted_twice(f, first, (position, step))
-    return {f: step for f, (_, step) in found.items()}
+    return found
+
+
+def promotions(doc: Any) -> dict[Folder, Any]:
+    """``{folder: the step that promotes it}``; its keys are ``D``, what the pipeline makes."""
+    return {f: step for f, (_, step) in promoting_places(doc).items()}
+
+
+def unwritten_promotions(doc: Any, own: str, steps: Collection[str]) -> list[str]:
+    """Why each folder ``doc`` promotes breaks the own check: no template of ``own`` writes its
+    step id as ``step_id`` (``steps``, the step ids the declaration of the build's commit
+    holds), so the builds that depend on ``own`` would not know it."""
+    return [
+        f"Step {step_name(s, p)} promotes {f}, and no template of {own} writes step_id: "
+        f"{f.step}. The builds that depend on {own} read its steps from those templates, so "
+        f"make the step from a template that writes step_id: {f.step}."
+        for f, (p, s) in sorted(promoting_places(doc).items())
+        if f.step not in steps
+    ]
 
 
 def promote_entries(doc: Any) -> list[dict[str, str]]:

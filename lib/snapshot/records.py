@@ -15,7 +15,8 @@ decisions of section 7 over records the caller has read:
   build of the same key since the root build of this chain started;
 - ``chain_failure`` and ``caused_record``: step 9 and resume, a dependency
   that failed earlier in this chain;
-- ``reason_record``: steps 1, 2 and 5, a build that failed before it built.
+- ``reason_record`` and ``refused_record``: steps 1, 2 and 5, a build that
+  failed before it built, and one asked for steps it does not make.
 
 A record never says whether a step is made: its manifest does. A record only
 saves a waiting build from compiling in vain, and lets a consumer name the
@@ -28,7 +29,14 @@ cause. Canonical JSON::
                  "variant": "<platform>"}],
      "plan": "<plan id>", "reason": "generator_failed" | "rule" | "not_declared" | null,
      "recorded_at": "<UTC ISO 8601, ms, Z>",
+     "refused": [{"promotes": ["<step id>", ...], "step": "<step id>", "variant": "<platform>"}],
      "shared_with": null | {"id": "<uuid>", "number": <n>, "url": "<url>"}}
+
+``refused`` names the steps a build was asked for and does not make, with the
+step ids it makes for each such platform. A cause whose dependency's record
+is ``not_declared`` also holds ``template`` and ``takes``: the template of the
+entry that asked for those steps, and the steps that entry names, null for
+every step. With them the first build of the chain shows the remedy.
 
 The project and the key of a record are those of its path; a ``Record`` holds
 them as its reader found it.
@@ -39,7 +47,7 @@ from __future__ import annotations
 import datetime
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..forms import iso_utc
@@ -77,11 +85,27 @@ class Failed:
 
 @dataclass(frozen=True)
 class Cause:
-    """A dependency that did not make the folders a build needs: its project, key and those."""
+    """A dependency that did not make the folders a build needs: its project, key and those.
+
+    When the dependency refused them, ``template`` is the template of the
+    entry that asked for them and ``takes`` the steps that entry names, None
+    for every step; else ``template`` is None.
+    """
 
     project: str
     key: str
     missing: tuple[Folder, ...]
+    template: str | None = None
+    takes: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class RefusedFolder:
+    """A folder a build was asked for and does not make, and the step ids it makes for that
+    platform."""
+
+    folder: Folder
+    promotes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -97,6 +121,7 @@ class Record:
     caused_by: tuple[Cause, ...]
     shared_with: Build | None
     recorded_at: str
+    refused: tuple[RefusedFolder, ...]
 
 
 @dataclass(frozen=True)
@@ -121,9 +146,10 @@ def compose_record(
     failed: Iterable[Failed],
     caused_by: Iterable[Cause],
     shared_with: Build | None,
+    refused: Iterable[RefusedFolder],
 ) -> Record:
     """The record ``origin`` writes at ``now`` (epoch seconds), its entries sorted."""
-    causes = (Cause(c.project, c.key, tuple(sorted(set(c.missing)))) for c in caused_by)
+    causes = (replace(c, missing=tuple(sorted(set(c.missing)))) for c in caused_by)
     return Record(
         project=origin.project,
         key=origin.key,
@@ -134,18 +160,24 @@ def compose_record(
         caused_by=tuple(sorted(causes, key=lambda c: (c.project, c.key))),
         shared_with=shared_with,
         recorded_at=iso_utc(now),
+        refused=tuple(sorted(refused, key=lambda r: r.folder)),
     )
 
 
 def reason_record(origin: Origin, reason: str, now: float) -> Record:
-    """The record of a build that failed before it built: its generator, the rule, or a
-    step it does not make."""
-    return compose_record(origin, now, reason, (), (), None)
+    """The record of a build that failed before it built: its generator failed, or its
+    pipeline breaks the rule."""
+    return compose_record(origin, now, reason, (), (), None, ())
+
+
+def refused_record(origin: Origin, refused: Iterable[RefusedFolder], now: float) -> Record:
+    """The record of a build that was asked for steps it does not make, ``refused``."""
+    return compose_record(origin, now, NOT_DECLARED, (), (), None, refused)
 
 
 def caused_record(origin: Origin, causes: Sequence[Cause], now: float) -> Record:
     """The record of a build that a dependency left without the steps it needs."""
-    return compose_record(origin, now, None, (), causes, None)
+    return compose_record(origin, now, None, (), causes, None, ())
 
 
 # ---------------------------------------------------------------------------
@@ -153,13 +185,28 @@ def caused_record(origin: Origin, causes: Sequence[Cause], now: float) -> Record
 # ---------------------------------------------------------------------------
 
 
+def cause_document(c: Cause) -> dict[str, Any]:
+    """A cause as a record holds it: ``template`` and ``takes`` only for a refusal."""
+    found = {"key": c.key, "missing": [folder_document(f) for f in c.missing], "project": c.project}
+    if c.template is None:
+        return found
+    takes = None if c.takes is None else list(c.takes)
+    return {**found, "takes": takes, "template": c.template}
+
+
+def cause_of(d: Mapping[str, Any]) -> Cause:
+    """The cause ``cause_document`` wrote into ``d``."""
+    missing = tuple(folder_of(m) for m in d["missing"])
+    takes = d.get("takes")
+    return Cause(
+        d["project"], d["key"], missing, d.get("template"), None if takes is None else tuple(takes)
+    )
+
+
 def record_document(r: Record) -> dict[str, Any]:
     return {
         "build": build_document(r.build),
-        "caused_by": [
-            {"key": c.key, "missing": [folder_document(f) for f in c.missing], "project": c.project}
-            for c in r.caused_by
-        ],
+        "caused_by": [cause_document(c) for c in r.caused_by],
         "failed": [
             {"outcome": f.outcome, "step_key": f.step_key, **folder_document(f.folder)}
             for f in r.failed
@@ -167,6 +214,7 @@ def record_document(r: Record) -> dict[str, Any]:
         "plan": r.plan,
         "reason": r.reason,
         "recorded_at": r.recorded_at,
+        "refused": [{"promotes": list(x.promotes), **folder_document(x.folder)} for x in r.refused],
         "shared_with": None if r.shared_with is None else build_document(r.shared_with),
     }
 
@@ -187,12 +235,10 @@ def decode_record(text: str, project: str, key: str) -> Record:
         build=build_of(d["build"]),
         reason=d["reason"],
         failed=tuple(Failed(folder_of(f), f["step_key"], f["outcome"]) for f in d["failed"]),
-        caused_by=tuple(
-            Cause(c["project"], c["key"], tuple(folder_of(m) for m in c["missing"]))
-            for c in d["caused_by"]
-        ),
+        caused_by=tuple(cause_of(c) for c in d["caused_by"]),
         shared_with=None if shared is None else build_of(shared),
         recorded_at=d["recorded_at"],
+        refused=tuple(RefusedFolder(folder_of(x), tuple(x["promotes"])) for x in d["refused"]),
     )
 
 
@@ -231,7 +277,7 @@ def leave_record(
         for f in unpassed(promotes, outcomes)
         if f not in done
     ]
-    return compose_record(origin, now, None, failed, (), None) if failed else None
+    return compose_record(origin, now, None, failed, (), None, ()) if failed else None
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +332,7 @@ def shared_record(origin: Origin, source: Record, wanted: Iterable[Folder], now:
     """The own record of a shared failure: ``source``'s entries of ``wanted``, and its build."""
     needed = frozenset(wanted)
     copied = [f for f in source.failed if f.folder in needed]
-    return compose_record(origin, now, None, copied, (), source.build)
+    return compose_record(origin, now, None, copied, (), source.build, ())
 
 
 # ---------------------------------------------------------------------------

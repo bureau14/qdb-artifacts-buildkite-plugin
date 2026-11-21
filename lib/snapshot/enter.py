@@ -23,7 +23,7 @@ import functools
 import os
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -42,13 +42,17 @@ from .annotation import (
     left_no_record,
     plan_annotation,
     refusal_annotation,
+    refused_line,
     reused_annotation,
     shown_folders,
 )
 from .buildkite import PipelineFacts, fetch_pipeline
+from .configuration import entry_steps
 from .declaration import (
+    SNAPSHOT,
     Declaration,
     TemplateError,
+    declared_path,
     is_template_path,
     pipeline_downloads,
     read_declaration,
@@ -61,6 +65,7 @@ from .document import (
     Taken,
     dump_document,
     dump_written,
+    entry_taking,
     load_document,
     needed_folders,
     planned,
@@ -68,6 +73,8 @@ from .document import (
     promotions,
     read_needs,
     resume_pipeline,
+    stepless_downloads,
+    unwritten_promotions,
 )
 from .edge import (
     BUILT,
@@ -97,9 +104,11 @@ from .records import (
     Cause,
     Origin,
     Record,
+    RefusedFolder,
     caused_record,
     chain_failure,
     reason_record,
+    refused_record,
     shared_failure,
     shared_record,
 )
@@ -244,22 +253,46 @@ def promoted(job: Job, edge: Edge, generated: Generated, origin: Origin) -> froz
         raise reason_refusal(job, RULE, str(exc), origin, edge.clock()) from exc
 
 
+def check_step_ids(job: Job, edge: Edge, generated: Generated, p: Plan, origin: Origin) -> None:
+    """5. Every step id this pipeline promotes is one a template of its commit writes, which
+    the builds that depend on it read; and every dependency a download takes without naming
+    a step has step ids. Else record ``rule``; fail."""
+    broken = [
+        *unwritten_promotions(generated.doc, job.project, generated.declaration.steps),
+        *stepless_downloads(generated.doc, job.project, p),
+    ]
+    if broken:
+        raise reason_refusal(job, RULE, "\n".join(broken), origin, edge.clock())
+
+
 def asked(job: Job, d: frozenset[Folder]) -> frozenset[Folder]:
     """5. ``N``: ``SNAPSHOT_NEEDS`` for a chain node, else ``D``."""
     return read_needs(job.needs) if is_chain_node(job) else d
 
 
+def refused_folders(n: frozenset[Folder], d: frozenset[Folder]) -> list[RefusedFolder]:
+    """The folders of ``N`` that are not in ``D``, each with the step ids ``D`` holds of its
+    platform."""
+    return [
+        RefusedFolder(f, tuple(sorted(g.step for g in d if g.platform == f.platform)))
+        for f in sorted(n - d)
+    ]
+
+
 def check_declared(
     job: Job, edge: Edge, n: frozenset[Folder], d: frozenset[Folder], origin: Origin
 ) -> None:
-    """5. A folder of ``N`` that is not in ``D``: record ``not_declared``; fail. Nothing compiles."""
-    undeclared = sorted(n - d)
-    if undeclared:
+    """5. A folder of ``N`` that is not in ``D``: record ``not_declared`` with the folders
+    refused; fail. Nothing compiles."""
+    refused = refused_folders(n, d)
+    if refused:
         message = (
-            f"asked for {shown_folders(undeclared)}, which this pipeline does not promote; it "
-            f"promotes {shown_folders(sorted(d)) or 'nothing'}"
+            f"asked for {shown_folders(x.folder for x in refused)}, which this pipeline does "
+            f"not promote; it promotes {shown_folders(sorted(d)) or 'nothing'}"
         )
-        raise reason_refusal(job, NOT_DECLARED, message, origin, edge.clock())
+        record = refused_record(origin, refused, edge.clock())
+        annotation = refusal_annotation(NOT_DECLARED, job.project, job.build, message)
+        raise Refusal(message, annotation, record)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +382,10 @@ def missing_folders(
 
 
 def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
-    """One line of the message of a build that a dependency left without steps."""
+    """One line of the message of a build that a dependency left without steps; for a
+    dependency that refused them, what leads to the remedy."""
+    if c.template is not None:
+        return refused_line(p, c, records[c.key])
     lacks = (
         f"{c.project} @ {short_commit(p.projects[c.project].commit)} ({c.key}) has no "
         f"{shown_folders(c.missing)}"
@@ -359,14 +395,36 @@ def cause_message(p: Plan, c: Cause, records: Mapping[str, Record]) -> str:
     return f"{lacks}: {left_no_record(p, c)}"
 
 
+def with_asking_entry(
+    job: Job, p: Plan, generated: Generated, c: Cause, records: Mapping[str, Record]
+) -> Cause:
+    """``c``, when the build of its dependency in this chain refused steps it does not make,
+    with the template of the entry that asked for them and the steps that entry names (None
+    for every step its dependency's templates name): the entry a person changes."""
+    r = records.get(c.key)
+    if r is None or r.reason != NOT_DECLARED:
+        return c
+    steps = p.projects[c.project].steps
+    refused = [x.folder for x in r.refused]
+    entry = entry_taking(generated.doc, job.project, c.project, steps, refused)
+    template = declared_path(generated.declaration, c.project, SNAPSHOT)
+    return replace(c, template=template, takes=entry_steps(entry) or None)
+
+
 def fail_with_causes(
-    job: Job, edge: Edge, p: Plan, causes: list[Cause], origin: Origin | None
+    job: Job,
+    edge: Edge,
+    p: Plan,
+    generated: Generated,
+    causes: list[Cause],
+    origin: Origin | None,
 ) -> NoReturn:
     """Fail a build that its dependencies left without steps, each named as a cause."""
     records = chain_records(edge, p, causes)
-    message = "\n".join(cause_message(p, c, records) for c in causes)
-    record = None if origin is None else caused_record(origin, causes, edge.clock())
-    annotation = caused_annotation(p, job.project, job.build, causes, records)
+    named = [with_asking_entry(job, p, generated, c, records) for c in causes]
+    message = "\n".join(cause_message(p, c, records) for c in named)
+    record = None if origin is None else caused_record(origin, named, edge.clock())
+    annotation = caused_annotation(p, job.project, job.build, named, records)
     raise Refusal(message, annotation, record)
 
 
@@ -374,6 +432,7 @@ def failed_in_chain(
     job: Job,
     edge: Edge,
     p: Plan,
+    generated: Generated,
     missing: Mapping[str, tuple[Folder, ...]],
     origin: Origin | None,
 ) -> None:
@@ -386,7 +445,7 @@ def failed_in_chain(
     lacking = [Cause(project, dependency_key(p, project), fs) for project, fs in missing.items()]
     causes = [c for c in lacking if chain_failure(stored_records(edge, c.project, c.key), p.id)]
     if causes:
-        fail_with_causes(job, edge, p, causes, origin)
+        fail_with_causes(job, edge, p, generated, causes, origin)
 
 
 def trigger(
@@ -470,6 +529,7 @@ def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
         edge.log(f"{job.project} has no snapshot: it is built, and never reused")
         return Prepared(generated, p, None, None, frozenset(), frozenset())
     d = promoted(job, edge, generated, origin)
+    check_step_ids(job, edge, generated, p, origin)
     n = asked(job, d)
     check_declared(job, edge, n, d, origin)
     return Prepared(generated, p, origin.key, origin, d, n)
@@ -495,7 +555,7 @@ def enter_decisions(job: Job, edge: PlanEdge) -> None:
     needs = needed_folders(prepared.generated.doc, job.project, made, steps_of(prepared.plan))
     missing = missing_folders(dependency_manifests(edge, prepared.plan, needs))
     if missing:
-        failed_in_chain(job, edge, prepared.plan, missing, prepared.origin)
+        failed_in_chain(job, edge, prepared.plan, prepared.generated, missing, prepared.origin)
         trigger(job, edge, prepared.plan, needs, missing)
         return
     build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
@@ -511,7 +571,7 @@ def resume_decisions(job: Job, edge: PlanEdge) -> None:
             Cause(project, dependency_key(prepared.plan, project), folders)
             for project, folders in missing.items()
         ]
-        fail_with_causes(job, edge, prepared.plan, causes, prepared.origin)
+        fail_with_causes(job, edge, prepared.plan, prepared.generated, causes, prepared.origin)
     build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
 
 
@@ -526,8 +586,10 @@ def enter(job: Job, edge: PlanEdge) -> int:
        made fails the build with its message. Then ``key.json`` of the own key.
     4. The own project has no snapshot: go to 8 with no key.
     5. ``D`` is what this pipeline promotes, a folder promoted twice failing;
+       a step id no template of the commit writes, or a download without a
+       step of a dependency that has no step ids: record ``rule``; fail.
        ``N`` is ``SNAPSHOT_NEEDS`` for a chain node, else ``D``. A folder of
-       ``N`` not in ``D``: record ``not_declared``; fail.
+       ``N`` not in ``D``: record ``not_declared`` with what it refuses; fail.
     6. ``D`` is not empty and every folder of ``N`` is made at ``K``: mode
        reused; done.
     7. Another build of ``K`` failed on the wanted folders after the chain's
