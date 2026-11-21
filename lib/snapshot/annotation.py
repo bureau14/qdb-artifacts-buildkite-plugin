@@ -88,9 +88,9 @@ def outside_line(project: str, step: str, platform: str, ref: str) -> str:
 
 
 def plan_annotation(plan: Plan, project: str, outside: Sequence[tuple[str, str, str]]) -> str:
-    """The plan as ``project`` builds it: the root's branch and rebuild setting, its tree, and
-    each download of ``outside``, ``(step, platform, ref)`` of the project's own at another
-    ref."""
+    """The plan as ``project`` builds it: the root's name, which Buildkite's branch field holds
+    for a branch and a tag alike, and its rebuild setting; its tree; and each download of
+    ``outside``, ``(step, platform, ref)`` of the project's own at another ref."""
     context = f"branch {plan.context}, rebuild {plan.rebuild}"
     left_out = [outside_line(project, *o) for o in outside]
     lines = [context, *tree_lines(plan, project), *left_out]

@@ -17,7 +17,7 @@ take the same keys.
 
 The document holds what the builds of the chain read::
 
-    {"context": "<first build's branch>",
+    {"context": "<first build's name, a branch's or a tag's>",
      "first": {"build_number": <n>, "project": "<slug>"},
      "id": "<first build's uuid>",
      "projects": {"<project>": {"branch": "<branch its started build runs under>",
