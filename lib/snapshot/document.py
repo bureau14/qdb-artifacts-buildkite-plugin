@@ -145,16 +145,13 @@ def replace_content(target: dict[Any, Any], content: Mapping[Any, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def snapshot_dependencies(doc: Any, own: str) -> list[tuple[str, dict[str, Any]]]:
-    """``(project, entry)`` of every snapshot dependency entry of ``doc``, in order.
-
-    ``own`` is the pipeline's own project. An entry of another project that
-    does not take the latest successful build is one.
-    """
+def dependencies_of(doc: Any, own: str, t: str) -> list[tuple[str, dict[str, Any]]]:
+    """``(project, entry)`` of every entry of ``doc`` of another project whose type is ``t``,
+    ``SNAPSHOT`` or ``LATEST_SUCCESSFUL``, in order; ``own`` is the pipeline's own project."""
     found = []
     for e in download_entries(doc):
         project = other_project(e, own)
-        if project is not None and entry_type(e) == SNAPSHOT:
+        if project is not None and entry_type(e) == t:
             found.append((project, e))
     return found
 
@@ -175,12 +172,7 @@ def latest_download(entry: Mapping[Any, Any], project: str) -> LatestDownload:
 def latest_dependencies(doc: Any, own: str) -> list[tuple[LatestDownload, dict[str, Any]]]:
     """``(download, entry)`` of every entry of ``doc`` of another project that takes the latest
     successful build, in order; ``own`` is the pipeline's own project."""
-    found = []
-    for e in download_entries(doc):
-        project = other_project(e, own)
-        if project is not None and entry_type(e) == LATEST_SUCCESSFUL:
-            found.append((latest_download(e, project), e))
-    return found
+    return [(latest_download(e, p), e) for p, e in dependencies_of(doc, own, LATEST_SUCCESSFUL)]
 
 
 def taken_folders(entry: Mapping[Any, Any], steps: Sequence[str]) -> frozenset[Folder]:
@@ -197,7 +189,7 @@ def entry_taking(
     ``steps`` are the project's step ids, which an entry that names no step takes."""
     return next(
         e
-        for p, e in snapshot_dependencies(doc, own)
+        for p, e in dependencies_of(doc, own, SNAPSHOT)
         if p == project and taken_folders(e, steps) & frozenset(folders)
     )
 
@@ -423,7 +415,7 @@ def needed_folders(
     for s in replaced_steps(kept, made):
         replace_content(s, {})
     needs: dict[str, frozenset[Folder]] = {}
-    for project, e in snapshot_dependencies(kept, own):
+    for project, e in dependencies_of(kept, own, SNAPSHOT):
         needs[project] = needs.get(project, frozenset()) | taken_folders(e, steps_of[project])
     return needs
 
@@ -480,7 +472,7 @@ def planned(doc: Any, r: Rewrite) -> Any:
     out = copy.deepcopy(doc)
     for s in replaced_steps(out, r.made):
         replace_content(s, replacement(s, r.own, r.made))
-    for project, e in snapshot_dependencies(out, r.own):
+    for project, e in dependencies_of(out, r.own, SNAPSHOT):
         replace_content(e, keyed_entry(e, planned_keys(e, r.dependencies[project])))
     for download, e in latest_dependencies(out, r.own):
         replace_content(e, keyed_entry(e, r.latest[download]))
