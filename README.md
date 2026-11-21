@@ -591,8 +591,10 @@ A build started for a dependency that is asked for a step one of its platforms
 does not make refuses it before anything is built, and its failure record
 names the steps refused and what it makes on that platform. The build that
 asked fails and names the template of its entry and the steps the entry takes:
-the list to write in it, as `step: [build]`, or, on a platform for which the
-dependency makes nothing, the download to remove. So does the first build.
+the list to write in it, as `step: [build]`, of the steps made on every
+refused platform that makes any, else one list per platform; or, on a platform
+for which the dependency makes nothing, the download to remove. So does the
+first build.
 
 ### How a build runs
 

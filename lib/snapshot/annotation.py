@@ -177,14 +177,28 @@ def which_build(plan: Plan, c: Cause) -> str:
     return f"{c.project} @ {commit} ({c.key})"
 
 
+def step_list(ids: Iterable[str]) -> str:
+    """``ids`` as an entry writes them."""
+    return f"step: [{', '.join(sorted(ids))}]"
+
+
+def lists_to_write(made: Mapping[str, frozenset[str]]) -> str:
+    """What an entry writes to take only steps its dependency makes, ``made`` being the step
+    ids of each platform that makes any: the ids made on all of them, else one list per
+    platform, since an empty list reads as no list, which takes every step."""
+    common = frozenset.intersection(*made.values())
+    if common:
+        return step_list(common)
+    return ", ".join(f"{step_list(ids)} on {p}" for p, ids in made.items())
+
+
 def remedies(project: str, makes: Mapping[str, Sequence[str]]) -> list[str]:
     """How the entry that asked ``project`` for steps it refused gets what it needs, ``makes``
-    being the step ids it makes on each refused platform: the steps made on every platform
-    that makes any, as the list to write; the download goes on a platform that makes none."""
-    some = [frozenset(ids) for ids in makes.values() if ids]
+    being the step ids it makes on each refused platform: the lists to write, for the
+    platforms that make some; the download goes on a platform that makes none."""
+    made = {p: frozenset(ids) for p, ids in makes.items() if ids}
     none = [p for p, ids in makes.items() if not ids]
-    needed = ", ".join(sorted(frozenset.intersection(*some))) if some else ""
-    write = [f"Write in it the steps it needs, as step: [{needed}]."] if some else []
+    write = [f"Write in it the steps it needs, as {lists_to_write(made)}."] if made else []
     remove = [f"Remove the download of {project} on {', '.join(none)}."] if none else []
     return [*write, *remove]
 
