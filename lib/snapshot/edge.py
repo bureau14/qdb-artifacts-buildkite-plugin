@@ -28,7 +28,7 @@ from typing import Any
 from .. import layout
 from ..clients import resolve_object_auth
 from ..config import load_store_config
-from ..key import create_key_json, key_of
+from ..key import create_key_json
 from ..layout import Folder
 from ..manifest import Manifest, is_made, read_manifest_at
 from ..objects import Store, destination_store
@@ -107,12 +107,11 @@ def create_record(edge: Edge, r: Record) -> None:
 
 
 def create_planned_key_json(edge: Edge, plan: Plan, project: str) -> None:
-    """Create ``key.json`` of the planned key of ``project`` unless it is there: what the
-    plan says that key stands for, so that the key is the hash of its bytes."""
-    stands_for = key_json_of(plan, project)
-    where = layout.key_json(edge.prefix, project, key_of(stands_for))
-    if create_key_json(edge.store, edge.prefix, stands_for):
-        edge.log(f"wrote s3://{edge.store.bucket}/{where}")
+    """Create ``key.json`` of the key the plan fixed for ``project`` unless it is there: what
+    the plan says that key stands for, of which the key is the hash."""
+    key = plan.projects[project].key
+    if create_key_json(edge.store, edge.prefix, key, key_json_of(plan, project)):
+        edge.log(f"wrote s3://{edge.store.bucket}/{layout.key_json(edge.prefix, project, key)}")
 
 
 def chain_records(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str, Record]:

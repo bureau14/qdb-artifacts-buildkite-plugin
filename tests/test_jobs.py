@@ -48,7 +48,7 @@ from lib.manifest import (
     encode_manifest,
     promoted_by,
 )
-from lib.snapshot.plan import First, Plan, Planned, encode_plan
+from lib.snapshot.plan import First, Plan, Planned, encode_plan, keyed
 from lib.snapshot.records import decode_record
 
 FEATURE = "refs/heads/feature"
@@ -655,15 +655,12 @@ OUTCOMES = ("every-step-passes", "the-last-platform-fails")
 def chain_plan(widget_commit: str) -> Plan:
     """The plan of a root build of app: app takes widget, widget takes engine, each of one
     step id, with the keys their commits give."""
-    engine = key_of(KeyJson("engine", ENGINE_COMMIT))
-    widget = key_of(KeyJson("widget", widget_commit, (("engine", engine),)))
-    app = key_of(KeyJson("app", "a" * 40, (("widget", widget),)))
     projects = {
-        "app": Planned(MASTER, "a" * 40, app, "master", ("widget",), ("build",)),
-        "widget": Planned(MASTER, widget_commit, widget, "master", ("engine",), ("build",)),
-        "engine": Planned(MASTER, ENGINE_COMMIT, engine, "master", (), ("build",)),
+        "app": Planned(MASTER, "a" * 40, None, "master", ("widget",), ("build",)),
+        "widget": Planned(MASTER, widget_commit, None, "master", ("engine",), ("build",)),
+        "engine": Planned(MASTER, ENGINE_COMMIT, None, "master", (), ("build",)),
     }
-    return Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects)
+    return keyed(Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects), ())
 
 
 def engine_file(number: int, variant: str) -> dict:

@@ -161,7 +161,7 @@ def upload(
 
     def write_files():
         if own.stands_for is not None:
-            create_key_json(store, dest_prefix, own.stands_for)
+            create_key_json(store, dest_prefix, own.key, own.stands_for)
         log(
             f"Uploading {len(files)} artifact(s) ({fmt_size(total_bytes)}) to "
             f"s3://{bucket}/{location}/ via backend={cfg.backend}"

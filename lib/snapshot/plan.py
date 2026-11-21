@@ -9,7 +9,9 @@ it; ``dependencies_first`` orders a tree for the steps that start builds.
 The projects are the snapshot tree: the first build's project and,
 recursively, the snapshot dependencies of every project. Every project but the
 first has a key; the first's key is null when it has no snapshot (its own
-declaration holds a latest successful dependency).
+declaration holds a latest successful dependency). A key is that of what
+``key_json_of`` reads from the plan (``keyed``), so every build of the chain
+creates its ``key.json`` from the plan alone and computes no key.
 
 The document holds what the builds of the chain read::
 
@@ -29,12 +31,13 @@ that no build of the chain reads a dependency's templates again.
 
 from __future__ import annotations
 
+import functools
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 
-from ..key import KeyJson, canonical_json
+from ..key import KeyJson, canonical_json, key_of
 
 # How many hex digits of a commit a label or a message shows.
 SHORT_COMMIT = 12
@@ -185,6 +188,18 @@ def dependencies_first(p: Plan, project: str) -> list[str]:
 
     visit(project)
     return order
+
+
+def keyed(p: Plan, without_snapshot: Collection[str]) -> Plan:
+    """``p`` with the key of every project, dependencies first: the key of what
+    ``key_json_of`` says it stands for; None for a project ``without_snapshot``."""
+
+    def with_key(q: Plan, project: str) -> Plan:
+        key = None if project in without_snapshot else key_of(key_json_of(q, project))
+        projects = {**q.projects, project: replace(q.projects[project], key=key)}
+        return replace(q, projects=projects)
+
+    return functools.reduce(with_key, dependencies_first(p, p.first.project), p)
 
 
 def short_commit(commit: str) -> str:

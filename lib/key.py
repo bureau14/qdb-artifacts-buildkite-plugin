@@ -73,11 +73,13 @@ def key_of(k: KeyJson) -> str:
     return f"{k.commit}-{digest}"
 
 
-def create_key_json(store, prefix: str, k: KeyJson) -> bool:
-    """Create ``key.json`` under the key of ``k`` unless it is there; whether this call did.
+def create_key_json(store, prefix: str, key: str, k: KeyJson) -> bool:
+    """Create ``key.json`` of ``key`` unless it is there: ``k``, what the key stands for, whose
+    hash it is; whether this call did. ``key`` is the build's key as its one source gave it,
+    so no writer computes it a second time.
 
     Every writer of one key writes the same bytes, so one that finds it there
     is no error.
     """
-    where = layout.key_json(prefix, k.project, key_of(k))
+    where = layout.key_json(prefix, k.project, key)
     return store.create(where, encode_key_json(k), "application/json")

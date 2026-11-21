@@ -523,8 +523,9 @@ class World:
         if options.get("KEY"):
             return options["KEY"]
         stands_for = KeyJson(build.project, build.commit, (), build.id)
-        create_key_json(self.store, "", stands_for)
-        return key_of(stands_for)
+        key = key_of(stands_for)
+        create_key_json(self.store, "", key, stands_for)
+        return key
 
     def job(self, build: Build, options: dict | None) -> str:
         """A job of the plugin: download, compile, capture its files, then promote after a

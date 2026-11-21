@@ -60,10 +60,6 @@ reached, their dependencies sorted):
    found late can still move a project to a commit that gives a snapshot.
 5. A cycle fails the plan and is named. Then, dependencies first:
 
-   - the keys: ``key.key_of`` the node's commit and the keys of its snapshot
-     dependencies, with the plan id as its build when ``SNAPSHOT_REBUILD``
-     forces the node (the root under ``one``, every node under ``all``); None
-     for a root that has no snapshot;
    - the branches: the name a started build runs under, whose latest files
      its promotes write. A node runs under its own branch only when it runs
      as itself (``runs_as_itself``): its build is the one its own pipeline
@@ -71,7 +67,12 @@ reached, their dependencies sorted):
      under ``snapshot/<root branch>``, which no branch has, and writes no
      latest file. The rule needs where each pin was written
      (``pin_writers``), and the root's repository: the plan knows the release
-     line of that repository only.
+     line of that repository only;
+   - the keys, from the plan itself (``plan.keyed``): what a node's key stands
+     for is its commit and the keys of its snapshot dependencies, with the
+     plan id as its build when ``SNAPSHOT_REBUILD`` forces the node (the root
+     under ``one``, every node under ``all``); None for a root that has no
+     snapshot.
 """
 
 from __future__ import annotations
@@ -81,7 +82,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
-from ..key import KeyJson, key_of
 from .buildkite import PipelineFacts, PipelineNotFound
 from .declaration import (
     BUILDKITE_DIR,
@@ -104,7 +104,7 @@ from .plan import (
     Plan,
     PlanError,
     Planned,
-    forced_build,
+    keyed,
 )
 from .shape import has_shape
 
@@ -570,24 +570,6 @@ def bottom_up(tree: Mapping[str, Member], start: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def compute_keys(
-    tree: Mapping[str, Member], order: Sequence[str], root: Root
-) -> dict[str, str | None]:
-    """The key of every project of ``order`` (dependencies first); None without a snapshot.
-
-    ``SNAPSHOT_REBUILD`` makes a forced project's key one of the first build's
-    own (``plan.forced_build``), so that no earlier build has it.
-    """
-    keys: dict[str, str | None] = {}
-    for p in order:
-        n = tree[p]
-        deps = tuple((d, keys[d]) for d in deps_of(n))
-        forced = forced_build(root.rebuild, p == root.project, root.build_id)
-        stands_for = KeyJson(p, n.place.commit, deps, forced)
-        keys[p] = key_of(stands_for) if has_snapshot(n.declaration) else None
-    return keys
-
-
 def compute_below(tree: Mapping[str, Member], order: Sequence[str]) -> dict[str, frozenset[str]]:
     """The nodes below each project of ``order`` (dependencies first): all that it reaches."""
     below: dict[str, frozenset[str]] = {}
@@ -667,9 +649,10 @@ def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], context: str
     return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + context
 
 
-def planned_of(n: Member, key: str | None, branch: str) -> Planned:
+def planned_of(n: Member, branch: str) -> Planned:
+    """The node ``n`` as the plan holds it, before its key."""
     p = n.place
-    return Planned(p.ref, p.commit, key, branch, tuple(deps_of(n)), n.declaration.steps)
+    return Planned(p.ref, p.commit, None, branch, tuple(deps_of(n)), n.declaration.steps)
 
 
 # ---------------------------------------------------------------------------
@@ -690,17 +673,16 @@ def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> P
     src = asked_once(git, pipeline, repository, root.branch, root.commit)
     tree = tree_of(settled_walk(root, first, src))
     order = bottom_up(tree, root.project)
-    keys = compute_keys(tree, order, root)
     below = compute_below(tree, order)
     writers = pin_writers(tree)
     as_itself = {p: runs_as_itself(p, tree, below, writers, first.place) for p in order}
-    return Plan(
+    unkeyed = Plan(
         id=root.build_id,
         context=root.branch,
         rebuild=root.rebuild,
         first=First(root.project, root.build_number),
         projects={
-            p: planned_of(tree[p], keys[p], runs_under(p, as_itself[p], tree, root.branch))
-            for p in order
+            p: planned_of(tree[p], runs_under(p, as_itself[p], tree, root.branch)) for p in order
         },
     )
+    return keyed(unkeyed, {p for p in order if not has_snapshot(tree[p].declaration)})
