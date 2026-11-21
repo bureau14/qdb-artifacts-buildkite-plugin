@@ -24,6 +24,7 @@ from fakes import url
 from world import paired
 
 from lib import layout
+from lib.forms import branch_ref, name_of
 from lib.layout import Folder
 from lib.manifest import Build, Promoted, Uploaded, captured, promoted_by, write_manifest
 from lib.snapshot.buildkite import PipelineFacts
@@ -147,7 +148,7 @@ def test_a_second_build_with_nothing_changed_builds_nothing(worlds, graph_root, 
 
     projects, every = tree(graph, root), folders(matrix, step_ids)
     key = world.plan(again).projects[root].key.encode()
-    pointed = {layout.latest_file("", root, "refs/heads/" + names[1], f): key for f in every}
+    pointed = {layout.latest_file("", root, branch_ref(names[1]), f): key for f in every}
     assert again.state == "passed"
     assert (again.children, world.agents.uploads[again.id]) == ([], [])
     assert compiled_since(world, done) == set()
@@ -433,7 +434,7 @@ def tools_made(world, wanted, number: int, ref: str = MASTER) -> None:
     key = TOOLS_KEYS[number]
     url = f"https://buildkite.example.test/example/tools/builds/{number}"
     build = Build(f"tools-build-{number}", number, url)
-    name = ref.split("/", 2)[2]
+    name = name_of(ref)
     for f in wanted:
         location = layout.step_folder("", "tools", key, f)
         made = captured([("out/tools.bin", 5)], Uploaded(name, build))
@@ -451,7 +452,7 @@ TAKEN = ("every-step", "named")
 # The name a root builds under, and the branch whose latest files of tools its plan step
 # reads: a branch tools lacks, whose walk goes on to master; or a tag every project carries,
 # whose read takes that name's branch alone, although master names another key of tools.
-READ_UNDER = {"feature": MASTER, TAG: "refs/heads/" + TAG}
+READ_UNDER = {"feature": MASTER, TAG: branch_ref(TAG)}
 
 
 @pytest.mark.parametrize("taken, name", paired(TAKEN, sorted(READ_UNDER)), ids=str)
@@ -701,7 +702,7 @@ def test_a_node_runs_under_its_own_branch_only_as_its_own_build(
     }
     assert all(
         latest_refs(world, b.project)
-        == (set() if b.branch.startswith("snapshot/") else {"refs/heads/" + b.branch})
+        == (set() if b.branch.startswith("snapshot/") else {branch_ref(b.branch)})
         for b in triggered
     )
 
@@ -743,7 +744,7 @@ def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, g
 
     top = world.build(root, branch=name)
     plan, every = world.plan(top), folders(matrix, step_ids)
-    named = {p: {f: world.latest(p, "refs/heads/" + name, f) for f in every} for p in projects}
+    named = {p: {f: world.latest(p, branch_ref(name), f) for f in every} for p in projects}
     if name == TAG:
         world.tag(root, TAG)
     else:
@@ -757,7 +758,7 @@ def test_a_build_at_its_branchs_tip_points_its_latest_files_at_its_key(worlds, g
         for p in projects
     }
     snapshot_refs = {r for p in projects for r in latest_refs(world, p) if "/snapshot/" in r}
-    kept = {f: world.latest(root, "refs/heads/" + name, f) for f in every}
+    kept = {f: world.latest(root, branch_ref(name), f) for f in every}
     assert (top.state, newer.state, older.state) == ("passed", "passed", "passed")
     assert node in built
     assert named == expected

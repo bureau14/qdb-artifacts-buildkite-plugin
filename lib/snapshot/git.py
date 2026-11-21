@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 from ..errors import ArtifactsError
-from ..forms import BRANCH_PREFIX, TAG_PREFIX
+from ..forms import branch_of, is_tag
 from ..options import checkout_commit
 
 # How ``git ls-remote`` names the commit an annotated tag points to.
@@ -79,25 +79,6 @@ class Checkout(Protocol):
     def checkout_files(
         self, directory: str, wanted: Callable[[str], bool]
     ) -> Mapping[str, bytes]: ...
-
-
-def branch_ref(branch: str) -> str:
-    """The full ref of ``branch``."""
-    return BRANCH_PREFIX + branch
-
-
-def tag_ref(tag: str) -> str:
-    """The full ref of ``tag``."""
-    return TAG_PREFIX + tag
-
-
-def is_tag(ref: str) -> bool:
-    return ref.startswith(TAG_PREFIX)
-
-
-def branch_of(ref: str) -> str | None:
-    """The branch a full ref names; None for a tag."""
-    return ref[len(BRANCH_PREFIX) :] if ref.startswith(BRANCH_PREFIX) else None
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +245,7 @@ class RealGit:
         gives the commit it names, not the tag object.
         """
         asked = list(dict.fromkeys(refs))
-        tags = [r + PEELED for r in asked if r.startswith(TAG_PREFIX)]
+        tags = [r + PEELED for r in asked if is_tag(r)]
         out = self._remote(["ls-remote", "--", url, *asked, *tags])
         return parse_ls_remote(out.decode("utf-8", "replace"), asked)
 

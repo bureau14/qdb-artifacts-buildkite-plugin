@@ -88,7 +88,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Union
 
-from ..forms import SNAPSHOT_BRANCH_PREFIX, name_of
+from ..forms import SNAPSHOT_BRANCH_PREFIX, branch_of, branch_ref, is_tag, name_of, tag_ref
 from .buildkite import PipelineFacts, PipelineNotFound
 from .declaration import (
     BUILDKITE_DIR,
@@ -100,7 +100,7 @@ from .declaration import (
     is_template_path,
     read_declaration,
 )
-from .git import Git, branch_of, branch_ref, is_tag, tag_ref
+from .git import Git
 from .lines import is_release_line, release_line
 from .plan import (
     REBUILD_ALL,

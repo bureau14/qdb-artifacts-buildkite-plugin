@@ -21,7 +21,7 @@ from . import layout
 from .clients import aws_clients, resolve_object_auth
 from .config import load_store_config
 from .errors import ArtifactsError
-from .forms import BRANCH_PREFIX, SNAPSHOT_BRANCH_PREFIX, iso_utc
+from .forms import SNAPSHOT_BRANCH_PREFIX, branch_ref, iso_utc
 from .log import log
 from .manifest import Promoted, promoted_by, read_manifest_at, write_manifest
 from .objects import destination_store
@@ -35,7 +35,7 @@ def writes_latest(branch):
 def write_latest_file(store, prefix, project, branch, folder, key):
     """Point the latest file of ``folder`` of ``project`` on ``branch`` at ``key``: its text
     is the key, and the last writer wins."""
-    where = layout.latest_file(prefix, project, BRANCH_PREFIX + branch, folder)
+    where = layout.latest_file(prefix, project, branch_ref(branch), folder)
     store.put(where, key.encode(), "text/plain")
 
 

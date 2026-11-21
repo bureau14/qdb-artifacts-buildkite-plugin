@@ -15,6 +15,26 @@ TAG_PREFIX = "refs/tags/"
 SNAPSHOT_BRANCH_PREFIX = "snapshot/"
 
 
+def branch_ref(branch: str) -> str:
+    """The full ref of ``branch``."""
+    return BRANCH_PREFIX + branch
+
+
+def tag_ref(tag: str) -> str:
+    """The full ref of ``tag``."""
+    return TAG_PREFIX + tag
+
+
+def is_tag(ref: str) -> bool:
+    """Whether the full ref ``ref`` is a tag's."""
+    return ref.startswith(TAG_PREFIX)
+
+
+def branch_of(ref: str) -> str | None:
+    """The branch a full ref names; None for a tag."""
+    return ref[len(BRANCH_PREFIX) :] if ref.startswith(BRANCH_PREFIX) else None
+
+
 def name_of(ref: str) -> str:
     """The name of a full ref of a branch or a tag, as Buildkite names a build of it: the ref
     without ``refs/heads/`` or ``refs/tags/``."""

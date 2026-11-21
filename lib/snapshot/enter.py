@@ -31,6 +31,7 @@ from typing import Any, NoReturn
 from ..clients import aws_clients
 from ..config import env_or_ssm
 from ..errors import ArtifactsError
+from ..forms import branch_ref, is_tag
 from ..key import canonical_json
 from ..layout import Folder
 from ..log import log
@@ -98,7 +99,7 @@ from .edge import (
     stored_records,
 )
 from .failing import Refusal, gated
-from .git import Git, RealGit, branch_ref, is_tag
+from .git import Git, RealGit
 from .job import Job, is_chain_node, job_of
 from .latest import read_latest
 from .plan import Plan, PlanError, encode_plan

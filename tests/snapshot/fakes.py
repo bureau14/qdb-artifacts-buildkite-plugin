@@ -20,10 +20,10 @@ import hashlib
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 
+from lib.forms import branch_of, branch_ref, tag_ref
 from lib.objects import Listed
 from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
-from lib.snapshot.git import branch_of, branch_ref, tag_ref
 
 EPOCH = datetime.datetime(2026, 11, 20, tzinfo=datetime.timezone.utc)
 

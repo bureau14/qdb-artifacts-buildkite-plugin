@@ -39,6 +39,7 @@ from world import (
 )
 
 from lib import layout
+from lib.forms import branch_ref, name_of
 from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import (
@@ -61,14 +62,9 @@ PLANNED_KEY = "5" * 40 + "-" + "5" * 32
 PROMOTED_AT = "2026-11-19T00:00:00.000Z"
 
 
-def branch_of(ref: str) -> str:
-    """The name Buildkite gives the build of ``ref``: a branch's, or a tag's."""
-    return ref.split("/", 2)[2]
-
-
 def latest_ref(ref: str) -> str:
     """The ref whose latest files a build of ``ref`` writes: its name's, as a branch."""
-    return "refs/heads/" + branch_of(ref)
+    return branch_ref(name_of(ref))
 
 
 def made_up_key(*facts) -> str:
@@ -95,9 +91,9 @@ def step_wrote(key, ref, folder, files, number, promoted, project="widget", unde
     ``promoted`` the manifest promoted and the latest file of the branch."""
     location = layout.step_folder(under, project, key, folder)
     build = Build(build_id(number), number, build_url(project, number))
-    m = captured(((rel, len(data)) for rel, data in files.items()), Uploaded(branch_of(ref), build))
+    m = captured(((rel, len(data)) for rel, data in files.items()), Uploaded(name_of(ref), build))
     if promoted:
-        m = promoted_by(m, Promoted(PROMOTED_AT, branch_of(ref), build))
+        m = promoted_by(m, Promoted(PROMOTED_AT, name_of(ref), build))
     objects = {f"{location}/{rel}": data for rel, data in files.items()}
     objects[layout.manifest(location)] = encode_manifest(m)
     if promoted:

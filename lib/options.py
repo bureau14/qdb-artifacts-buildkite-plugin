@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .download import Entry
 from .errors import ArtifactsError
+from .forms import branch_ref, tag_ref
 from .key import KeyJson, key_of
 from .layout import Folder, is_step_id, not_a_step_id
 from .manifest import Build, Uploaded
@@ -142,10 +143,10 @@ def job_ref():
     """The ref of the job's build, in the form of an entry's git_ref, if known."""
     tag = os.environ.get("BUILDKITE_TAG")
     if tag:
-        return tag if tag.startswith("refs/") else f"refs/tags/{tag}"
+        return tag if tag.startswith("refs/") else tag_ref(tag)
     branch = os.environ.get("BUILDKITE_BRANCH")
     if branch:
-        return branch if branch.startswith("refs/") else f"refs/heads/{branch}"
+        return branch if branch.startswith("refs/") else branch_ref(branch)
     return None
 
 

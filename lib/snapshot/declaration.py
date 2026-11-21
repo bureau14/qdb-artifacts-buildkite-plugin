@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from ..forms import TAG_PREFIX
+from ..forms import is_tag
 from ..layout import is_step_id, not_a_step_id
 from .configuration import (
     GIT_REF,
@@ -419,7 +419,7 @@ def _ref_problem(project: str, ref: Any, pins: frozenset[str], own_ref: str) -> 
     if isinstance(ref, str) and (ref == own_ref or ref in pins):
         return None
     declared = f" (declared: {', '.join(sorted(pins))})" if pins else ""
-    remedy = TAG_FIELD_REMEDY if isinstance(ref, str) and ref.startswith(TAG_PREFIX) else ""
+    remedy = TAG_FIELD_REMEDY if isinstance(ref, str) and is_tag(ref) else ""
     return (
         f"downloads {project} at {_shown_ref(ref)}, which is neither the build's own ref "
         f"{own_ref} nor a pin declared for {project}{declared}{remedy}"

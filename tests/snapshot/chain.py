@@ -45,7 +45,7 @@ from world import paired
 from lib import layout, manifest
 from lib.download import Entry, resolved_steps
 from lib.errors import ArtifactsError
-from lib.forms import iso_utc
+from lib.forms import branch_ref, iso_utc
 from lib.key import KeyJson, create_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
@@ -353,7 +353,7 @@ def entry_of(n: int, e: dict, build: Build, own: OwnKey) -> Entry:
         "files": e["FILES"],
         "exclude": [],
     }
-    return download_entry(n, handed, build.project, "refs/heads/" + build.branch, lambda: own)
+    return download_entry(n, handed, build.project, branch_ref(build.branch), lambda: own)
 
 
 def made_by(m: Manifest) -> str:
@@ -542,7 +542,7 @@ class World:
         what it uploads joins the build after this step."""
         path = self.directory / f"{build.project}-{build.number}-{kind}.yml"
         text = self.hosting.trees[build.commit][".buildkite/steps.yml"].decode()
-        path.write_text(generated(text, "refs/heads/" + build.branch))
+        path.write_text(generated(text, branch_ref(build.branch)))
         job = self.gate_job(build, str(path))
         uploads = self.agents.uploads[build.id]
         before = len(uploads)
