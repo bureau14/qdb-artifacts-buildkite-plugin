@@ -11,8 +11,7 @@ Text only: the caller sends it with ``Agent.annotate``. Three kinds:
   records of its causes to the builds that failed, and how to retry; a
   dependency that refused steps it does not make is shown with the entry to
   change (``refused_line``); ``caused_annotation`` is the same text for a
-  build that dependencies left without steps it needs, also one without a
-  record of its own.
+  build that dependencies left without steps it needs.
 
 A step of a platform is shown as its folder, ``<platform>/<step id>``.
 
@@ -55,8 +54,9 @@ def plan_heading(plan: Plan, project: str) -> str:
 def node_line(plan: Plan, project: str, depth: int) -> str:
     """One node: its commit, ref and key, and the branch a build of it runs under."""
     n = plan.projects[project]
-    key = n.key if n.key is not None else "no snapshot"
-    return f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {key} runs as {n.branch}"
+    return (
+        f"{INDENT * depth}{project} @ {short_commit(n.commit)} {n.ref} {n.key} runs as {n.branch}"
+    )
 
 
 def tree_lines(plan: Plan, project: str) -> list[str]:
@@ -343,8 +343,7 @@ def caused_annotation(
     each key a cause names and for the keys those records name. A cause with
     a record is followed down as by ``failure_annotation``; one without is a
     build this build triggered that left nothing to follow, and the line
-    names the trigger step. A root without a snapshot writes no record, so
-    the text is made from the causes and not from a record.
+    names the trigger step.
     """
     lines: list[str] = []
     retry: list[tuple[str, Build]] = []

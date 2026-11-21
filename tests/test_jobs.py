@@ -728,7 +728,7 @@ def chain_plan(widget_commit: str) -> Plan:
         "widget": Planned(MASTER, widget_commit, None, "master", ("engine",), ("build",)),
         "engine": Planned(MASTER, ENGINE_COMMIT, None, "master", (), ("build",)),
     }
-    return keyed(Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects), ())
+    return keyed(Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects))
 
 
 def engine_file(number: int, variant: str) -> dict:

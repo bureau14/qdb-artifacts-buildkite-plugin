@@ -63,9 +63,6 @@ def leave_decisions(job: Job, edge: Edge) -> None:
         return
     p = chain_plan(job, edge)
     own = own_planned(job, edge, p)
-    if own.key is None:
-        edge.log(f"{job.project} has no snapshot: nothing to record")
-        return
     promotes = step_promotes(edge)
     outcomes = {s: edge.agent.step_outcome(s) for s in sorted(set(promotes.values()))}
     made = made_only(manifests_at(edge, job.project, own.key, unpassed(promotes, outcomes)))
@@ -80,7 +77,7 @@ def leave_decisions(job: Job, edge: Edge) -> None:
 def leave(job: Job, edge: Edge) -> int:
     """After every other step of the build: record what failed.
 
-    When the mode is built and the build has a key: the folders of
+    When the mode is built: the folders of
     ``snapshot-promotes`` whose step did not pass (its outcome empty or not
     ``passed``) and that are not made at ``K`` go into one failure record,
     written once, and an annotation. A job retried later promotes the folder

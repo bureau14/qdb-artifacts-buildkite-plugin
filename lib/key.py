@@ -8,13 +8,15 @@ the canonical JSON of::
 
 with ``"build": "<build id>"`` besides for a key of one build's own, which no
 other build has. ``deps`` holds, for every project the build downloads from,
-the key of the build it takes, each pair once, sorted. They are keys and not
+the key of each build it takes, each pair once, sorted. They are keys and not
 commits, so each ``key.json`` is one level deep, and reading them down from
 any key gives every commit of the tree.
 
-The plan step computes the keys of its build and of the builds it starts; a
-build without a plan step computes its key in each job, with its own build id
-in it. Jobs compute keys as well as the plan step, so nothing here imports
+The plan step computes the keys of its build and of the builds it starts, and
+for a download that takes the latest successful build of another project the
+key it reads from that project's latest files is a dependency's; a build
+without a plan step computes its key in each job, with its own build id in it.
+Jobs compute keys as well as the plan step, so nothing here imports
 ``snapshot``.
 """
 
@@ -71,6 +73,11 @@ def key_of(k: KeyJson) -> str:
     """The key: the commit, a dash, and the first 32 hex digits of the SHA-256 of ``key.json``."""
     digest = hashlib.sha256(encode_key_json(k)).hexdigest()[:DIGEST_LENGTH]
     return f"{k.commit}-{digest}"
+
+
+def commit_of(key: str) -> str:
+    """The commit a key names: what ``key_of`` wrote before the dash."""
+    return key.rsplit("-", 1)[0]
 
 
 def create_key_json(store, prefix: str, key: str, k: KeyJson) -> bool:

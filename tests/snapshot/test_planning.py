@@ -1,6 +1,6 @@
 """The plan's inputs and outputs, without builds: the key, the declaration a template makes,
-the step ids the plan carries, and the rewrite that writes the keys of every step a snapshot
-download takes.
+the step ids the plan carries, and the rewrite that writes the keys of every step a download
+of another project takes.
 
 Graphs and templates come from ``chain.py``; the five sanitised real pipelines of
 ``fixtures/`` are read as their repositories would commit them.
@@ -36,7 +36,14 @@ from lib.snapshot.declaration import (
     read_declaration,
     rule_violations,
 )
-from lib.snapshot.document import Rewrite, Taken, load_document, planned
+from lib.snapshot.document import (
+    Rewrite,
+    Taken,
+    latest_dependencies,
+    latest_download,
+    load_document,
+    planned,
+)
 from lib.snapshot.git import RealGit, run_command
 from lib.snapshot.lines import release_line
 from lib.snapshot.planner import Root, make_plan
@@ -57,7 +64,7 @@ def plans(world, number: int) -> list:
         commit = world.hosting.head(r)
         root = Root(r, "master", commit, f"01890000-0000-7000-8000-{number:012d}", number)
         declaration = read_declaration(world.hosting.trees[commit], r)
-        found.append(make_plan(root, declaration, world.git, world.pipelines))
+        found.append(make_plan(root, declaration, (), world.git, world.pipelines))
     return found
 
 
@@ -252,16 +259,27 @@ def taken_of(projects) -> dict[str, Taken]:
     }
 
 
-def test_the_rewrite_writes_the_key_of_every_step_a_snapshot_download_takes(template):
-    """The pipeline the plan step uploads gives every snapshot download of another project
-    the key of its project for each step it takes, the one it names or every step of the
-    project, and nothing that would find a build; a latest successful download is left as
-    generated; every configuration of the plugin carries the build's key; every step runs the
-    plugin at the plan step's commit."""
+def read_of(doc, own: str) -> dict:
+    """A key of its own for each step each latest successful download of ``doc`` takes: each
+    step it names, else each of ``DEPENDENCY_STEPS``, as the plan step reads them."""
+    downloads = dict.fromkeys(d for d, _ in latest_dependencies(doc, own))
+    return {
+        d: {s: f"{n:040x}-{m:032x}" for m, s in enumerate(d.step or DEPENDENCY_STEPS, 1)}
+        for n, d in enumerate(downloads, 100)
+    }
+
+
+def test_the_rewrite_writes_the_key_of_every_step_a_download_of_another_project_takes(template):
+    """The pipeline the plan step uploads gives every download of another project the key of
+    each step it takes, the one it names or every step: of a snapshot download its project's
+    planned key, of a latest successful download the key read for that step; and nothing that
+    would find a build; every configuration of the plugin carries the build's key; every step
+    runs the plugin at the plan step's commit."""
     doc = load_document(generated(template.text, template.own_ref))
     taken = taken_of(p for p, t, _ in template.expected if t == SNAPSHOT)
+    read = read_of(doc, template.own)
 
-    out = planned(doc, Rewrite(template.own, KEY, PLUGIN_COMMIT, taken, {}))
+    out = planned(doc, Rewrite(template.own, KEY, PLUGIN_COMMIT, taken, read, {}))
 
     blocks = (options_of(doc), options_of(out))
     found = ("GIT_REF", "STEP", "REQUIRE_STRICT_REF_MATCH", "LATEST")
@@ -270,21 +288,20 @@ def test_the_rewrite_writes_the_key_of_every_step_a_snapshot_download_takes(temp
         view = agent_view(after)
         assert plugin == f"{PLUGIN}#{PLUGIN_COMMIT}"
         assert view["KEY"] == KEY
-        downloads = (
-            [agent_view(e) for e in before.get("download", {}).get("projects", [])],
-            view.get("DOWNLOAD", {}).get("PROJECTS", []),
-        )
+        entries = before.get("download", {}).get("projects", [])
+        downloads = ([agent_view(e) for e in entries], view.get("DOWNLOAD", {}).get("PROJECTS", []))
         assert len(downloads[0]) == len(downloads[1])
-        for generated_entry, e in zip(*downloads):
+        for written, generated_entry, e in zip(entries, *downloads):
             project = generated_entry.get("PROJECT_ID", template.own)
             if project == template.own:
                 continue
-            if generated_entry.get("LATEST"):
-                assert generated_entry == e
-                continue
             named = generated_entry.get("STEP")
             steps = [named] if isinstance(named, str) else named or DEPENDENCY_STEPS
-            assert e["KEYS"] == {s.upper(): taken[project].key for s in steps}
+            if generated_entry.get("LATEST"):
+                keys = read[latest_download(written, project)]
+            else:
+                keys = {s: taken[project].key for s in steps}
+            assert e["KEYS"] == {s.upper(): keys[s] for s in steps}
             assert e["VARIANT"] == generated_entry["VARIANT"]
             assert not set(found) & set(e)
 

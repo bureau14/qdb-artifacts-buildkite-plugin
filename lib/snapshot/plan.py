@@ -7,11 +7,13 @@ reads it. ``planned_project`` is the check a build of the chain makes against
 it; ``dependencies_first`` orders a tree for the steps that start builds.
 
 The projects are the snapshot tree: the first build's project and,
-recursively, the snapshot dependencies of every project. Every project but the
-first has a key; the first's key is null when it has no snapshot (its own
-declaration holds a latest successful dependency). A key is that of what
-``key_json_of`` reads from the plan (``keyed``), so every build of the chain
-creates its ``key.json`` from the plan alone and computes no key.
+recursively, the snapshot dependencies of every project. Every project has a
+key: that of what ``key_json_of`` reads from the plan (``keyed``), so every
+build of the chain creates its ``key.json`` from the plan alone and computes
+no key. The first build's downloads that take the latest successful build of
+another project are read once, by its plan step, and the keys read are part
+of the plan and of the first build's key, so its second run and its every job
+take the same keys.
 
 The document holds what the builds of the chain read::
 
@@ -19,25 +21,31 @@ The document holds what the builds of the chain read::
      "first": {"build_number": <n>, "project": "<slug>"},
      "id": "<first build's uuid>",
      "projects": {"<project>": {"branch": "<branch its started build runs under>",
-                                "commit": "<40 hex>", "deps": ["<project>", ...],
-                                "key": "<key>" or null,
+                                "deps": ["<project>", ...], "key": "<key>",
+                                "latest": [{"keys": {"<step id>": "<key>"},
+                                            "project": "<slug>",
+                                            "ref": "refs/heads/<branch>",
+                                            "step": ["<step id>", ...] or null,
+                                            "strict": true or false,
+                                            "variant": "<platform>"}],
                                 "ref": "refs/heads/<branch>" or "refs/tags/<tag>",
                                 "steps": ["<step id>", ...]}},
      "rebuild": "none" or "one" or "all"}
 
 ``steps`` are the step ids the project's templates promote at its commit, so
-that no build of the chain reads a dependency's templates again.
+that no build of the chain reads a dependency's templates again. A project's
+commit is its key's (``commit_of``).
 """
 
 from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..key import KeyJson, canonical_json, key_of
+from ..key import KeyJson, canonical_json, commit_of, key_of
 
 # How many hex digits of a commit a label or a message shows.
 SHORT_COMMIT = 12
@@ -60,14 +68,37 @@ class First:
 
 
 @dataclass(frozen=True)
+class LatestDownload:
+    """A download of the first build that takes the latest successful build of another
+    project: the project, the platform, the ref its walk starts at, whether it tries that
+    ref alone, and the step ids it names, None for every step of the newest key."""
+
+    project: str
+    variant: str
+    ref: str
+    strict: bool
+    step: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class Latest:
+    """A latest successful download and the key of each step it takes, as the plan step read
+    them through the latest files."""
+
+    download: LatestDownload
+    keys: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class Planned:
     """A project of the chain: every build of the chain uses its build at ``key``.
 
     ``ref`` is the full ref its commit was taken from (``refs/heads/<branch>``
     or ``refs/tags/<tag>``), ``branch`` the name a build of it that the chain
     starts runs under, ``deps`` its direct snapshot dependencies (projects of
-    the same plan), ``steps`` the step ids its templates promote. ``key`` is
-    None only for a first build that has no snapshot.
+    the same plan), ``steps`` the step ids its templates promote, ``latest``
+    its downloads that take the latest successful build, which only the first
+    build has. ``key`` is None only while ``make_plan`` has not keyed it.
     """
 
     ref: str
@@ -76,6 +107,7 @@ class Planned:
     branch: str
     deps: tuple[str, ...] = ()
     steps: tuple[str, ...] = ()
+    latest: tuple[Latest, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -94,12 +126,24 @@ class Plan:
 # ---------------------------------------------------------------------------
 
 
+def latest_document(r: Latest) -> dict[str, Any]:
+    d = r.download
+    return {
+        "keys": dict(r.keys),
+        "project": d.project,
+        "ref": d.ref,
+        "step": None if d.step is None else list(d.step),
+        "strict": d.strict,
+        "variant": d.variant,
+    }
+
+
 def planned_document(n: Planned) -> dict[str, Any]:
     return {
         "branch": n.branch,
-        "commit": n.commit,
         "deps": list(n.deps),
         "key": n.key,
+        "latest": [latest_document(r) for r in n.latest],
         "ref": n.ref,
         "steps": list(n.steps),
     }
@@ -120,9 +164,21 @@ def encode_plan(p: Plan) -> str:
     return canonical_json(plan_document(p)).decode("utf-8")
 
 
+def latest_of(d: Mapping[str, Any]) -> Latest:
+    step = None if d["step"] is None else tuple(d["step"])
+    download = LatestDownload(d["project"], d["variant"], d["ref"], d["strict"], step)
+    return Latest(download, d["keys"])
+
+
 def planned_of(d: Mapping[str, Any]) -> Planned:
     return Planned(
-        d["ref"], d["commit"], d["key"], d["branch"], tuple(d["deps"]), tuple(d["steps"])
+        d["ref"],
+        commit_of(d["key"]),
+        d["key"],
+        d["branch"],
+        tuple(d["deps"]),
+        tuple(d["steps"]),
+        tuple(latest_of(r) for r in d["latest"]),
     )
 
 
@@ -154,11 +210,13 @@ def forced_build(rebuild: str, is_first: bool, plan_id: str) -> str | None:
 
 def key_json_of(p: Plan, project: str) -> KeyJson:
     """What the planned key of ``project`` stands for, as the plan fixed it: its commit, the
-    key of each dependency, and the plan's id when the project is forced."""
+    key of each snapshot dependency and each key read for a latest successful download, and
+    the plan's id when the project is forced."""
     n = p.projects[project]
-    deps = tuple((d, p.projects[d].key) for d in n.deps)
+    planned = ((d, p.projects[d].key) for d in n.deps)
+    read = ((r.download.project, k) for r in n.latest for k in r.keys.values())
     forced = forced_build(p.rebuild, project == p.first.project, p.id)
-    return KeyJson(project, n.commit, deps, forced)
+    return KeyJson(project, n.commit, (*planned, *read), forced)
 
 
 def planned_project(p: Plan, project: str, commit: str) -> Planned:
@@ -190,12 +248,12 @@ def dependencies_first(p: Plan, project: str) -> list[str]:
     return order
 
 
-def keyed(p: Plan, without_snapshot: Collection[str]) -> Plan:
+def keyed(p: Plan) -> Plan:
     """``p`` with the key of every project, dependencies first: the key of what
-    ``key_json_of`` says it stands for; None for a project ``without_snapshot``."""
+    ``key_json_of`` says it stands for."""
 
     def with_key(q: Plan, project: str) -> Plan:
-        key = None if project in without_snapshot else key_of(key_json_of(q, project))
+        key = key_of(key_json_of(q, project))
         projects = {**q.projects, project: replace(q.projects[project], key=key)}
         return replace(q, projects=projects)
 

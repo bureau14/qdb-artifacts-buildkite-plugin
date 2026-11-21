@@ -16,8 +16,8 @@ and holds every upload and promote of it to a step id.
 Both read the plugin's configuration by its structure (the ``configuration``
 module), so what the reader counts and what the rule checks are one notion.
 
-A snapshot tree never contains a latest successful dependency: a declaration
-that holds one has no snapshot (``has_snapshot``).
+A project whose declaration holds a latest successful dependency is planned
+only as a first build, and its key holds the keys its plan step read for it.
 
 A template that does not parse, or that writes a ``step_id`` that is not a
 step id, raises ``TemplateError``, which names the project and the file.
@@ -139,11 +139,6 @@ def declared_path(d: Declaration, project: str, t: str) -> str:
     return next(e.path for e in d.entries if e.project == project and e.type == t)
 
 
-def has_snapshot(d: Declaration) -> bool:
-    """False when ``d`` holds a latest successful dependency: a snapshot never contains one."""
-    return not declared_entries(d, LATEST_SUCCESSFUL)
-
-
 def violation_message(v: Violation) -> str:
     """How a violation is shown in the job log and the annotation."""
     return f"step {v.step}: {v.reason}"
@@ -166,8 +161,8 @@ def other_project(entry: Mapping[str, Any], own: str) -> str | None:
 
 def entry_type(entry: Mapping[str, Any]) -> str:
     """``LATEST_SUCCESSFUL`` for an entry that takes the latest successful build, which is
-    not planned, not triggered and not part of a key, and which the plan step leaves as
-    generated; else ``SNAPSHOT``."""
+    not planned and not triggered, and whose keys the plan step of a first build reads from
+    latest files; else ``SNAPSHOT``."""
     return LATEST_SUCCESSFUL if takes_latest(entry) else SNAPSHOT
 
 
@@ -430,7 +425,8 @@ def entry_problem(
     """Why one download entry breaks the rule; None when it does not.
 
     The entry's type must be the type a template declares the project with.
-    A latest successful entry is left as generated, so its ref is not looked at.
+    A latest successful entry takes the latest successful build of its ref
+    whatever that ref is, so its ref is not looked at.
     """
     project = other_project(entry, own)
     if project is None:

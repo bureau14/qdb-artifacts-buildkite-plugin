@@ -303,7 +303,7 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 | `variant`                  | string                     | yes      | The platform to download.                                                                                                       |
 | `step`                     | string or array of strings |          | The step ids to download. Required from the build's own key; without it, an entry of another project takes every step.          |
 | `keys`                     | object                     |          | Written by the plan step, never by a person: the key of each step the entry takes.                                              |
-| `latest`                   | boolean                    |          | The entry takes the latest successful build of another project, which a build with snapshot dependencies does not plan.         |
+| `latest`                   | boolean                    |          | The entry takes the latest successful build of another project, which is not planned: the plan step reads its keys.             |
 | `git_ref`                  | string                     |          | The ref whose latest successful build to take (e.g. `refs/heads/main`). Required in an entry of another project without `keys`. |
 | `require_strict_ref_match` | boolean                    |          | Disable branch fallback. Default: `false`.                                                                                      |
 | `files`                    | array of strings           | yes      | Archive glob patterns, optionally with entry filters (see [Entry filtering](#entry-filtering)).                                 |
@@ -365,7 +365,9 @@ If the build command exits with a non-zero status, `post-command` still uploads 
 project's commit, a dash, and the first 32 hex digits of the SHA-256 of
 `key.json`, the canonical JSON (members sorted, no white space, UTF-8) of
 `{"commit": <40 hex>, "deps": [[<project>, <key>], ...], "project": <slug>}`.
-`deps` holds the key of the build taken of each snapshot dependency, sorted.
+`deps` holds the key of the build taken of each snapshot dependency, and the
+key read for each step a latest successful download takes, each pair once,
+sorted.
 A key of one build's own also holds `"build": "<build id>"`, so that no other
 build has it. The plan step of a build with snapshot dependencies computes the
 keys of its build and of the builds it starts, writes its own as the option
@@ -407,7 +409,8 @@ downloads, and the step id of each step that uploads.
 - A **root** is a build without `SNAPSHOT_PLAN` in its environment: one
   started by a person, a push or a schedule. Its plan step makes the **plan**:
   the commit, the key, the step ids and the branch of every project of its
-  snapshot tree. A **chain node** is a build that a trigger step started for
+  snapshot tree, and the keys it read for its own latest successful
+  downloads. A **chain node** is a build that a trigger step started for
   the plan, with `SNAPSHOT_PLAN` in its environment; a **chain** is a root and
   its chain nodes.
 - The **branch** of a chain node is the name its build runs under: its own
@@ -455,12 +458,18 @@ download:
       files: ["*-c-api.tar.zst"]
 ```
 
-It is not planned, not triggered and part of no key: the plan step leaves the
-entry as generated, and the job takes the latest successful build of the ref
-when it runs. A snapshot tree never contains one. A project whose templates
-hold a latest successful dependency has no snapshot: as a root it is built
-every time, at a key of each build's own, and its snapshot dependencies are
-planned all the same; no project can take it as a snapshot dependency.
+It is not planned and not triggered. The plan step of the root reads it once,
+before it plans: the key of each step it takes, through the latest files of
+the ref, then of master and main, as a job would (see
+[Download](#download-cross-project-with-extraction-and-entry-filtering)). It
+writes those keys into the entry as `keys`, into the root's `key.json` and
+into the plan, so that every job of the root and its resume step take the
+same keys, and the root is reused while the latest files name the same keys.
+A download that finds no latest file fails the plan step before anything
+runs, and names the latest files, or for an entry without `step` the folders,
+it read. No project can take a project that holds a latest successful
+dependency as a snapshot dependency: such a project is planned only as a
+root.
 
 ### What a repository changes to adopt
 
@@ -525,14 +534,14 @@ and the list to write in it, as `step: [build]`; so does the root.
    Both are in one concurrency group per pipeline and commit, so one build of a
    commit passes the gate at a time.
 2. Enter: its command generates the pipeline, then the plugin plans. A root
-   makes the plan and keeps it as meta-data of its own build; a chain node
-   reads its root's. Then a build that has a key creates its `key.json`, from
-   the plan alone. A build whose pipeline promotes at least one step, and
-   whose every step and platform asked for is made at its key, is reused and
-   builds nothing. Else the dependencies that lack a step are triggered, with
-   a resume step that carries `resume`. Else the pipeline is uploaded with the
-   key of every step a snapshot download takes, and its own key, written into
-   it.
+   reads the keys of its latest successful downloads, makes the plan and
+   keeps it as meta-data of its own build; a chain node reads its root's.
+   Then the build creates its `key.json`, from the plan alone. A build whose
+   pipeline promotes at least one step, and whose every step and platform
+   asked for is made at its key, is reused and builds nothing. Else the
+   dependencies that lack a step are triggered, with a resume step that
+   carries `resume`. Else the pipeline is uploaded with the key of every step
+   a download of another project takes, and its own key, written into it.
 3. Resume: once the triggered builds have ended, it uploads the pipeline, or
    fails and names the dependency that failed.
 4. The jobs run as ever. A step that promotes makes its folder at the key
@@ -565,7 +574,7 @@ nothing.
 | key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload |
 | manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote             |
 | branch's latest file | `<project>/refs/heads/<branch>/<platform>/<step id>`       | by each promote, but under a `snapshot/` name                   |
-| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by a gate step of a build that has a key                  |
+| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by a gate step of a build that has its plan               |
 | plan                 | meta-data `snapshot-plan` of the root build                | by the root's enter step; a retried enter writes it again       |
 | marks                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the enter and resume steps of each build                     |
 | arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the gate                          |
@@ -605,8 +614,8 @@ most once.
   message that selects), one with `SNAPSHOT_DISABLE=1`, and one on a branch its
   repository does not have (a release build on a tag) run their plain pipeline.
   A chain node never does.
-- What a latest successful dependency downloads is decided when its job runs,
-  as before.
+- In a build without a plan step, what a download of another project takes is
+  decided when its job runs.
 - No repository may have a branch under `snapshot/`; nothing checks that.
 
 ## Resolve and download artifacts outside the plugin

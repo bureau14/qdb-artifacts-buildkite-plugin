@@ -157,16 +157,12 @@ def origin_of(job: Job, p: Plan, key: str) -> Origin:
     return Origin(job.project, key, p.id, job.build)
 
 
-def create_own_key_json(job: Job, edge: Edge, p: Plan) -> Origin | None:
+def create_own_key_json(job: Job, edge: Edge, p: Plan) -> Origin:
     """Create ``key.json`` of the key the plan fixed for this build unless it is there: what
     the plan says that key stands for, of which the key is the hash. Then the origin of the
     records this build writes at that key, which find its ``key.json`` there before them.
-
-    None for a first build without a snapshot: it has no key.
     """
     key = own_planned(job, edge, p).key
-    if key is None:
-        return None
     if create_key_json(edge.store, edge.prefix, key, key_json_of(p, job.project)):
         edge.log(f"wrote s3://{edge.store.bucket}/{layout.key_json(edge.prefix, job.project, key)}")
     return origin_of(job, p, key)

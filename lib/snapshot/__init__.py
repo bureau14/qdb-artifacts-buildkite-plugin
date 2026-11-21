@@ -2,10 +2,11 @@
 
 Ordinary upload and download jobs never import this package. Its modules
 import each other and, of the rest of ``lib/``, the layout, the key, the
-manifest, the library's error and its retry, and the job side's forms,
-checkout commit and reading of a boolean (``layout``, ``key``, ``manifest``,
-``errors``, ``retry``, ``forms``, ``options``), so that the plan step and the
-jobs compute one key and read one manifest alike. Only the modules of the gate
+manifest, the walk over latest files, the library's error and its retry, and
+the job side's forms, checkout commit and reading of a boolean (``layout``,
+``key``, ``manifest``, ``resolve``, ``errors``, ``retry``, ``forms``,
+``options``), so that the plan step and the jobs compute one key, read one
+manifest and walk the latest files alike. Only the modules of the gate
 steps (``job``, ``edge``, ``failing``, ``enter``, ``leave``) read the job's
 variables and open the store as a job opens it. ``leave`` and the modules it
 imports read no document, so the step of leave runs without PyYAML.
@@ -28,6 +29,8 @@ imports read no document, so the step of leave runs without PyYAML.
 - ``lines``: the release line of a root build, decided on git's facts.
 - ``plan``: the plan of a chain as data and as the JSON document kept in the
   root build's meta-data.
+- ``latest``: the root's downloads that take the latest successful build of
+  another project, whose keys its plan step reads once through latest files.
 - ``planner``: the plan of a root build: its snapshot tree, from git and
   Buildkite, each behind an interface.
 - ``records``: failure records as values, and the decisions the gate steps

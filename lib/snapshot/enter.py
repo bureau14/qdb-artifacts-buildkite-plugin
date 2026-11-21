@@ -66,6 +66,7 @@ from .document import (
     dump_document,
     dump_written,
     entry_taking,
+    latest_dependencies,
     load_document,
     needed_folders,
     planned,
@@ -95,6 +96,7 @@ from .edge import (
 from .failing import Refusal, gated
 from .git import Git, RealGit, branch_ref
 from .job import Job, is_chain_node, job_of
+from .latest import read_latest
 from .plan import Plan, PlanError, encode_plan, short_commit
 from .planner import Pipelines, Root, make_plan, rebuild_setting
 from .records import (
@@ -204,9 +206,11 @@ def generated_pipeline(job: Job, edge: Edge) -> Generated:
 
 
 def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
-    """3, a root: make the plan (sections 3 and 4), write it, annotate the build with it.
+    """3, a root: read the keys of its latest successful downloads, make the plan (sections 3
+    and 4), write it, annotate the build with it.
 
-    A plan that cannot be made fails the build with its message.
+    A download that finds no latest file, and a plan that cannot be made, fail
+    the build with their message, before anything runs.
     """
     try:
         root = Root(
@@ -217,7 +221,9 @@ def root_plan(job: Job, edge: PlanEdge, generated: Generated) -> Plan:
             build_number=job.build.number,
             rebuild=rebuild_setting(job.rebuild),
         )
-        p = make_plan(root, generated.declaration, edge.git, edge.pipelines)
+        downloads = [d for d, _ in latest_dependencies(generated.doc, job.project)]
+        latest = read_latest(edge.store, edge.prefix, downloads, generated.declaration)
+        p = make_plan(root, generated.declaration, latest, edge.git, edge.pipelines)
     except PlanError as exc:
         annotation = refusal_annotation(PLAN_REFUSED, job.project, job.build, str(exc))
         raise Refusal(str(exc), annotation) from exc
@@ -417,13 +423,13 @@ def fail_with_causes(
     p: Plan,
     generated: Generated,
     causes: list[Cause],
-    origin: Origin | None,
+    origin: Origin,
 ) -> NoReturn:
     """Fail a build that its dependencies left without steps, each named as a cause."""
     records = chain_records(edge, p, causes)
     named = [with_asking_entry(job, p, generated, c, records) for c in causes]
     message = "\n".join(cause_message(p, c, records) for c in named)
-    record = None if origin is None else caused_record(origin, named, edge.clock())
+    record = caused_record(origin, named, edge.clock())
     annotation = caused_annotation(p, job.project, job.build, named, records)
     raise Refusal(message, annotation, record)
 
@@ -434,7 +440,7 @@ def failed_in_chain(
     p: Plan,
     generated: Generated,
     missing: Mapping[str, tuple[Folder, ...]],
-    origin: Origin | None,
+    origin: Origin,
 ) -> None:
     """9. A dependency with a missing folder failed earlier in this chain: fail, triggering
     nothing.
@@ -471,27 +477,31 @@ def build_pipeline(
     edge: PlanEdge,
     p: Plan,
     generated: Generated,
-    key: str | None,
+    key: str,
     made: Mapping[Folder, Manifest],
 ) -> None:
     """11. Rewrite the generated pipeline (section 8), mark the build ``built``, upload it.
 
-    With a key, ``snapshot-promotes`` names the step of each folder that is
-    built: a replaced step promotes nothing, so leave asks for no outcome of
-    it. The marks leave reads are set before the upload, so that no uploaded
-    step runs in a build without them; an upload the agent refuses then fails
-    the step, which sets the mode ``failed``.
+    ``snapshot-promotes`` names the step of each folder that is built: a
+    replaced step promotes nothing, so leave asks for no outcome of it. The
+    marks leave reads are set before the upload, so that no uploaded step
+    runs in a build without them; an upload the agent refuses then fails the
+    step, which sets the mode ``failed``.
     """
-    deps = p.projects[job.project].deps
-    taken = {d: Taken(dependency_key(p, d), p.projects[d].steps) for d in deps}
-    out = planned(generated.doc, Rewrite(job.project, key, edge.plugin_commit(), taken, made))
+    own = p.projects[job.project]
+    taken = {d: Taken(dependency_key(p, d), p.projects[d].steps) for d in own.deps}
+    latest = {r.download: r.keys for r in own.latest}
+    rewrite = Rewrite(job.project, key, edge.plugin_commit(), taken, latest, made)
+    out = planned(generated.doc, rewrite)
     document = dump_document(out)
-    if key is not None:
-        promotes = canonical_json(promote_entries(out)).decode("utf-8")
-        edge.agent.meta_data_set(PROMOTES, promotes)
+    promotes = canonical_json(promote_entries(out)).decode("utf-8")
+    edge.agent.meta_data_set(PROMOTES, promotes)
     edge.agent.meta_data_set(MODE, BUILT)
     edge.agent.pipeline_upload(document)
-    edge.log(f"{job.project} builds: uploaded the pipeline with the keys of {len(deps)} projects")
+    edge.log(
+        f"{job.project} builds: uploaded the pipeline with the keys of {len(own.deps)} planned "
+        f"projects and {len(own.latest)} latest successful downloads"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -501,15 +511,12 @@ def build_pipeline(
 
 @dataclass(frozen=True)
 class Prepared:
-    """What steps 1 to 5 found: the pipeline, the plan, the own key and origin, ``D`` and ``N``.
-
-    Without a key (step 4) there is no origin, and ``D`` and ``N`` are empty.
-    """
+    """What steps 1 to 5 found: the pipeline, the plan, the origin of the own records (which
+    holds the own key), ``D`` and ``N``."""
 
     generated: Generated
     plan: Plan
-    key: str | None
-    origin: Origin | None
+    origin: Origin
     d: frozenset[Folder]
     n: frozenset[Folder]
 
@@ -524,41 +531,34 @@ def first_steps(job: Job, edge: PlanEdge, plan_of: PlanOf) -> Prepared:
     generated = generated_pipeline(job, edge)
     p = plan_of(job, edge, generated)
     origin = create_own_key_json(job, edge, p)
-    if origin is None:
-        # 4. Only a root can be here: its declaration holds a latest successful dependency.
-        edge.log(f"{job.project} has no snapshot: it is built, and never reused")
-        return Prepared(generated, p, None, None, frozenset(), frozenset())
     d = promoted(job, edge, generated, origin)
     check_step_ids(job, edge, generated, p, origin)
     n = asked(job, d)
     check_declared(job, edge, n, d, origin)
-    return Prepared(generated, p, origin.key, origin, d, n)
+    return Prepared(generated, p, origin, d, n)
 
 
 def own_manifests(job: Job, edge: Edge, prepared: Prepared) -> dict[Folder, Manifest | None]:
-    """The manifest of each folder of ``D`` at ``K``; none without a key."""
-    if prepared.key is None:
-        return {}
-    return manifests_at(edge, job.project, prepared.key, prepared.d)
+    """The manifest of each folder of ``D`` at ``K``."""
+    return manifests_at(edge, job.project, prepared.origin.key, prepared.d)
 
 
 def enter_decisions(job: Job, edge: PlanEdge) -> None:
     prepared = first_steps(job, edge, entered_plan)
     found = own_manifests(job, edge, prepared)
     made = made_only(found)
-    if prepared.origin is not None:
-        m = frozenset(found) - frozenset(made)
-        if is_reused(prepared.d, prepared.n, m):
-            reuse(job, edge, prepared.plan, made, prepared.n)
-            return
-        check_shared(job, edge, prepared.plan, prepared.origin, prepared.n & m)
+    m = frozenset(found) - frozenset(made)
+    if is_reused(prepared.d, prepared.n, m):
+        reuse(job, edge, prepared.plan, made, prepared.n)
+        return
+    check_shared(job, edge, prepared.plan, prepared.origin, prepared.n & m)
     needs = needed_folders(prepared.generated.doc, job.project, made, steps_of(prepared.plan))
     missing = missing_folders(dependency_manifests(edge, prepared.plan, needs))
     if missing:
         failed_in_chain(job, edge, prepared.plan, prepared.generated, missing, prepared.origin)
         trigger(job, edge, prepared.plan, needs, missing)
         return
-    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
+    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.origin.key, made)
 
 
 def resume_decisions(job: Job, edge: PlanEdge) -> None:
@@ -572,7 +572,7 @@ def resume_decisions(job: Job, edge: PlanEdge) -> None:
             for project, folders in missing.items()
         ]
         fail_with_causes(job, edge, prepared.plan, prepared.generated, causes, prepared.origin)
-    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.key, made)
+    build_pipeline(job, edge, prepared.plan, prepared.generated, prepared.origin.key, made)
 
 
 def enter(job: Job, edge: PlanEdge) -> int:
@@ -581,10 +581,11 @@ def enter(job: Job, edge: PlanEdge) -> int:
     1. The command failed: record ``generator_failed`` when a chain node; fail.
     2. The generated pipeline breaks the rule of section 2: record ``rule``
        when a chain node; fail.
-    3. A chain node loads the plan and checks its commit; a root makes the
-       plan, writes it and annotates the build with it. A plan that cannot be
-       made fails the build with its message. Then ``key.json`` of the own key.
-    4. The own project has no snapshot: go to 8 with no key.
+    3. A chain node loads the plan and checks its commit; a root reads the
+       keys of its latest successful downloads, makes the plan, writes it and
+       annotates the build with it. A download that finds no latest file, and
+       a plan that cannot be made, fail the build with their message. Then
+       ``key.json`` of the own key.
     5. ``D`` is what this pipeline promotes, a folder promoted twice failing;
        a step id no template of the commit writes, or a download without a
        step of a dependency that has no step ids: record ``rule``; fail.

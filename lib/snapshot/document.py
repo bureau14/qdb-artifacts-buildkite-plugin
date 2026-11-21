@@ -7,9 +7,10 @@ linux-aarch64-release" and leaves the build open. Every job would then find a
 build for itself, at its own moment, and two jobs of one chain could find two
 different builds. So the plan step fixes the key of every step a download
 takes, and writes it into the document before any job exists (``planned``):
-``keys: {<step id>: <key>}`` into every snapshot entry of another project,
-and the build's own key into every configuration of the plugin, which the
-build's own uploads, promotes and downloads use.
+``keys: {<step id>: <key>}`` into every entry of another project, the planned
+key of a snapshot dependency or the key read for a download that takes the
+latest successful build, and the build's own key into every configuration of
+the plugin, which the build's own uploads, promotes and downloads use.
 
 What a step makes is a folder of the key: a platform (the option ``variant``
 of an upload or promote block) and the step id the configuration names at its
@@ -38,6 +39,7 @@ import yaml
 
 from ..layout import Folder, folder_document
 from ..manifest import Manifest
+from ..options import read_bool
 from .configuration import (
     GIT_REF,
     KEY,
@@ -54,11 +56,13 @@ from .configuration import (
     is_plugin_key,
     mappings,
     named_variant,
+    option_value,
     plugin_block,
     plugin_configurations,
     reads_as,
 )
 from .declaration import (
+    LATEST_SUCCESSFUL,
     SNAPSHOT,
     entry_type,
     leaf_steps,
@@ -69,7 +73,7 @@ from .declaration import (
     step_label,
     step_name,
 )
-from .plan import Plan, Planned, dependencies_first, short_commit, trigger_label
+from .plan import LatestDownload, Plan, Planned, dependencies_first, short_commit, trigger_label
 
 RESUME_OPTION = "resume"
 
@@ -152,6 +156,30 @@ def snapshot_dependencies(doc: Any, own: str) -> list[tuple[str, dict[str, Any]]
         project = other_project(e, own)
         if project is not None and entry_type(e) == SNAPSHOT:
             found.append((project, e))
+    return found
+
+
+def latest_download(entry: Mapping[Any, Any], project: str) -> LatestDownload:
+    """What an entry of ``project`` that takes the latest successful build asks the walk over
+    latest files: its platform, its ref, whether it tries that ref alone, and the steps it
+    names, None for every step."""
+    return LatestDownload(
+        project,
+        named_variant(entry),
+        option_value(entry, GIT_REF),
+        read_bool(option_value(entry, STRICT_REF_MATCH)),
+        entry_steps(entry) or None,
+    )
+
+
+def latest_dependencies(doc: Any, own: str) -> list[tuple[LatestDownload, dict[str, Any]]]:
+    """``(download, entry)`` of every entry of ``doc`` of another project that takes the latest
+    successful build, in order; ``own`` is the pipeline's own project."""
+    found = []
+    for e in download_entries(doc):
+        project = other_project(e, own)
+        if project is not None and entry_type(e) == LATEST_SUCCESSFUL:
+            found.append((latest_download(e, project), e))
     return found
 
 
@@ -308,17 +336,19 @@ class Taken:
 class Rewrite:
     """What the plan step writes into the generated pipeline of ``own`` before it uploads it.
 
-    ``key`` is the pipeline's own key, None when it has no snapshot;
-    ``plugin_commit`` the commit the plan step runs (``git rev-parse HEAD`` of
-    the plugin's checkout); ``dependencies`` the key and step ids of each
-    snapshot dependency, by project; ``made`` the manifest of each own folder
+    ``key`` is the pipeline's own key; ``plugin_commit`` the commit the plan
+    step runs (``git rev-parse HEAD`` of the plugin's checkout);
+    ``dependencies`` the key and step ids of each snapshot dependency, by
+    project; ``latest`` the key of each step each latest successful download
+    takes, as the plan holds them; ``made`` the manifest of each own folder
     that is made at ``key``.
     """
 
     own: str
-    key: str | None
+    key: str
     plugin_commit: str
     dependencies: Mapping[str, Taken]
+    latest: Mapping[LatestDownload, Mapping[str, str]]
     made: Mapping[Folder, Manifest]
 
 
@@ -403,12 +433,16 @@ def needed_folders(
 # ---------------------------------------------------------------------------
 
 
-def keyed_entry(entry: Mapping[Any, Any], taken: Taken) -> dict[Any, Any]:
-    """``entry`` taking each of its steps at the dependency's key: ``keys``, in place of the
-    options that would find a build."""
-    folders = taken_folders(entry, taken.steps)
+def keyed_entry(entry: Mapping[Any, Any], keys: Mapping[str, str]) -> dict[Any, Any]:
+    """``entry`` taking each step of ``keys`` at its key: ``keys``, in place of the options
+    that would find a build."""
     kept = without_options(entry, (STEP, GIT_REF, STRICT_REF_MATCH, LATEST, KEYS))
-    return {**kept, KEYS: {f.step: taken.key for f in sorted(folders)}}
+    return {**kept, KEYS: dict(sorted(keys.items()))}
+
+
+def planned_keys(entry: Mapping[Any, Any], taken: Taken) -> dict[str, str]:
+    """The key of each step a snapshot entry takes: the dependency's planned key."""
+    return {f.step: taken.key for f in taken_folders(entry, taken.steps)}
 
 
 def with_key(config: Mapping[Any, Any], key: str) -> dict[Any, Any]:
@@ -437,20 +471,22 @@ def planned(doc: Any, r: Rewrite) -> Any:
       place (``replacement``). A made step's files lie at the build's key
       whoever made them, so an entry of the build's own steps stays as
       generated.
-    - Every snapshot entry that remains gets ``keys``: the dependency's key
-      for each step it takes. A latest successful entry is left as generated.
-    - With a key, every configuration of the plugin carries it as ``key``.
+    - Every entry of another project that remains gets ``keys``: of a
+      snapshot entry the dependency's key for each step it takes, of a latest
+      successful entry the key the plan step read for each.
+    - Every configuration of the plugin carries the build's key as ``key``.
     - Every key that names the plugin names it at the plugin commit.
     """
     out = copy.deepcopy(doc)
     for s in replaced_steps(out, r.made):
         replace_content(s, replacement(s, r.own, r.made))
     for project, e in snapshot_dependencies(out, r.own):
-        replace_content(e, keyed_entry(e, r.dependencies[project]))
-    if r.key is not None:
-        for config in plugin_configurations(out):
-            if isinstance(config, dict):
-                replace_content(config, with_key(config, r.key))
+        replace_content(e, keyed_entry(e, planned_keys(e, r.dependencies[project])))
+    for download, e in latest_dependencies(out, r.own):
+        replace_content(e, keyed_entry(e, r.latest[download]))
+    for config in plugin_configurations(out):
+        if isinstance(config, dict):
+            replace_content(config, with_key(config, r.key))
     for m in mappings(out):
         if any(is_plugin_key(k) for k in m):
             replace_content(m, with_plugin_commit(m, r.plugin_commit))

@@ -16,7 +16,9 @@ A step is found at a key in one of two ways:
 The files of a step are those its manifest names that match the entry's
 patterns and no exclude (``selected``): a download lists nothing. The plugin's
 download and a caller of the library resolve through these same functions,
-and fetch the objects each its own way.
+and fetch the objects each its own way; the plan step of a first build reads
+its latest successful downloads through the walk's own finders
+(``first_named``, ``first_newest``), and says itself what it did not find.
 """
 
 from __future__ import annotations
@@ -148,16 +150,33 @@ def newest_steps_at(
     return sorted((s for s in found if s is not None), key=lambda s: s.folder.step)
 
 
+def first_named(
+    store, prefix: str, project: str, refs: Sequence[str], folder: Folder
+) -> ResolvedStep | None:
+    """The step ``folder`` of the latest successful build of ``project`` that made it, on the
+    first of ``refs`` that has one; None when none has."""
+    found = (named_step_at(store, prefix, project, r, folder) for r in refs)
+    return next((s for s in found if s is not None), None)
+
+
+def first_newest(
+    store, prefix: str, project: str, refs: Sequence[str], platform: str
+) -> list[ResolvedStep]:
+    """Every made step of the newest key of ``platform``, on the first of ``refs`` that has
+    one; none when none has."""
+    found = (newest_steps_at(store, prefix, project, r, platform) for r in refs)
+    return next((s for s in found if s), [])
+
+
 def walk_named(
     store, prefix: str, project: str, ref: str, strict: bool, folder: Folder
 ) -> ResolvedStep:
     """The step ``folder`` of the latest successful build of ``project`` that made it,
     on the first branch of the walk that has one."""
     refs = walked_refs(ref, strict)
-    for r in refs:
-        found = named_step_at(store, prefix, project, r, folder)
-        if found is not None:
-            return found
+    found = first_named(store, prefix, project, refs, folder)
+    if found is not None:
+        return found
     tried = ", ".join(layout.latest_file(prefix, project, r, folder) for r in refs)
     raise ArtifactsError(
         f"{project} has no latest successful build of {folder} on {', '.join(refs)}: no "
@@ -171,10 +190,9 @@ def walk_newest(
     """Every made step of the newest key of ``platform``, on the first branch of the walk
     that has one."""
     refs = walked_refs(ref, strict)
-    for r in refs:
-        found = newest_steps_at(store, prefix, project, r, platform)
-        if found:
-            return found
+    found = first_newest(store, prefix, project, refs, platform)
+    if found:
+        return found
     tried = ", ".join(layout.latest_files(prefix, project, r, platform) for r in refs)
     raise ArtifactsError(
         f"{project} has no latest successful build of {platform} on {', '.join(refs)}: no "

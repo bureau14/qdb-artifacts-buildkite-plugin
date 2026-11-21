@@ -19,7 +19,7 @@ import json
 
 import pytest
 import yaml
-from chain import LOWER_NODES, MATRICES, SHAPED, above, below, entry, folders, tree
+from chain import LOWER_NODES, MATRICES, SHAPED, above, below, folders, tree
 from fakes import url
 from world import paired
 
@@ -388,45 +388,62 @@ def entries_of(document: str, project: str) -> list[dict]:
     return [e for e in found if e.get("project_id") == project]
 
 
-TOOLS_KEY = "7" * 40 + "-" + "7" * 32
+TOOLS_KEYS = {7: "7" * 40 + "-" + "7" * 32, 8: "8" * 40 + "-" + "8" * 32}
 
 
-def tools_made(world, wanted) -> None:
-    """A build of tools that made ``wanted`` at ``TOOLS_KEY`` and promoted them on master."""
-    build = Build("tools-build-7", 7, "https://buildkite.example.test/example/tools/builds/7")
+def tools_made(world, wanted, number: int) -> None:
+    """tools' build ``number``, which made ``wanted`` at its key and promoted them on master."""
+    key = TOOLS_KEYS[number]
+    url = f"https://buildkite.example.test/example/tools/builds/{number}"
+    build = Build(f"tools-build-{number}", number, url)
     for f in wanted:
-        location = layout.step_folder("", "tools", TOOLS_KEY, f)
+        location = layout.step_folder("", "tools", key, f)
         made = captured([("out/tools.bin", 5)], Uploaded("master", build))
         at = "2026-11-19T00:00:00.000Z"
         write_manifest(world.store, location, promoted_by(made, Promoted(at, "master", build)))
-        world.store.put(layout.latest_file("", "tools", MASTER, f), TOOLS_KEY.encode(), "")
+        world.store.put(layout.latest_file("", "tools", MASTER, f), key.encode(), "")
 
 
-def test_a_root_with_a_latest_successful_dependency_builds_every_time(worlds, graph_root, shape):
-    """A root that takes a project as latest successful compiles in every build, at a key of
-    each build's own, keeps that download as generated and gets every step of the newest key
-    that project's latest files name; its snapshot dependencies are built once."""
+def test_a_root_with_a_latest_successful_dependency_is_reused_while_its_latest_files_stay(
+    worlds, graph_root, shape
+):
+    """A root that takes a project as latest successful reads, in its plan step, the key of
+    every step whose latest file names the project's newest key, and writes them into each
+    of those downloads and into its key.json. Built again, it is reused while the latest files
+    name the same keys; once they name others it compiles again, under a key that names
+    those. Its snapshot dependencies are built once."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
     every = folders(matrix, step_ids)
-    tools_made(world, every)
+    tools_made(world, every, 7)
     world.projects[root].latest = ("tools",)
     world.commit(root)
 
-    builds = [world.build(root), world.build(root)]
+    first, again = world.build(root), world.build(root)
+    tools_made(world, every, 8)
+    moved = world.build(root)
 
-    generated = [entry("tools", v, MASTER, latest=True) for v in matrix for _ in step_ids]
+    builds = {first: TOOLS_KEYS[7], moved: TOOLS_KEYS[8]}
+    keys = [world.plan(b).projects[root].key for b in (first, again, moved)]
+    deps = [json.loads(world.store.objects[layout.key_json("", root, k)])["deps"] for k in keys]
+    written = {
+        (b.id, tuple(sorted(e["keys"].items())))
+        for b in builds
+        for e in entries_of(world.agents.uploads[b.id][-1], "tools")
+    }
     tools = {(d.build.id, d.folder, d.key) for d in world.downloads if d.project == "tools"}
     own = {(c.build.id, c.folder) for c in world.compiled if c.build.project == root}
-    keys = {k.split("/")[1] for k in world.objects(root + "/") if k.endswith("/key.json")}
-    assert [b.state for b in builds] == ["passed", "passed"]
+    assert [b.state for b in (first, again, moved)] == ["passed"] * 3
+    assert keys[0] == keys[1] != keys[2]
+    assert [{k for p, k in d if p == "tools"} for d in deps] == [
+        {TOOLS_KEYS[7]},
+        {TOOLS_KEYS[7]},
+        {TOOLS_KEYS[8]},
+    ]
+    assert written == {(b.id, tuple((s, k) for s in sorted(step_ids))) for b, k in builds.items()}
     assert own == {(b.id, f) for b in builds for f in every}
-    assert {json.loads(world.store.objects[f"{root}/{k}/key.json"])["build"] for k in keys} == {
-        b.id for b in builds
-    }
-    assert all(entries_of(world.agents.uploads[b.id][-1], "tools") == generated for b in builds)
-    assert tools == {(b.id, f, TOOLS_KEY) for b in builds for f in every}
+    assert tools == {(b.id, f, k) for b, k in builds.items() for f in every}
     assert all(len(world.builds_of(p)) == 1 for p in below(graph, root))
 
 

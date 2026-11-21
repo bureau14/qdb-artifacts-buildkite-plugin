@@ -1,10 +1,12 @@
 """The plan of a root build (specification sections 2, 3 and 4).
 
-``make_plan(root, own, git, pipelines)`` fixes, at one instant, the commit
-every project of the root's snapshot tree is built from, its key, and the
-branch name a build of it runs under, and returns the plan (``plan.Plan``). It
-is a function of its inputs: the root's facts (``Root``), the declaration read
-from the root's own commit, and two interfaces it asks and never writes to:
+``make_plan(root, own, latest, git, pipelines)`` fixes, at one instant, the
+commit every project of the root's snapshot tree is built from, its key, and
+the branch name a build of it runs under, and returns the plan
+(``plan.Plan``). It is a function of its inputs: the root's facts (``Root``),
+the declaration read from the root's own commit, the root's latest successful
+downloads with the keys its plan step read for them, and two interfaces it
+asks and never writes to:
 
 - ``git.Git``: ``commits_of`` (the commits of full refs), ``read_files`` (the
   files of another repository's commit), and ``branches`` and
@@ -27,8 +29,8 @@ reached, their dependencies sorted):
 1. The root, at its own commit and ref, with its own declaration. Its repository is Buildkite's answer for its slug. Its release line
    (``lines.release_line`` of that repository and its branch) is found the
    first time a dependency without a pin is placed, and only then. Its
-   declaration may hold a latest successful dependency: then it has no
-   snapshot and no key, and is planned all the same.
+   declaration may hold latest successful dependencies: the keys read for
+   them are part of its key.
 2. For each snapshot dependency of a node, in this order:
 
    a. Buildkite's facts of the project, for its repository; a 404 fails the
@@ -69,10 +71,10 @@ reached, their dependencies sorted):
      (``pin_writers``), and the root's repository: the plan knows the release
      line of that repository only;
    - the keys, from the plan itself (``plan.keyed``): what a node's key stands
-     for is its commit and the keys of its snapshot dependencies, with the
-     plan id as its build when ``SNAPSHOT_REBUILD`` forces the node (the root
-     under ``one``, every node under ``all``); None for a root that has no
-     snapshot.
+     for is its commit and the keys of its snapshot dependencies, for the root
+     also the keys read for its latest successful downloads, with the plan id
+     as its build when ``SNAPSHOT_REBUILD`` forces the node (the root under
+     ``one``, every node under ``all``).
 """
 
 from __future__ import annotations
@@ -91,7 +93,6 @@ from .declaration import (
     Declaration,
     Entry,
     declared_entries,
-    has_snapshot,
     is_template_path,
     read_declaration,
 )
@@ -102,6 +103,7 @@ from .plan import (
     REBUILD_NONE,
     REBUILD_ONE,
     First,
+    Latest,
     Plan,
     PlanError,
     Planned,
@@ -647,10 +649,11 @@ def runs_under(p: str, as_itself: bool, tree: Mapping[str, Member], context: str
     return branch_of(tree[p].place.ref) if as_itself else SNAPSHOT_BRANCH_PREFIX + context
 
 
-def planned_node(n: Member, branch: str) -> Planned:
-    """The node ``n`` as the plan holds it, before its key."""
+def planned_node(n: Member, branch: str, latest: tuple[Latest, ...]) -> Planned:
+    """The node ``n`` as the plan holds it, with its latest successful downloads, before its
+    key."""
     p = n.place
-    return Planned(p.ref, p.commit, None, branch, tuple(deps_of(n)), n.declaration.steps)
+    return Planned(p.ref, p.commit, None, branch, tuple(deps_of(n)), n.declaration.steps, latest)
 
 
 # ---------------------------------------------------------------------------
@@ -658,10 +661,13 @@ def planned_node(n: Member, branch: str) -> Planned:
 # ---------------------------------------------------------------------------
 
 
-def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> Plan:
+def make_plan(
+    root: Root, own: Declaration, latest: tuple[Latest, ...], git: Git, pipelines: Pipelines
+) -> Plan:
     """The plan of ``root``; see the module docstring.
 
-    ``own`` is the declaration read from the root's own commit. Raises
+    ``own`` is the declaration read from the root's own commit, ``latest`` the
+    root's latest successful downloads with the keys read for them. Raises
     ``PlanError`` when the tree cannot be planned; other errors of git, of
     Buildkite and of templates pass through unchanged.
     """
@@ -674,13 +680,13 @@ def make_plan(root: Root, own: Declaration, git: Git, pipelines: Pipelines) -> P
     below = compute_below(tree, order)
     writers = pin_writers(tree)
     as_itself = {p: runs_as_itself(p, tree, below, writers, first.place) for p in order}
+    branches = {p: runs_under(p, as_itself[p], tree, root.branch) for p in order}
+    read = {root.project: latest}
     unkeyed = Plan(
         id=root.build_id,
         context=root.branch,
         rebuild=root.rebuild,
         first=First(root.project, root.build_number),
-        projects={
-            p: planned_node(tree[p], runs_under(p, as_itself[p], tree, root.branch)) for p in order
-        },
+        projects={p: planned_node(tree[p], branches[p], read.get(p, ())) for p in order},
     )
-    return keyed(unkeyed, {p for p in order if not has_snapshot(tree[p].declaration)})
+    return keyed(unkeyed)
