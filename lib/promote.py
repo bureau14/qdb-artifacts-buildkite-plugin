@@ -74,6 +74,7 @@ def promote(project, key, folder, branch, build, writes_latest_file):
         log(f"Promoted {folder} at {key}; the latest file of {branch} names it")
     else:
         log(
-            f"Promoted {folder} at {key}; this build was started for a dependency and does not "
-            f"speak for its branch, so no latest file of {branch} names it"
+            f"Promoted {folder} at {key}; no latest file of {branch} names this key: the build "
+            f"was started for a dependency, and takes a dependency from another commit than "
+            f"its branch's own build would"
         )
