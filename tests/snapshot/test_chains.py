@@ -504,8 +504,9 @@ REBUILT = {"1": lambda graph, root: {root}, "all": tree}
 def test_snapshot_rebuild_builds_again_and_keeps_what_was_made(worlds, graph_root, shape, rebuild):
     """SNAPSHOT_REBUILD=1 compiles the root again although its key is made, and no dependency;
     SNAPSHOT_REBUILD=all compiles every project of the tree again. Either leaves what the
-    earlier build made as it was, and the next build at the branch's tip, which is reused,
-    points the root's latest files back at the earlier key."""
+    earlier build made as it was, and the latest files of every project it did not build
+    again; the next build at the branch's tip, which is reused, points the root's latest
+    files back at the earlier key."""
     graph, root = graph_root.graph, graph_root.node
     matrix, step_ids = shape
     world = worlds(graph, matrix, step_ids)
@@ -516,11 +517,12 @@ def test_snapshot_rebuild_builds_again_and_keeps_what_was_made(worlds, graph_roo
     compiled = compiled_since(world, done)
     after = world.build(root)
 
-    latest = {k for k in stored if k.split("/")[1] == "refs"}
-    kept = {k: b for k, b in stored.items() if k not in latest}
-    own = {k: b for k, b in stored.items() if k in latest and k.startswith(f"{root}/")}
+    rebuilt = REBUILT[rebuild](graph, root)
+    moved = {k for k in stored if k.split("/")[1] == "refs" and k.split("/")[0] in rebuilt}
+    kept = {k: b for k, b in stored.items() if k not in moved}
+    own = {k: b for k, b in stored.items() if k in moved and k.startswith(f"{root}/")}
     assert (again.state, after.state) == ("passed", "passed")
-    assert compiled == {(p, f) for p in REBUILT[rebuild](graph, root) for f in folders(*shape)}
+    assert compiled == {(p, f) for p in rebuilt for f in folders(*shape)}
     assert compiled_since(world, done) == compiled
     assert kept.items() <= world.store.objects.items()
     assert own.items() <= world.store.objects.items()
