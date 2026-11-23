@@ -59,7 +59,7 @@ step_plans() {
 # post-checkout of each makes its venv again. The steps that plan keep a venv
 # of their own, so that no other job takes PyYAML from under them.
 if step_plans; then
-  VENV_DIR="${PLUGIN_DIR}/.venv-snapshot"
+  VENV_DIR="${PLUGIN_DIR}/.venv-planning"
 else
   VENV_DIR="${PLUGIN_DIR}/.venv"
 fi

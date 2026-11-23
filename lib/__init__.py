@@ -4,7 +4,7 @@ The library has two callers: the plugin's hooks, through `cli`, and a program
 outside Buildkite that imports the names below to find and fetch what a
 download would: one step of a platform, on a `Branch` or at a `Key`. Both
 resolve "which key holds this step of this platform" through the same
-functions. `snapshot/` plans snapshot dependencies; only the plan step and
+functions. `planning/` plans snapshot dependencies; only the plan step and
 the last step import it.
 
 A failure the library can explain raises ArtifactsError. Other failures raise

@@ -41,9 +41,9 @@ from lib.forms import branch_of, branch_ref, name_of, tag_ref
 from lib.job import Build
 from lib.layout import Folder
 from lib.manifest import Promoted, Uploaded, captured, write_manifest
-from lib.snapshot.buildkite import PipelineFacts
-from lib.snapshot.lines import is_release_line, release_line
-from lib.snapshot.records import RULE
+from lib.planning.buildkite import PipelineFacts
+from lib.planning.lines import is_release_line, release_line
+from lib.planning.records import RULE
 
 MASTER = "refs/heads/master"
 TAG = "v1.0.0"

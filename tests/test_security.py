@@ -20,8 +20,8 @@ from world import TOKEN
 
 from lib import retry
 from lib.extract import extract_local_archive
-from lib.snapshot import buildkite
-from lib.snapshot.edge import buildkite_pipelines
+from lib.planning import buildkite
+from lib.planning.edge import buildkite_pipelines
 
 # ---------------------------------------------------------------------------
 # Archive members that would leave the output directory

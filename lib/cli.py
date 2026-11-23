@@ -42,9 +42,9 @@ def pre_command(job: Job, o: Options) -> int:
 def run_plan_side(job: Job, o: Options) -> int:
     """The command of the plan step, its second run or the last step. Imported here: the
     planning side needs PyYAML, which only these steps install."""
-    from .snapshot.edge import real_edge
-    from .snapshot.last_step import last_step
-    from .snapshot.plan_step import plan_step, plan_step_again
+    from .planning.edge import real_edge
+    from .planning.last_step import last_step
+    from .planning.plan_step import plan_step, plan_step_again
 
     if o.leave:
         section(":camera_with_flash: Snapshot: the last step")

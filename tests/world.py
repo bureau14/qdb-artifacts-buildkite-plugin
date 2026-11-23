@@ -5,7 +5,7 @@
 - A ``buildkite-agent`` first on ``PATH`` that keeps every build's meta-data,
   step outcomes, uploads and annotations as files, as Buildkite would.
 - The plugin as an agent checks it out: a copy of its hooks, library and
-  command line, committed, whose ``.venv`` and ``.venv-snapshot`` the real
+  command line, committed, whose ``.venv`` and ``.venv-planning`` the real
   ``post-checkout`` makes once per session, with the Python the agent names
   for its plugins and no other.
 - Jobs: a checkout that is a git repository, and the environment an agent
@@ -340,7 +340,7 @@ def plugin_variables(options: dict) -> dict:
 # The plugin, as an agent checks it out and post-checkout prepares it
 # ---------------------------------------------------------------------------
 
-# The steps post-checkout prepares apart: a step that plans gets .venv-snapshot.
+# The steps post-checkout prepares apart: a step that plans gets .venv-planning.
 STEP_KINDS = {"plain": {}, "plan": {"plan": GENERATED}}
 
 

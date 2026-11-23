@@ -45,8 +45,8 @@ from lib.job import Build
 from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured
-from lib.snapshot.plan import Plan, Planned, Root, encode_plan, keyed
-from lib.snapshot.records import Record
+from lib.planning.plan import Plan, Planned, Root, encode_plan, keyed
+from lib.planning.records import Record
 
 
 def decode_manifest(body: bytes) -> Manifest:
@@ -731,14 +731,14 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
     own), the venv the step's options call for, in which the plugin's job side imports, and its
     planning half only for a step that plans. It runs no other Python the agent names, in
     QDB_CICD_AGENT_PYTHON3 or as python3 on PATH, so without that variable it fails."""
-    venv = plugin.root / (".venv-snapshot" if step_kind == "plan" else ".venv") / "bin" / "python"
+    venv = plugin.root / (".venv-planning" if step_kind == "plan" else ".venv") / "bin" / "python"
 
     def imports(module):
         script = f"import platform, {module}; print(platform.python_version())"
         run = [venv, "-c", script]
         return subprocess.run(run, cwd=plugin.root, capture_output=True, text=True, check=False)
 
-    job_side, planning = imports("lib.cli"), imports("lib.snapshot.plan_step")
+    job_side, planning = imports("lib.cli"), imports("lib.planning.plan_step")
     assert plugin.prepared[step_kind].code == 0, plugin.prepared[step_kind].output
     assert plugin.unnamed[step_kind].code != 0, plugin.unnamed[step_kind].output
     assert job_side.stdout.strip() == platform.python_version(), job_side.stderr

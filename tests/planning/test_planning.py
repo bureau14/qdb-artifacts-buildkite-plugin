@@ -30,15 +30,15 @@ from fakes import url
 from world import GIT_IDENTITY, git
 
 from lib.options import Options, options_of
-from lib.snapshot.git import RealGit, run_command
-from lib.snapshot.latest import latest_download
-from lib.snapshot.lines import release_line
-from lib.snapshot.pipeline import dependencies, entries_of, steps_of
-from lib.snapshot.plan import Planned
-from lib.snapshot.planner import RootBuild, make_plan, name_refs
-from lib.snapshot.rewrite import Rewrite, planned
-from lib.snapshot.rule import rule_violations
-from lib.snapshot.templates import kind, read_declaration
+from lib.planning.git import RealGit, run_command
+from lib.planning.latest import latest_download
+from lib.planning.lines import release_line
+from lib.planning.pipeline import dependencies, entries_of, steps_of
+from lib.planning.plan import Planned
+from lib.planning.planner import RootBuild, make_plan, name_refs
+from lib.planning.rewrite import Rewrite, planned
+from lib.planning.rule import rule_violations
+from lib.planning.templates import kind, read_declaration
 
 MASTER = "refs/heads/master"
 KEY = "0" * 40 + "-" + "0" * 32

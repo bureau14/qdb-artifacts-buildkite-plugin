@@ -343,7 +343,7 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 | `pre-command`   | Fails a step that uploads or promotes without a step id, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched.                   |
 | `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty. |
 
-The plan step, its second run and the last step of a build (options `plan`, `resume` and `leave`, see [Snapshot dependencies](#snapshot-dependencies)) run their own command in `post-command` and nothing else. They install `lib/snapshot/requirements.txt` besides `lib/requirements.txt`, into a virtual environment of their own.
+The plan step, its second run and the last step of a build (options `plan`, `resume` and `leave`, see [Snapshot dependencies](#snapshot-dependencies)) run their own command in `post-command` and nothing else. They install `lib/planning/requirements.txt` besides `lib/requirements.txt`, into a virtual environment of their own.
 
 ### The bucket
 
@@ -470,7 +470,7 @@ and step, then pass their object-store locations to your own downloader.
 
 `lib/__init__.py` exposes the resolver, downloader, and their configuration types.
 Install the dependencies from `lib/requirements.txt`; the library never imports
-`lib/snapshot/`, and needs no PyYAML.
+`lib/planning/`, and needs no PyYAML.
 
 The following example uses S3 with the standard AWS credential chain. Replace
 `s3://my-artifacts/buildkite` with your artifact bucket/prefix; no Buildkite

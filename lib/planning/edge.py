@@ -47,7 +47,7 @@ ARRIVED = "snapshot-arrived"
 TOKEN_VARIABLE = "ARTIFACTS_BUILDKITE_TOKEN"
 TOKEN_SSM_PARAM = "/services/buildkite/credentials/artifacts/buildkite-api-token"
 
-# The plugin's own checkout: lib/snapshot/edge.py is two levels below it.
+# The plugin's own checkout: lib/planning/edge.py is two levels below it.
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 

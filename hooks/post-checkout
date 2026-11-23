@@ -22,7 +22,7 @@ echo "Python ${VERSION} at ${PYTHON}"
 
 REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
 if step_plans; then
-  REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/snapshot/requirements.txt")
+  REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/planning/requirements.txt")
 fi
 
 if [[ -d "${VENV_DIR}" ]]; then

@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from lib.errors import ArtifactsError
 from lib.forms import branch_of, branch_ref, tag_ref
 from lib.objects import Listed
-from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
+from lib.planning.buildkite import PipelineFacts, PipelineNotFound
 
 EPOCH = datetime.datetime(2026, 11, 20, tzinfo=datetime.timezone.utc)
 

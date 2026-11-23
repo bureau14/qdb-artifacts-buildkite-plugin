@@ -1,6 +1,6 @@
 """The forms of a ref and of a time, as the jobs and the plan step write them.
 
-This is job code, as the manifest is: nothing here imports ``snapshot``.
+This is job code, as the manifest is: nothing here imports ``planning``.
 """
 
 from __future__ import annotations

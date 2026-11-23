@@ -53,15 +53,15 @@ from lib.key import KeyJson, OwnKey, create_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
 from lib.options import Options, options_of, promoted_folder, uploaded_folder
+from lib.planning.buildkite import PipelineFacts
+from lib.planning.edge import Edge
+from lib.planning.last_step import last_step
+from lib.planning.pipeline import is_plugin_key
+from lib.planning.plan import decode_plan
+from lib.planning.plan_step import plan_step, plan_step_again
+from lib.planning.records import Record
 from lib.promote import promote_folder
 from lib.resolve import entry_steps
-from lib.snapshot.buildkite import PipelineFacts
-from lib.snapshot.edge import Edge
-from lib.snapshot.last_step import last_step
-from lib.snapshot.pipeline import is_plugin_key
-from lib.snapshot.plan import decode_plan
-from lib.snapshot.plan_step import plan_step, plan_step_again
-from lib.snapshot.records import Record
 from lib.upload import capture_step
 
 PLUGIN = "bureau14/qdb-artifacts"
@@ -76,7 +76,7 @@ SHAPED = (
 # Graphs: project -> its snapshot dependencies
 # ---------------------------------------------------------------------------
 
-# The five projects of tests/snapshot/fixtures, as their pipelines download.
+# The five projects of tests/planning/fixtures, as their pipelines download.
 REAL = {
     "qdb-api-go": ("quasardb-build",),
     "qdb-api-python": ("qdb-api-rest", "quasardb-build"),

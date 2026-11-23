@@ -4,7 +4,7 @@ The agent hands a job its configuration as JSON (BUILDKITE_PLUGIN_CONFIGURATION)
 step finds the same mappings in a generated pipeline. Both read them with ``options_of``, so
 a job and the plan step have one notion of every option. A step template holds them before
 its generator wrote the options it fills, so the plan step reads a template with ``read``,
-into a shape of the options it needs there (``snapshot/templates.py``).
+into a shape of the options it needs there (``planning/templates.py``).
 
 A key is read as the agent names its variable: in lower case, with ``-`` and white space as
 ``_``. An option the shape does not name is ignored. Values are not checked for their type: a
