@@ -49,7 +49,7 @@ def ref_problem(e: Entry, project: str, pins: frozenset[str], own_ref: str) -> s
 
 def entry_problem(e: Entry, declaration: Declaration, own: str, own_ref: str) -> str | None:
     """Why one download entry breaks the rule; None when it does not."""
-    project = other_project(e, own)
+    project = other_project(e.project_id, own)
     if project is None:
         return None
     if not any(d.project == project and d.latest == e.latest for d in declaration.entries):

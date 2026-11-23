@@ -18,8 +18,8 @@ import dacite
 import yaml
 
 from ..layout import is_step_id
-from ..options import PLUGIN, STEP_ID_RULE, Entry, Options, options_of
-from .pipeline import configurations, entries_of, leaf_steps, other_project
+from ..options import PLUGIN, STEP_ID_RULE, read
+from .pipeline import configurations, leaf_steps, other_project
 
 BUILDKITE_DIR = ".buildkite/"
 TEMPLATE_SUFFIXES = (".yml", ".yaml")
@@ -27,6 +27,40 @@ TEMPLATE_SUFFIXES = (".yml", ".yaml")
 
 class TemplateError(ValueError):
     """A template that cannot be read, naming the project and the file."""
+
+
+# ---------------------------------------------------------------------------
+# The options a declaration reads
+# ---------------------------------------------------------------------------
+# A template is not read as ``Options``: its generator has yet to write what it fills, each
+# block's ``variant`` among it.
+
+
+@dataclass(frozen=True)
+class TemplateEntry:
+    project_id: str | None = None
+    git_ref: str | None = None
+    latest: bool = False
+
+
+@dataclass(frozen=True)
+class TemplateDownload:
+    projects: tuple[TemplateEntry, ...] = ()
+
+
+@dataclass(frozen=True)
+class TemplatePromote:
+    step: str | None = None
+
+
+@dataclass(frozen=True)
+class TemplateOptions:
+    download: TemplateDownload | None = None
+    promote: TemplatePromote | None = None
+
+
+def entries_of(o: TemplateOptions) -> tuple[TemplateEntry, ...]:
+    return o.download.projects if o.download else ()
 
 
 @dataclass(frozen=True)
@@ -101,19 +135,19 @@ def step_id_of(own: str, path: str, step: Mapping[str, Any]) -> str | None:
     raise TemplateError(f"{own}: {path}: step_id {value} is not a step id. {STEP_ID_RULE}")
 
 
-def promoted_ids(options: list[Options], step_id: str | None) -> list[str]:
+def promoted_ids(options: list[TemplateOptions], step_id: str | None) -> list[str]:
     """The step ids a template step promotes: of each promote block its own ``step``, else the
     step's ``step_id``."""
     found = (o.promote.step or step_id for o in options if o.promote)
     return [i for i in found if i]
 
 
-def options_in(value: Any) -> list[Options]:
-    return [options_of(c) for c in configurations(value)]
+def options_in(value: Any) -> list[TemplateOptions]:
+    return [read(TemplateOptions, c) for c in configurations(value)]
 
 
-def dependency(e: Entry, own: str, path: str) -> Dependency | None:
-    project = other_project(e, own)
+def dependency(e: TemplateEntry, own: str, path: str) -> Dependency | None:
+    project = other_project(e.project_id, own)
     if project is None:
         return None
     return Dependency(project, e.latest, None if e.latest else literal_pin(e.git_ref), path)

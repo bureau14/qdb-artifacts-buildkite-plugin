@@ -100,10 +100,10 @@ def steps_of(doc: Any) -> list[Step]:
 # ---------------------------------------------------------------------------
 
 
-def other_project(e: Entry, own: str) -> str | None:
-    """The project of another pipeline that ``e`` downloads from; None for ``own``, which an
-    entry without a project id downloads from."""
-    return None if not e.project_id or e.project_id == own else e.project_id
+def other_project(project_id: str | None, own: str) -> str | None:
+    """The project of another pipeline that an entry with ``project_id`` downloads from; None
+    for ``own``, which an entry without a project id downloads from."""
+    return None if not project_id or project_id == own else project_id
 
 
 def entries_of(o: Options) -> tuple[Entry, ...]:
@@ -113,7 +113,12 @@ def entries_of(o: Options) -> tuple[Entry, ...]:
 def dependencies(steps: Sequence[Step], own: str, latest: bool) -> list[tuple[Step, str, Entry]]:
     """``(step, project, entry)`` of every entry of another project that takes the latest
     successful build (``latest``) or is a snapshot dependency (not ``latest``), in order."""
-    found = ((s, other_project(e, own), e) for s in steps for o in s.options for e in entries_of(o))
+    found = (
+        (s, other_project(e.project_id, own), e)
+        for s in steps
+        for o in s.options
+        for e in entries_of(o)
+    )
     return [(s, project, e) for s, project, e in found if project and e.latest == latest]
 
 
@@ -126,7 +131,7 @@ def left_out(steps: Sequence[Step], own: str, own_ref: str) -> list[tuple[str, s
         for s in steps
         for o in s.options
         for e in entries_of(o)
-        if other_project(e, own) is None and e.git_ref not in (None, "", own_ref)
+        if other_project(e.project_id, own) is None and e.git_ref not in (None, "", own_ref)
     )
     return list(dict.fromkeys(found))
 

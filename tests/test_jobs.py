@@ -808,7 +808,7 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     although its latest files name another, and promotes the project's folder at its key after
     a passed command; the last step records exactly the folder whose command failed."""
     failing = set(matrix[-1:]) if outcome == "the-last-platform-fails" else set()
-    steps = [build_step("widget", v, [entry("engine", v)]) for v in matrix]
+    steps = [build_step("widget", v, [entry("engine")]) for v in matrix]
     template = yaml.safe_dump({"steps": steps})
     job = jobs("widget", 1).committed(
         {".buildkite/steps.yml": template, ".buildkite/pipeline.py": SHAPED}

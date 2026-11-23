@@ -1,12 +1,14 @@
 """The plugin's options, as a step's configuration writes them.
 
 The agent hands a job its configuration as JSON (BUILDKITE_PLUGIN_CONFIGURATION). The plan
-step finds the same mappings in a generated pipeline and in step templates. Both read them
-with ``options_of``, so a job and the plan step have one notion of every option.
+step finds the same mappings in a generated pipeline. Both read them with ``options_of``, so
+a job and the plan step have one notion of every option. A step template holds them before
+its generator wrote the options it fills, so the plan step reads a template with ``read``,
+into a shape of the options it needs there (``snapshot/templates.py``).
 
 A key is read as the agent names its variable: in lower case, with ``-`` and white space as
-``_``. An option this module does not name is ignored. Values are not checked for their type: a template holds
-placeholders where a pipeline holds numbers.
+``_``. An option the shape does not name is ignored. Values are not checked for their type: a
+template holds placeholders where a pipeline holds numbers.
 """
 
 from __future__ import annotations
@@ -15,12 +17,13 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 import dacite
 
 from .layout import Folder, is_step_id
 
+T = TypeVar("T")
 PLUGIN = "bureau14/qdb-artifacts"
 STEP_ID_RULE = 'A step id is lower-case letters, digits and "_", and starts with a letter.'
 # Files that travel at once, and multipart threads of each: up to 128 streams.
@@ -108,10 +111,16 @@ READ = dacite.Config(
 )
 
 
+def read(shape: type[T], config: Mapping[str, Any] | None) -> T:
+    """What one configuration of the plugin writes of the options ``shape`` names. Raises
+    ``dacite.DaciteError`` when it lacks one that ``shape`` gives no default."""
+    return dacite.from_dict(shape, as_agent_names(config or {}), READ)
+
+
 def options_of(config: Mapping[str, Any] | None) -> Options:
-    """The options one configuration of the plugin writes. Raises ``dacite.DaciteError`` when a
+    """The options of a configuration that a job runs. Raises ``dacite.DaciteError`` when a
     block lacks its ``variant``."""
-    return dacite.from_dict(Options, as_agent_names(config or {}), READ)
+    return read(Options, config)
 
 
 def job_options(env: Mapping[str, str]) -> Options:

@@ -168,13 +168,14 @@ SPELLINGS = {"snake": lambda k: k, "kebab": lambda k: k.replace("_", "-")}
 
 
 def entry(
-    project: str, variant: str, ref="{git_ref}", latest=False, spelling="snake", step=None
+    project: str, ref="{git_ref}", latest=False, spelling="snake", step=None, variant=None
 ) -> dict:
     """A download entry; a literal ``ref`` is a pin, ``latest`` takes the latest successful
-    build, ``step`` names the steps it takes."""
+    build, ``step`` names the steps it takes. It takes the platform of its step, which the
+    generator writes, unless it names a ``variant``."""
     s = SPELLINGS[spelling]
-    e = {s("project_id"): project, "variant": variant, s("git_ref"): ref, "files": ["*.tar.zst"]}
-    named = {} if step is None else {"step": step}
+    e = {s("project_id"): project, s("git_ref"): ref, "files": ["*.tar.zst"]}
+    named = {k: v for k, v in (("step", step), ("variant", variant)) if v is not None}
     return {**e, **named, **({"latest": True} if latest else {})}
 
 
@@ -189,14 +190,16 @@ def build_step(
 ) -> dict:
     """The template step of step id ``step`` that builds ``variant`` from ``entries``, uploads
     it and, when ``promotes``, promotes it, with the plugin's options under the name
-    ``plugin``."""
-    options = {"upload": {"variant": variant, "files": "out/*"}}
+    ``plugin``. As a repository's template, it leaves each block's ``variant`` to the
+    generator, which makes the step for the platform ``slug``."""
+    options = {"upload": {"files": "out/*"}}
     if promotes:
-        options = {**options, "promote": {"variant": variant}}
+        options = {**options, "promote": {}}
     if entries:
         options = {"download": {"projects": entries}, **options}
     return {
         "label": f"{project} {step} {variant}",
+        "slug": variant,
         "step_id": step,
         "command": "make",
         "plugins": [{f"{plugin}#master": options}],
@@ -208,16 +211,18 @@ def check_step(project: str, variant: str, step: str) -> dict:
     after it, and promotes it: a step of a key of its own, which names no step id of its own."""
     return {
         "label": f"{project} check {step} {variant}",
+        "slug": variant,
         "key": f"check-{step}-{variant}",
         "depends_on": f"{step}-{variant}",
         "command": "check",
-        "plugins": [{f"{PLUGIN}#master": {"promote": {"variant": variant, "step": step}}}],
+        "plugins": [{f"{PLUGIN}#master": {"promote": {"step": step}}}],
     }
 
 
 def promoted_again(project: str, variant: str, step: str, entries: list) -> dict:
     """A step that promotes the folder ``variant``/``step`` a second time, written as a
-    pipeline without ``pipeline.py`` writes it: its key, and the plugin's ``step`` by hand."""
+    pipeline without ``pipeline.py`` writes it: its key, and the plugin's ``step`` and each
+    block's ``variant`` by hand."""
     options = {
         "step": step,
         "upload": {"variant": variant, "files": "out/*"},
@@ -227,29 +232,41 @@ def promoted_again(project: str, variant: str, step: str, entries: list) -> dict
         options = {"download": {"projects": entries}, **options}
     return {
         "label": f"{project} package {variant}",
+        "slug": variant,
         "key": f"package-{variant}",
         "command": "make",
         "plugins": [{f"{PLUGIN}#master": options}],
     }
 
 
+def with_variant(options: dict, variant: str) -> dict:
+    """The plugin's ``options`` with ``variant`` in every block and download entry that writes
+    none, as the runner's ``set_artifact_plugin_options`` gives a step its platform."""
+    blocks = {k: {"variant": variant, **options[k]} for k in ("upload", "promote") if k in options}
+    entries = [{"variant": variant, **e} for e in options.get("download", {}).get("projects", [])]
+    download = {"download": {**options["download"], "projects": entries}} if entries else {}
+    return {**options, **blocks, **download}
+
+
 def loaded(step: dict) -> dict:
-    """A template step as the runner's ``load_template`` gives it: its ``step_id`` gone, the
-    key ``<step id>-<slug>``, and ``step: <step id>`` at the top of every configuration of the
-    plugin. The slug of these templates is the platform the step uploads."""
-    if "step_id" not in step:
+    """A template step as the generator makes it for the platform ``slug``: that platform as
+    the ``variant`` its blocks leave out and, as the runner's ``load_template`` gives a step
+    that writes ``step_id``, the key ``<step id>-<slug>`` and ``step: <step id>`` at the top
+    of every configuration of the plugin. A step without ``slug`` is written in full."""
+    if "slug" not in step:
         return step
-    step_id = step["step_id"]
+    slug, step_id = step["slug"], step.get("step_id")
+    named = {} if step_id is None else {"step": step_id}
     plugins = [
         {
-            name: {"step": step_id, **options} if is_plugin_key(name) else options
+            name: with_variant({**named, **options}, slug) if is_plugin_key(name) else options
             for name, options in p.items()
         }
         for p in step["plugins"]
     ]
-    slug = next(o["upload"]["variant"] for p in plugins for o in p.values() if "upload" in o)
-    kept = {k: v for k, v in step.items() if k not in ("step_id", "plugins")}
-    return {**kept, "key": f"{step_id}-{slug}", "plugins": plugins}
+    kept = {k: v for k, v in step.items() if k not in ("slug", "step_id", "plugins")}
+    key = {} if step_id is None else {"key": f"{step_id}-{slug}"}
+    return {**kept, **key, "plugins": plugins}
 
 
 def generated(template_text: str, ref: str) -> str:
@@ -401,13 +418,13 @@ class World:
 
         def entries(v):
             deps = [
-                entry(d, v, p.pins.get(d, "{git_ref}"))
+                entry(d, p.pins.get(d, "{git_ref}"))
                 for d in p.deps
                 if v in self.projects[d].variants
             ]
-            extra = [entry(d, x, p.pins.get(d, "{git_ref}"), step=s) for d, x, s in p.extra]
-            own = [entry(name, v, ref, step=s) for s, ref in p.elsewhere]
-            latest = [entry(t, v, latest=True, step=p.latest_step) for t in p.latest]
+            extra = [entry(d, p.pins.get(d, "{git_ref}"), step=s, variant=x) for d, x, s in p.extra]
+            own = [entry(name, ref, step=s) for s, ref in p.elsewhere]
+            latest = [entry(t, latest=True, step=p.latest_step) for t in p.latest]
             return deps + extra + own + latest
 
         built = [

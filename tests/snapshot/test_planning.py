@@ -161,7 +161,7 @@ def generated_template(at, spelling: str, kind: str, misnamed: bool) -> Template
         build_step(
             at.project,
             v,
-            [entry(d, v, ref, kind == "latest", spelling, named) for d in deps],
+            [entry(d, ref, kind == "latest", spelling, named) for d in deps],
             spelling,
             plugin=MISNAMED if misnamed and v == "macos" else PLUGIN,
         )

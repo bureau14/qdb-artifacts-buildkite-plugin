@@ -118,7 +118,7 @@ def needed_folders(
 def planned_entry(entry: Mapping[str, Any], r: Rewrite) -> Mapping[str, Any]:
     """``entry`` of another project with the key of each step it takes; any other as it is."""
     e = dacite.from_dict(Entry, entry, READ)
-    project = other_project(e, r.own)
+    project = other_project(e.project_id, r.own)
     if project is None:
         return entry
     if e.latest:
