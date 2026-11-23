@@ -163,12 +163,12 @@ def snapshot_declaration(
     pipeline to the runner, and its templates take no latest successful build. The first
     condition that fails raises ``Refused``."""
 
-    def unmet(failed: str, adopt: str) -> Refused:
-        """What ``failed``, and the two ways out: the project adopts, or its dependent takes
-        its latest successful build."""
+    def unmet(failed: str, met: str) -> Refused:
+        """What ``failed``, and the two ways out: the project comes to meet the condition, as
+        ``met`` says, or its dependent takes its latest successful build."""
         return Refused(
             f"{project} cannot give a snapshot at {at.ref} {at.commit} of {at.repository}: "
-            f"{failed}. {dependent} Way out: {project} adopts: {adopt}; or {dependent.project} "
+            f"{failed}. {dependent} Way out: {met}; or {dependent.project} "
             f"takes {project} as a latest successful dependency, with latest: true in its entry "
             f"of {project} in {dependent.path}."
         )
@@ -177,7 +177,8 @@ def snapshot_declaration(
         raise unmet(
             f"Buildkite's configuration of {project} does not run {PIPELINE_PY} into a pipeline "
             "upload",
-            f"its Buildkite configuration runs {PIPELINE_PY} | buildkite-agent pipeline upload",
+            f"Buildkite's configuration of {project} runs {PIPELINE_PY} | buildkite-agent "
+            "pipeline upload",
         )
     files = ask.files(at.repository, at.commit)
     source = files.get(PIPELINE_PY)
@@ -185,8 +186,8 @@ def snapshot_declaration(
         shape = "qdb_pipeline and run(generate_pipeline)"
         raise unmet(
             f"{PIPELINE_PY} {'is not there' if source is None else f'does not contain {shape}'}",
-            f"on {at.ref} its {PIPELINE_PY} imports run from qdb_pipeline and ends with "
-            'if __name__ == "__main__": run(generate_pipeline)',
+            f"on {at.ref} the {PIPELINE_PY} of {project} imports run from qdb_pipeline and ends "
+            'with if __name__ == "__main__": run(generate_pipeline)',
         )
     declaration = read_declaration(files, project)
     latest = latest_dependencies(declaration)
@@ -195,8 +196,8 @@ def snapshot_declaration(
         raise unmet(
             "its declaration holds a latest successful dependency, which a snapshot never "
             f"contains: {e.path} downloads {e.project} with latest: true",
-            f"it takes {e.project} as a snapshot dependency on {at.ref} (no latest: true in its "
-            f"entry of {e.project} in {e.path})",
+            f"{project} takes {e.project} as a snapshot dependency on {at.ref} (no latest: true "
+            f"in its entry of {e.project} in {e.path})",
         )
     return declaration
 
