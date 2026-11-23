@@ -19,7 +19,7 @@ from ..forms import branch_ref, is_tag
 from ..job import Job, is_started_for_dependency
 from ..layout import Folder
 from ..manifest import Manifest
-from .annotation import PLAN_REFUSED, STEP_ERROR, plan_annotation, shown_folders
+from .annotation import PLAN_REFUSED, PLAN_STEP_ERROR, plan_annotation, shown_folders
 from .buildkite import https_repository
 from .edge import PLAN, Edge, create_own_key_json, made_only, manifests_at
 from .failing import refusal
@@ -70,7 +70,7 @@ def check_command(job: Job, edge: Edge, path: str) -> None:
             f"the command exited {job.exit_status}: it puts the generated pipeline at {path}, "
             "which this step plans"
         )
-        raise refusal(job, edge, STEP_ERROR, message)
+        raise refusal(job, edge, PLAN_STEP_ERROR, message)
 
 
 def generated_pipeline(job: Job, edge: Edge, path: str, origin: Origin | None) -> Generated:

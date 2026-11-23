@@ -823,15 +823,15 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     started = job.with_env(SNAPSHOT_PLAN=build_id(ROOT_BUILD), SNAPSHOT_NEEDS=needs)
 
     planned = (
-        started.with_env(BUILDKITE_STEP_KEY="snapshot-enter")
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-plan-step")
         .with_plugin({"plan": GENERATED})
         .run("post-command")
     )
     for v in matrix:
         store.put_all(engine_made(plan, v))
-    resumed = (
-        started.with_env(BUILDKITE_STEP_KEY="snapshot-resume")
-        .with_plugin({"resume": GENERATED})
+    planned_again = (
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-plan-step-again")
+        .with_plugin({"plan_again": GENERATED})
         .run("post-command")
     )
     triggers, pipeline = [yaml.safe_load(u)["steps"] for u in agent.files(build_id(1), "uploads")]
@@ -846,8 +846,8 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
         ran.append(this.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(status)).run("post-command"))
         agent.set(build_id(1), "outcomes", step["key"], "hard_failed" if status else "passed")
     last = (
-        started.with_env(BUILDKITE_STEP_KEY="snapshot-leave")
-        .with_plugin({"leave": True})
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-last-step")
+        .with_plugin({"last_step": True})
         .run("post-command")
     )
 
@@ -859,8 +859,8 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     made = {v for v, m in manifests.items() if m and decode_manifest(m).promoted is not None}
     stored = store.objects(f"widget/{key}/failures/").values()
     records = [decoded(Record, body) for body in stored]
-    assert all(o.code == 0 for o in (planned, resumed, *ran, last)), [
-        o.output for o in (planned, resumed, *ran, last)
+    assert all(o.code == 0 for o in (planned, planned_again, *ran, last)), [
+        o.output for o in (planned, planned_again, *ran, last)
     ]
     assert store.get(layout.key_json("", "widget", key)) is not None
     assert [s.get("trigger") for s in triggers if "trigger" in s] == ["engine"]

@@ -46,21 +46,21 @@ def run_plan_side(job: Job, o: Options) -> int:
     from .planning.last_step import last_step
     from .planning.plan_step import plan_step, plan_step_again
 
-    if o.leave:
+    if o.last_step:
         section(":camera_with_flash: Snapshot: the last step")
         return last_step(job, real_edge())
     if o.plan:
         section(":camera_with_flash: Snapshot: the plan step")
         return plan_step(job, real_edge(), o.plan)
     section(":camera_with_flash: Snapshot: the plan step's second run")
-    return plan_step_again(job, real_edge(), o.resume)
+    return plan_step_again(job, real_edge(), o.plan_again)
 
 
 def post_command(job: Job, o: Options) -> int:
     """An upload runs also after a failed command: the files of a failed build are evidence.
     Promoting says "this build is good to use", so it needs a passed command and an upload
     that was not empty."""
-    if o.plan or o.resume or o.leave:
+    if o.plan or o.plan_again or o.last_step:
         return run_plan_side(job, o)
     if o.upload and o.upload.files:
         section(":arrow_up: Uploading artifacts")

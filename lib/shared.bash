@@ -52,7 +52,7 @@ plugin_has_any() {
 # The plan step, its second run and the last step run the planning side, which
 # needs PyYAML. No other step does, so no other job on any platform installs it.
 step_plans() {
-  plugin_has_any PLAN RESUME LEAVE
+  plugin_has_any PLAN PLAN_AGAIN LAST_STEP
 }
 
 # Every job of one plugin commit on a host shares this checkout, and the

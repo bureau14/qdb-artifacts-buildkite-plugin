@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from ..errors import ArtifactsError
 from ..job import Job
-from .annotation import STEP_ERROR, refusal_annotation
+from .annotation import refusal_annotation
 from .edge import Edge, create_record
 from .records import Origin, Record, record
 
@@ -37,16 +37,18 @@ def refusal(
     return Refusal(message, refusal_annotation(kind, job.project, job.build, message), written)
 
 
-def run_step(job: Job, edge: Edge, decisions: Callable[[Job, Edge], None], context: str) -> int:
-    """Run a step's decisions; a refusal or any exception fails the step, under the
-    annotation context ``context``."""
+def run_step(
+    job: Job, edge: Edge, decisions: Callable[[Job, Edge], None], context: str, error: str
+) -> int:
+    """Run a step's decisions; a refusal fails the step, and any other exception fails it as
+    a refusal of the kind ``error``. Its annotation goes under the context ``context``."""
     try:
         decisions(job, edge)
         return 0
     except Refusal as exc:
         failed = exc
     except Exception as exc:  # noqa: BLE001 -- whatever ends the step, it ends as failed
-        failed = refusal(job, edge, STEP_ERROR, f"{type(exc).__name__}: {exc}")
+        failed = refusal(job, edge, error, f"{type(exc).__name__}: {exc}")
     edge.log(str(failed))
     if failed.record is not None:
         create_record(edge, failed.record)

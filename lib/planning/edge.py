@@ -4,7 +4,7 @@ they share.
 The steps keep no state but meta-data of their own build:
 
     snapshot-plan       the plan, on the root build
-    snapshot-mode       reused, built or failed
+    snapshot-outcome    reused, built or failed
     snapshot-promotes   [[<platform>, <step id>, <Buildkite key of the step that promotes it>]]
 
 ``snapshot-arrived``, the time a build began, is set by the runner in every build's first step.
@@ -37,7 +37,7 @@ from .git import RealGit
 from .plan import Plan, Planned, decode_plan, key_json_of, planned_project
 from .records import Cause, Origin, Record, failure_in_plan
 
-MODE = "snapshot-mode"
+OUTCOME = "snapshot-outcome"
 REUSED, BUILT, FAILED = "reused", "built", "failed"
 PROMOTES = "snapshot-promotes"
 PLAN = "snapshot-plan"

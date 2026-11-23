@@ -368,10 +368,10 @@ def made_by(m: Manifest) -> str:
 
 
 # The runner's plan step, and the last step after every other step.
-PLAN_STEP = {"key": "snapshot-enter"}
+PLAN_STEP = {"key": "snapshot-plan-step"}
 LAST_STEP = {
-    "key": "snapshot-leave",
-    "depends_on": [{"step": "snapshot-enter", "allow_failure": True}],
+    "key": "snapshot-last-step",
+    "depends_on": [{"step": "snapshot-plan-step", "allow_failure": True}],
 }
 FAILED = ("hard_failed", "broken")
 
@@ -504,15 +504,15 @@ class World:
         )
 
     def run(self, build: Build, step: dict) -> str:
-        if step["key"] == "snapshot-enter":
+        if step["key"] == "snapshot-plan-step":
             return self.plan_step_run(build, step, "plan", plan_step)
-        if step["key"] == "snapshot-leave":
+        if step["key"] == "snapshot-last-step":
             return self.last_step_run(build)
         if "trigger" in step:
             return self.trigger(build, step)
         options = artifacts_options(step)
-        if options is not None and options.resume:
-            return self.plan_step_run(build, step, "resume", plan_step_again)
+        if options is not None and options.plan_again:
+            return self.plan_step_run(build, step, "plan-again", plan_step_again)
         return self.job(build, options)
 
     def git_at(self, commit: str) -> FakeGit:
@@ -571,9 +571,9 @@ class World:
         return outcome
 
     def last_step_run(self, build: Build) -> str:
-        """The last step: its command fails when no plan step set a mode; its plugin records."""
+        """The last step: its command fails when no plan step set an outcome; its plugin records."""
         outcome = self.outcome(build, lambda: last_step(self.job_of(build), self.edge(build)))
-        return outcome if "snapshot-mode" in self.agents.meta_data[build.id] else "hard_failed"
+        return outcome if "snapshot-outcome" in self.agents.meta_data[build.id] else "hard_failed"
 
     def trigger(self, build: Build, step: dict) -> str:
         asked = step["build"]

@@ -13,8 +13,8 @@ from .plan import Plan, below, dependencies_first, dependencies_of, trigger_labe
 from .rewrite import plugin_key
 
 TRIGGER_KEY_PREFIX = "snapshot-dep-"
-SECOND_RUN_KEY = "snapshot-resume"
-SECOND_RUN_LABEL = ":camera_with_flash: snapshot resume"
+SECOND_RUN_KEY = "snapshot-plan-step-again"
+SECOND_RUN_LABEL = ":camera_with_flash: snapshot: plan again"
 # As the plan step: before every other step, and never for long.
 PRIORITY = 100
 TIMEOUT_MINUTES = 15
@@ -77,7 +77,7 @@ def second_run_pipeline(
     pipeline_path: str,
 ) -> dict[str, Any]:
     """The trigger steps of ``needs``, and the step that runs the plan step's ``command`` again
-    when every one of them has ended, with the option ``resume``."""
+    when every one of them has ended, with the option ``plan_again``."""
     triggers = trigger_steps(plan, needs)
     second_run = {
         "label": SECOND_RUN_LABEL,
@@ -86,6 +86,6 @@ def second_run_pipeline(
         "timeout_in_minutes": TIMEOUT_MINUTES,
         "depends_on": [{"step": t["key"], "allow_failure": True} for t in triggers],
         "command": command,
-        "plugins": [{plugin_key(plugin_commit): {"resume": pipeline_path}}],
+        "plugins": [{plugin_key(plugin_commit): {"plan_again": pipeline_path}}],
     }
     return {"steps": [*triggers, second_run]}

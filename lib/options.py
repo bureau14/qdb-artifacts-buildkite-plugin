@@ -77,8 +77,8 @@ class Promote:
 @dataclass(frozen=True)
 class Options:
     """``step`` is the step id of a step that uploads or promotes; ``key`` the build's key,
-    written by the plan step. ``plan``, ``resume`` and ``leave`` mark the plan step, its second
-    run and the last step; the first two name the generated pipeline."""
+    written by the plan step. ``plan``, ``plan_again`` and ``last_step`` mark the plan step,
+    its second run and the last step; the first two name the generated pipeline."""
 
     step: str | None = None
     key: str | None = None
@@ -86,8 +86,8 @@ class Options:
     upload: Upload | None = None
     promote: Promote | None = None
     plan: str | None = None
-    resume: str | None = None
-    leave: bool = False
+    plan_again: str | None = None
+    last_step: bool = False
 
 
 def read_bool(v: Any) -> bool:

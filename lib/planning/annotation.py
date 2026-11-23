@@ -86,18 +86,19 @@ def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) 
 
 # The kinds of refusal that are not a reason of a record.
 PLAN_REFUSED = "plan"
-STEP_ERROR = "error"
+PLAN_STEP_ERROR, LAST_STEP_ERROR = "plan_step_error", "last_step_error"
 
 REFUSAL_HEADINGS = {
     RULE: "The generated pipeline of `{project}` build {number} breaks the rule of its templates",
     NOT_DECLARED: "`{project}` build {number} was asked for a step it does not make",
     PLAN_REFUSED: "The snapshot plan of `{project}` build {number} cannot be made",
-    STEP_ERROR: "The snapshot step of `{project}` build {number} failed",
+    PLAN_STEP_ERROR: "The plan step of `{project}` build {number} failed",
+    LAST_STEP_ERROR: "The last step of `{project}` build {number} failed",
 }
 
 
 def refusal_annotation(kind: str, project: str, build: Build, message: str) -> str:
-    """``kind`` is a reason of a record, ``PLAN_REFUSED`` or ``STEP_ERROR``; ``message`` holds
+    """``kind`` is a reason of a record, ``PLAN_REFUSED`` or a step's error; ``message`` holds
     the facts, one per line."""
     heading = REFUSAL_HEADINGS[kind].format(project=project, number=build.number)
     return f"{heading}\n\n{fenced(message.splitlines())}"

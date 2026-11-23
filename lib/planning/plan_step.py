@@ -24,7 +24,7 @@ Then it decides:
 
 The second run, once the started builds ended, repeats 1 to 4 with the stored plan. A
 dependency that still lacks a folder fails it, with the cause; else it goes on at 9. A
-failure of 1, 2, 4, 6 or 7 is recorded when the build has a key. A failed step sets the mode
+failure of 1, 2, 4, 6 or 7 is recorded when the build has a key. A failed step sets the outcome
 ``failed``, which tells the last step that nothing was built.
 """
 
@@ -42,6 +42,7 @@ from ..job import Job, is_started_for_dependency
 from ..layout import Folder
 from ..promote import write_latest_file
 from .annotation import (
+    PLAN_STEP_ERROR,
     failure_annotation,
     left_no_record,
     refused_line,
@@ -53,7 +54,7 @@ from .buildkite import https_repository
 from .edge import (
     BUILT,
     FAILED,
-    MODE,
+    OUTCOME,
     PROMOTES,
     REUSED,
     Edge,
@@ -118,7 +119,7 @@ def point_latest_files(job: Job, edge: Edge, own: OwnBuild) -> None:
 def reuse(job: Job, edge: Edge, own: OwnBuild) -> None:
     """Nothing is built: the page names the build that made each folder asked for."""
     builds = {f: own.made[f].promoted.build for f in own.needs}
-    edge.agent.meta_data_set(MODE, REUSED)
+    edge.agent.meta_data_set(OUTCOME, REUSED)
     edge.agent.annotate(reused_annotation(own.plan, job.project, builds), "success", STEP_CONTEXT)
     edge.log(f"{job.project} is reused: every step asked for is made")
 
@@ -238,7 +239,7 @@ def upload_pipeline(job: Job, edge: Edge, own: OwnBuild) -> None:
         raise DocumentError(f"the step that promotes {keyless[0]} has no key")
     document = yaml.safe_dump(planned(own.generated.doc, steps, rewrite))
     edge.agent.meta_data_set(PROMOTES, promotes_value({f: s.key for f, s in built.items()}))
-    edge.agent.meta_data_set(MODE, BUILT)
+    edge.agent.meta_data_set(OUTCOME, BUILT)
     edge.agent.pipeline_upload(document)
     edge.log(
         f"{job.project} builds: uploaded the pipeline with the keys of {len(planned_own.deps)} "
@@ -283,9 +284,11 @@ def second_run(job: Job, edge: Edge, path: str) -> None:
 
 def run(job: Job, edge: Edge, decisions: Callable[[Job, Edge, str], None], path: str) -> int:
     try:
-        return run_step(job, edge, lambda j, e: decisions(j, e, path), STEP_CONTEXT)
+        return run_step(
+            job, edge, lambda j, e: decisions(j, e, path), STEP_CONTEXT, PLAN_STEP_ERROR
+        )
     except ArtifactsError:
-        edge.agent.meta_data_set(MODE, FAILED)
+        edge.agent.meta_data_set(OUTCOME, FAILED)
         raise
 
 
