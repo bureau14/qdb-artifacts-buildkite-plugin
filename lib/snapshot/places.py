@@ -36,7 +36,7 @@ class Place:
 class Ask:
     """``pipeline(slug)``: Buildkite's facts. ``commit(repository, ref)``: the ref's commit,
     None when the repository lacks it. ``files(repository, commit)``: its templates and
-    pipeline.py. ``line()``: the first build's release line."""
+    pipeline.py. ``line()``: the root build's release line."""
 
     pipeline: Callable[[str], PipelineFacts]
     commit: Callable[[str, str], str | None]
@@ -56,7 +56,7 @@ def asking(
     name: str,
     named: Mapping[str, str | None],
 ) -> Ask:
-    """``Ask`` for the plan of a first build that runs under ``name`` and is taken from ``at``.
+    """``Ask`` for the plan of a root build that runs under ``name`` and is taken from ``at``.
     ``named`` is what git said of the refs of its name in its repository. Its own ref is known
     at its own commit, so another pipeline of its repository is planned there, also when the
     ref moved."""
@@ -133,7 +133,7 @@ def first_ref(ask: Ask, repository: str, refs: Iterable[str]) -> tuple[str, str]
 def place_of(
     project: str, repository: str, pin: Pin | None, at: str, dependent: Dependent, ask: Ask
 ) -> Place:
-    """Where ``project`` is taken from under a first build at the ref ``at``."""
+    """Where ``project`` is taken from under a root build at the ref ``at``."""
     if pin is not None:
         commit = ask.commit(repository, pin.ref)
         if commit is None:
@@ -204,7 +204,7 @@ def snapshot_declaration(
 def resolve(
     project: str, dependent: Dependent, pin: Pin | None, at: str, ask: Ask
 ) -> Member | Refused:
-    """``project`` where it is taken from under a first build at the ref ``at``, or why it
+    """``project`` where it is taken from under a root build at the ref ``at``, or why it
     cannot be planned there. A pipeline Buildkite does not have fails the plan."""
     try:
         facts = ask.pipeline(project)

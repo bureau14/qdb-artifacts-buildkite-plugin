@@ -375,7 +375,7 @@ For each step a download takes, the job's log names the key, its commit and the 
 
 A build that downloads the artifacts of another pipeline gets them from a build of exactly the commits it planned, and every job of the build and of the builds it starts downloads them at the same keys. What is already built at those keys is not built again. A repository configures nothing beyond what its step templates say: which project each step downloads, and the step id of each step that uploads.
 
-A **project** is a Buildkite pipeline, named by its slug; a **platform** is what `variant` names. The **plan step** is the first step of a build whose `pipeline.py` hands its pipeline to the runner (`qdb_pipeline.run`, qdb-cicd-tools); the **last step** runs after every other step. The **first build** is one a person, a push or a schedule started; its plan step makes the **plan**: the commit and key of its project and, recursively, of every snapshot dependency. A build the plan step starts for a dependency reads that plan.
+A **project** is a Buildkite pipeline, named by its slug; a **platform** is what `variant` names. The **plan step** is the first step of a build whose `pipeline.py` hands its pipeline to the runner (`qdb_pipeline.run`, qdb-cicd-tools); the **last step** runs after every other step. The **root build** is one a person, a push or a schedule started; its plan step makes the **plan**: the commit and key of its project and, recursively, of every snapshot dependency. A build the plan step starts for a dependency reads that plan.
 
 ### Two kinds of dependency
 
@@ -398,18 +398,18 @@ A **latest successful** dependency says `latest: true`. It is not planned and ne
 
 ### Where a dependency is taken from
 
-The first build is taken at the commit its checkout holds. A dependency is taken from its pin; else:
+The root build is taken at the commit its checkout holds. A dependency is taken from its pin; else:
 
-- **in a build on a branch**, from the first of these its repository has: that branch, the release line of the first build's commit (a branch named `master`, `main` or `<digits>.<digits>.x`), `master`, `main`;
+- **in a build on a branch**, from the first of these its repository has: that branch, the release line of the root build's commit (a branch named `master`, `main` or `<digits>.<digits>.x`), `master`, `main`;
 - **in a build at a tag** (started with the tag's name in Buildkite's branch field), from the same tag and nothing else.
 
 Every build runs under the name of its git ref, so a build started for a dependency taken from `refs/heads/master` runs as `master`.
 
 ### Who writes a branch's latest files
 
-The first build does. A build started for a dependency does when the build a person would start on its branch at its commit would take every project below it at the commit the plan takes it at: from that branch, from its release line, `master` or `main` where a repository lacks the branch, or from a pin its own templates or those below it write. The plan step hands the answer to the started build as `SNAPSHOT_BRANCH_BUILD`.
+The root build does. A build started for a dependency does when the build a person would start on its branch at its commit would take every project below it at the commit the plan takes it at: from that branch, from its release line, `master` or `main` where a repository lacks the branch, or from a pin its own templates or those below it write. The plan step hands the answer to the started build as `SNAPSHOT_BRANCH_BUILD`.
 
-A plan step that finds steps already made at its key also points its branch's latest files at that key, when git names the build's commit as its branch's newest: so a branch cut at built commits gets its latest files at its first build, and an older build that runs again does not move them back.
+A plan step that finds steps already made at its key also points its branch's latest files at that key, when git names the build's commit as its branch's newest: so a branch cut at built commits gets its latest files at the first build on it, and an older build that runs again does not move them back.
 
 ### What a repository changes to adopt
 
@@ -439,20 +439,20 @@ The plan step's page lists the build's project and every project below it with i
 
 ### Variables
 
-| Variable                | Set by                              | Meaning                                                                                              |
-| ----------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT_REBUILD`      | a person                            | `1`: the first build builds again, under a key of its own. `all`: so does every project of its plan. |
-| `SNAPSHOT_PLAN`         | the plan step, on a build it starts | The first build's id, whose meta-data holds the plan.                                                |
-| `SNAPSHOT_NEEDS`        | the same                            | The platforms and step ids the dependent downloads.                                                  |
-| `SNAPSHOT_BRANCH_BUILD` | the same                            | `false`: the build writes no latest file of its branch.                                              |
+| Variable                | Set by                              | Meaning                                                                                             |
+| ----------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `SNAPSHOT_REBUILD`      | a person                            | `1`: the root build builds again, under a key of its own. `all`: so does every project of its plan. |
+| `SNAPSHOT_PLAN`         | the plan step, on a build it starts | The root build's id, whose meta-data holds the plan.                                                |
+| `SNAPSHOT_NEEDS`        | the same                            | The platforms and step ids the dependent downloads.                                                 |
+| `SNAPSHOT_BRANCH_BUILD` | the same                            | `false`: the build writes no latest file of its branch.                                             |
 
-The plan step of a first build asks Buildkite's API (scope `read_pipelines`) for the repository and configuration of every pipeline of its plan, with the token in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter `/services/buildkite/credentials/artifacts/buildkite-api-token`.
+The plan step of a root build asks Buildkite's API (scope `read_pipelines`) for the repository and configuration of every pipeline of its plan, with the token in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter `/services/buildkite/credentials/artifacts/buildkite-api-token`.
 
 ### When a build fails
 
 A build that failed says why on its page. Its own steps that did not pass are named; a dependency that failed is followed down its failure records to the builds that failed, and the page ends with how to retry. A build that failed before it built, for its generator or its pipeline, is no job to retry.
 
-A failed step is not built twice for nothing: a build that needs a key whose build failed under the same plan fails at once, and so does a build that waited while another build of the same key failed. A first build started after that failure builds the key again.
+A failed step is not built twice for nothing: a build that needs a key whose build failed under the same plan fails at once, and so does a build that waited while another build of the same key failed. A root build started after that failure builds the key again.
 
 ### Limits
 

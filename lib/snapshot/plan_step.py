@@ -5,7 +5,7 @@ is (``own_build``):
 
 1. The command failed: fail.
 2. The generated pipeline breaks the rule of its templates: fail.
-3. A first build asks git whether its name is a branch or a tag, reads the keys of its latest
+3. A root build asks git whether its name is a branch or a tag, reads the keys of its latest
    successful downloads, makes the plan and stores it. A build started for a dependency has
    its plan from the start. The page shows the plan.
 4. ``key.json`` of the build's key is created. A step id no template writes, a download that
@@ -16,7 +16,7 @@ Then it decides:
 5. The latest files of the folders made at the key name that key, when git names the build's
    commit as its ref's. The pipeline promotes something and every folder asked for is made:
    nothing is built; done.
-6. Another build of the key failed on the folders wanted since the first build began: fail.
+6. Another build of the key failed on the folders wanted since the root build began: fail.
 7. A dependency that lacks a folder the kept steps take failed earlier under this plan: fail.
 8. Some dependency lacks a folder: upload a trigger step for each, and the step of the second
    run; done.
@@ -57,11 +57,11 @@ from .edge import (
     PROMOTES,
     REUSED,
     Edge,
-    first_build_began,
     made_only,
     manifests_at,
     promotes_value,
     records_of_plan,
+    root_build_began,
     stored_plan,
     stored_records,
 )
@@ -94,7 +94,7 @@ STEP_CONTEXT = "snapshot"
 def point_latest_files(job: Job, edge: Edge, own: OwnBuild) -> None:
     """Point the latest file of every folder made at the build's key at it, when git names
     the build's commit as its ref's: so a branch cut at built commits gets its latest files at
-    its first build, and an older build that runs again does not move them back. A build
+    the first build on it, and an older build that runs again does not move them back. A build
     started for a dependency asks git now, not the plan: its ref may have moved since the
     plan was made."""
     if not own.made or not job.writes_latest_files:
@@ -124,19 +124,19 @@ def reuse(job: Job, edge: Edge, own: OwnBuild) -> None:
 
 
 def check_shared(job: Job, edge: Edge, own: OwnBuild, wanted: frozenset[Folder]) -> None:
-    """Another build of the key hard failed on every wanted folder since the first build
+    """Another build of the key hard failed on every wanted folder since the root build
     began: fail, compiling nothing. The own record copies its entries and names that build."""
     origin = own.origin
     records = stored_records(edge, origin.project, origin.key) if wanted else []
     if not records:
         return
-    source = shared_failure(records, job.build.id, first_build_began(job, edge), wanted)
+    source = shared_failure(records, job.build.id, root_build_began(job, edge), wanted)
     if source is None:
         return
     copied = shared_record(origin, source, wanted, edge.clock())
     message = (
         f"build {source.build.number} of the same snapshot failed on "
-        f"{shown_folders(sorted(wanted))} after the first build of this plan started: "
+        f"{shown_folders(sorted(wanted))} after the root build of this plan started: "
         f"{source.build.url}"
     )
     raise Refusal(message, failure_annotation(own.plan, copied, {}), copied)

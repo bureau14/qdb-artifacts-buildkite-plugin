@@ -137,7 +137,7 @@ def folders(matrix: tuple, steps: tuple) -> set[Folder]:
 
 @dataclasses.dataclass(frozen=True)
 class At:
-    """A project of a named graph, and the project of its first build: the first top of the
+    """A project of a named graph, and the project of its root build: the first top of the
     graph whose tree holds it."""
 
     name: str
@@ -148,7 +148,7 @@ class At:
         return GRAPHS[self.name]
 
     @property
-    def first(self) -> str:
+    def root(self) -> str:
         return next(t for t in tops(self.graph) if self.project in tree(self.graph, t))
 
     def __str__(self) -> str:
@@ -524,7 +524,7 @@ class World:
             build=build.info,
             command="generate",
             exit_status=0,
-            first_build=build.env.get("SNAPSHOT_PLAN"),
+            root_build=build.env.get("SNAPSHOT_PLAN"),
             needs=build.env.get("SNAPSHOT_NEEDS"),
             rebuild=build.env.get("SNAPSHOT_REBUILD"),
             writes_latest_files=build.env.get("SNAPSHOT_BRANCH_BUILD") != "false",
@@ -622,8 +622,8 @@ class World:
     def builds_of(self, project: str) -> list[Build]:
         return [b for b in self.builds if b.project == project]
 
-    def plan(self, first_build: Build):
-        return decode_plan(self.agents.meta_data[first_build.id]["snapshot-plan"])
+    def plan(self, root_build: Build):
+        return decode_plan(self.agents.meta_data[root_build.id]["snapshot-plan"])
 
     def made(self, project: str, key: str, folder: Folder) -> Manifest | None:
         """The manifest of ``folder`` of ``project`` at ``key`` when it says promoted."""
@@ -649,8 +649,8 @@ class World:
 
 
 @pytest.fixture(params=GRAPH_TOPS, ids=str)
-def graph_first(request) -> At:
-    """The project of every first build: every top of every graph."""
+def graph_root(request) -> At:
+    """The project of every root build: every top of every graph."""
     return request.param
 
 

@@ -1,7 +1,6 @@
 """What a build learns of itself before the plan step decides (``own_build``).
 
-The pipeline its command generated, held to the rule of its templates; its plan, which a first
-build makes; its key; what its pipeline promotes, what it was asked for, and what of that is
+The pipeline its command generated, held to the rule of its templates; its plan, which a root build makes; its key; what its pipeline promotes, what it was asked for, and what of that is
 made. Each fails the build when it cannot be had, with a failure record once the build has a
 key.
 """
@@ -26,7 +25,7 @@ from .failing import refusal
 from .latest import latest_download, read_latest
 from .pipeline import DocumentError, Step, dependencies, left_out, promotions, steps_of
 from .plan import Plan, PlanError, encode_plan
-from .planner import FirstBuild, make_plan, name_refs, named_ref, rebuild_setting
+from .planner import RootBuild, make_plan, name_refs, named_ref, rebuild_setting
 from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Origin, RefusedFolder
 from .rule import rule_violations, stepless_downloads, unwritten_promotions
 from .templates import Declaration, TemplateError, is_template_path, read_declaration
@@ -50,7 +49,7 @@ class OwnBuild:
     """``origin`` holds the build's key. ``promotes`` is what its pipeline promotes, ``needs``
     what it was asked for: ``SNAPSHOT_NEEDS`` in a build started for a dependency, else all it
     promotes. ``made`` is the manifest of each folder it promotes that is made at its key.
-    ``named`` is git's answer for the refs a first build's name may be, None for a build that
+    ``named`` is git's answer for the refs a root build's name may be, None for a build that
     had its plan from the start."""
 
     generated: Generated
@@ -88,7 +87,7 @@ def generated_pipeline(job: Job, edge: Edge, path: str, origin: Origin | None) -
 
 
 def shown_name(name: str, repository: str, refs: Mapping[str, str]) -> str:
-    """What git said of the refs a first build's name may be, as the plan step logs it."""
+    """What git said of the refs a root build's name may be, as the plan step logs it."""
     ref = named_ref(name, refs)
     if ref not in refs:
         return (
@@ -104,7 +103,7 @@ def shown_name(name: str, repository: str, refs: Mapping[str, str]) -> str:
 
 
 def named_refs(job: Job, edge: Edge) -> Mapping[str, str]:
-    """Git's answer for the refs a first build's name may be, which it asks once."""
+    """Git's answer for the refs a root build's name may be, which it asks once."""
     repository = https_repository(job.repository)
     refs = edge.git.commits_of(repository, name_refs(job.branch))
     edge.log(shown_name(job.branch, repository, refs))
@@ -112,10 +111,10 @@ def named_refs(job: Job, edge: Edge) -> Mapping[str, str]:
 
 
 def made_plan(job: Job, edge: Edge, generated: Generated, named: Mapping[str, str]) -> Plan:
-    """The plan a first build makes, stored as its meta-data. A latest successful download
+    """The plan a root build makes, stored as its meta-data. A latest successful download
     that finds no latest file, and a plan that cannot be made, fail the build."""
     try:
-        first = FirstBuild(
+        root = RootBuild(
             project=job.project,
             name=job.branch,
             commit=edge.checkout.head_commit(),
@@ -130,7 +129,7 @@ def made_plan(job: Job, edge: Edge, generated: Generated, named: Mapping[str, st
         ]
         at_tag = is_tag(named_ref(job.branch, named))
         latest = read_latest(edge.store, downloads, generated.declaration, at_tag)
-        p = make_plan(first, generated.declaration, latest, edge.git, edge.pipelines)
+        p = make_plan(root, generated.declaration, latest, edge.git, edge.pipelines)
     except PlanError as exc:
         raise refusal(job, edge, PLAN_REFUSED, str(exc)) from exc
     edge.agent.meta_data_set(PLAN, encode_plan(p))

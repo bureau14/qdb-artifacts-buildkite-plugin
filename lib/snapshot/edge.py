@@ -3,7 +3,7 @@ they share.
 
 The steps keep no state but meta-data of their own build:
 
-    snapshot-plan       the plan, on the first build
+    snapshot-plan       the plan, on the root build
     snapshot-mode       reused, built or failed
     snapshot-promotes   [[<platform>, <step id>, <Buildkite key of the step that promotes it>]]
 
@@ -71,7 +71,7 @@ class Edge:
 def buildkite_pipelines(ssm: Any) -> Callable[[str], PipelineFacts]:
     """Buildkite's facts of a pipeline slug. The organisation and the token
     (``ARTIFACTS_BUILDKITE_TOKEN``, else its SSM parameter) are read at the first call, which
-    only the plan of a first build makes. The token goes to Buildkite's API only."""
+    only the plan of a root build makes. The token goes to Buildkite's API only."""
 
     @functools.cache
     def credentials() -> tuple[str, str]:
@@ -160,13 +160,13 @@ def records_of_plan(edge: Edge, plan: Plan, causes: Iterable[Cause]) -> dict[str
 
 
 def stored_plan(job: Job, edge: Edge) -> Plan:
-    """The plan from the meta-data of the first build: this build, or the one that started it."""
-    return decode_plan(edge.agent.meta_data_get(PLAN, job.first_build))
+    """The plan from the meta-data of the root build: this build, or the one that started it."""
+    return decode_plan(edge.agent.meta_data_get(PLAN, job.root_build))
 
 
-def first_build_began(job: Job, edge: Edge) -> int:
-    """When the first build began, in epoch seconds."""
-    return int(edge.agent.meta_data_get(ARRIVED, job.first_build))
+def root_build_began(job: Job, edge: Edge) -> int:
+    """When the root build began, in epoch seconds."""
+    return int(edge.agent.meta_data_get(ARRIVED, job.root_build))
 
 
 def own_planned(job: Job, edge: Edge, p: Plan) -> Planned:

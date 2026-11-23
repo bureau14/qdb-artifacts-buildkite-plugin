@@ -35,7 +35,7 @@ from lib.snapshot.latest import latest_download
 from lib.snapshot.lines import release_line
 from lib.snapshot.pipeline import dependencies, entries_of, steps_of
 from lib.snapshot.plan import Planned
-from lib.snapshot.planner import FirstBuild, make_plan, name_refs
+from lib.snapshot.planner import RootBuild, make_plan, name_refs
 from lib.snapshot.rewrite import Rewrite, planned
 from lib.snapshot.rule import rule_violations
 from lib.snapshot.templates import kind, read_declaration
@@ -52,16 +52,16 @@ SNAPSHOT, LATEST_SUCCESSFUL = "snapshot", "latest successful"
 
 
 def plans(world, number: int) -> list:
-    """The plans of every top of the world, made by first builds numbered ``number``."""
+    """The plans of every top of the world, made by root builds numbered ``number``."""
     found = []
     for t in tops({p: project.deps for p, project in world.projects.items()}):
         commit = world.hosting.tip(t)
         refs = world.git.commits_of(url(t), name_refs("master"))
-        first = FirstBuild(
+        root = RootBuild(
             t, "master", commit, refs, f"01890000-0000-7000-8000-{number:012d}", number
         )
         declaration = read_declaration(world.hosting.trees[commit], t)
-        found.append(make_plan(first, declaration, (), world.git, world.pipelines))
+        found.append(make_plan(root, declaration, (), world.git, world.pipelines))
     return found
 
 
@@ -92,10 +92,10 @@ def test_a_new_commit_changes_the_keys_of_its_project_and_every_project_above(
     assert {p for p in graph if before[p] != after[p]} == {project} | above(graph, project)
 
 
-def test_the_plan_carries_the_step_ids_of_every_project(worlds, graph_first):
-    """The plan names, for every project of a first build's tree, the step ids its templates
+def test_the_plan_carries_the_step_ids_of_every_project(worlds, graph_root):
+    """The plan names, for every project of a root build's tree, the step ids its templates
     promote at the commit the plan takes it from."""
-    graph, first = graph_first.graph, graph_first.project
+    graph, root = graph_root.graph, graph_root.project
     world = worlds(graph)
     shapes = sorted(STEP_IDS.values())
     steps = {p: shapes[i % len(shapes)] for i, p in enumerate(sorted(graph))}
@@ -103,11 +103,11 @@ def test_the_plan_carries_the_step_ids_of_every_project(worlds, graph_first):
         world.projects[p].steps = steps[p]
         world.commit(p)
 
-    found = [plan for plan in plans(world, 1) if plan.first.project == first]
+    found = [plan for plan in plans(world, 1) if plan.root.project == root]
 
     (plan,) = found
     assert {p: planned_project.steps for p, planned_project in plan.projects.items()} == {
-        p: steps[p] for p in tree(graph, first)
+        p: steps[p] for p in tree(graph, root)
     }
 
 

@@ -21,7 +21,7 @@ class Job:
     """``branch`` is the name the build runs under (BUILDKITE_BRANCH), a branch's or a tag's.
 
     The last four are set by the plan step on a build it starts for a dependency:
-    ``first_build`` is the id of the build that made the plan (SNAPSHOT_PLAN), ``needs`` the
+    ``root_build`` is the id of the build that made the plan (SNAPSHOT_PLAN), ``needs`` the
     folders asked of this build (SNAPSHOT_NEEDS), ``writes_latest_files`` is false only when
     SNAPSHOT_BRANCH_BUILD says ``false``. ``rebuild`` is SNAPSHOT_REBUILD as a person set it.
     """
@@ -33,7 +33,7 @@ class Job:
     build: Build
     command: str | None
     exit_status: int
-    first_build: str | None = None
+    root_build: str | None = None
     needs: str | None = None
     rebuild: str | None = None
     writes_latest_files: bool = True
@@ -52,7 +52,7 @@ def job_of(env: Mapping[str, str]) -> Job:
         ),
         command=env.get("BUILDKITE_COMMAND"),
         exit_status=int(env.get("BUILDKITE_COMMAND_EXIT_STATUS") or "0"),
-        first_build=env.get("SNAPSHOT_PLAN"),
+        root_build=env.get("SNAPSHOT_PLAN"),
         needs=env.get("SNAPSHOT_NEEDS"),
         rebuild=env.get("SNAPSHOT_REBUILD"),
         writes_latest_files=env.get("SNAPSHOT_BRANCH_BUILD") != "false",
@@ -60,7 +60,7 @@ def job_of(env: Mapping[str, str]) -> Job:
 
 
 def is_started_for_dependency(job: Job) -> bool:
-    return job.first_build is not None
+    return job.root_build is not None
 
 
 def job_ref(job: Job) -> str | None:

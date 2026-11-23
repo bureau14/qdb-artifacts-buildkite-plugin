@@ -1,8 +1,8 @@
-"""The plan of a first build: the commit and key of every project of its tree, fixed once.
+"""The plan of a root build: the commit and key of every project of its tree, fixed once.
 
-The first build makes it (``planner.make_plan``) and keeps it as its meta-data
+The root build makes it (``planner.make_plan``) and keeps it as its meta-data
 ``snapshot-plan``; every build it starts reads it back from there, so no build computes a key
-or reads a dependency's templates again. The projects are the first build's and, recursively,
+or reads a dependency's templates again. The projects are the root build's and, recursively,
 the snapshot dependencies of each.
 """
 
@@ -24,14 +24,14 @@ class PlanError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class First:
+class Root:
     project: str
     build_number: int
 
 
 @dataclass(frozen=True)
 class LatestDownload:
-    """A download of the first build that takes the latest successful build of another
+    """A download of the root build that takes the latest successful build of another
     project: the ref its walk starts at, whether it tries that ref alone, and the step ids it
     names, None for every step of the newest key."""
 
@@ -54,8 +54,7 @@ class Latest:
 class Planned:
     """A project of the plan. ``ref`` is the full ref its commit was taken from, whose name a
     build of it runs under; ``deps`` its direct snapshot dependencies; ``steps`` the step ids
-    its templates promote; ``latest`` its latest successful downloads, which only the first
-    build has. ``key`` is None only while ``make_plan`` has not keyed it."""
+    its templates promote; ``latest`` its latest successful downloads, which only the root build has. ``key`` is None only while ``make_plan`` has not keyed it."""
 
     ref: str
     commit: str
@@ -68,13 +67,13 @@ class Planned:
 
 @dataclass(frozen=True)
 class Plan:
-    """``id`` is the first build's uuid, ``context`` the name it runs under, ``rebuild`` one of
+    """``id`` is the root build's uuid, ``context`` the name it runs under, ``rebuild`` one of
     ``REBUILD_*``."""
 
     id: str
     context: str
     rebuild: str
-    first: First
+    root: Root
     projects: Mapping[str, Planned]
 
 
@@ -108,12 +107,12 @@ def dependencies_of(p: Plan) -> dict[str, tuple[str, ...]]:
 def key_json_of(p: Plan, project: str) -> KeyJson:
     """What the key of ``project`` stands for: its commit, the key of each snapshot dependency
     and each key read for a latest successful download, and the plan's id when
-    ``SNAPSHOT_REBUILD`` forces the project (the first build's under ``one``, every one under
+    ``SNAPSHOT_REBUILD`` forces the project (the root build's under ``one``, every one under
     ``all``)."""
     n = p.projects[project]
     planned = ((d, p.projects[d].key) for d in n.deps)
     read = ((r.download.project, k) for r in n.latest for k in r.keys.values())
-    forced = p.rebuild == REBUILD_ALL or (p.rebuild == REBUILD_ONE and project == p.first.project)
+    forced = p.rebuild == REBUILD_ALL or (p.rebuild == REBUILD_ONE and project == p.root.project)
     return KeyJson(project, n.commit, (*planned, *read), p.id if forced else None)
 
 

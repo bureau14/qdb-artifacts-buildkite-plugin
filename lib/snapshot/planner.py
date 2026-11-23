@@ -1,8 +1,8 @@
-"""The plan of a first build (``make_plan``): the place of every project of its tree, who of
+"""The plan of a root build (``make_plan``): the place of every project of its tree, who of
 them writes its branch's latest files, and their keys.
 
-The tree is the first build's project and, recursively, the snapshot dependencies of every
-project in it. The first build is taken at its own commit. A dependency is taken from the ref
+The tree is the root build's project and, recursively, the snapshot dependencies of every
+project in it. The root build is taken at its own commit. A dependency is taken from the ref
 a template of the tree pins it to, else from the first of ``default_refs`` its repository has.
 Pins come from every project of the tree, and decide which commits are read and so which pins
 there are: the tree is walked again with the pins it found until they are the pins it was
@@ -37,11 +37,11 @@ from .plan import (
     REBUILD_ALL,
     REBUILD_NONE,
     REBUILD_ONE,
-    First,
     Latest,
     Plan,
     PlanError,
     Planned,
+    Root,
     below,
     dependencies_first,
     keyed,
@@ -50,7 +50,7 @@ from .templates import Declaration, snapshot_dependencies
 
 
 @dataclass(frozen=True)
-class FirstBuild:
+class RootBuild:
     """The build that plans. ``name`` is the name it runs under, ``refs`` git's answer for
     ``name_refs`` of it in its repository, ``commit`` the commit checked out, ``rebuild`` what
     ``rebuild_setting`` gives."""
@@ -65,7 +65,7 @@ class FirstBuild:
 
 
 def name_refs(name: str) -> tuple[str, str]:
-    """The refs a first build's name may be, in the order they count."""
+    """The refs a root build's name may be, in the order they count."""
     return branch_ref(name), tag_ref(name)
 
 
@@ -89,12 +89,12 @@ def rebuild_setting(value: str | None) -> str:
 
 
 def walk(
-    first: str, member: Member, pins: Mapping[str, Pin], ask: Ask
+    root: str, member: Member, pins: Mapping[str, Pin], ask: Ask
 ) -> dict[str, Member | Refused]:
-    """Every project of the tree of ``first``, which ``member`` is, breadth first, each
+    """Every project of the tree of ``root``, which ``member`` is, breadth first, each
     resolved once, for the first project that reaches it. A refused one is not descended."""
-    found: dict[str, Member | Refused] = {first: member}
-    queue = [first]
+    found: dict[str, Member | Refused] = {root: member}
+    queue = [root]
     while queue:
         by = queue.pop(0)
         for project, dep in snapshot_dependencies(found[by].declaration).items():
@@ -124,17 +124,17 @@ def pins_of(found: Mapping[str, Member | Refused]) -> dict[str, Pin]:
     return {project: written[0] for project, written in pins.items()}
 
 
-def settled(first: str, member: Member, ask: Ask) -> dict[str, Member]:
-    """The tree of ``first``, walked with the pins it holds. Pins that never settle, and a
+def settled(root: str, member: Member, ask: Ask) -> dict[str, Member]:
+    """The tree of ``root``, walked with the pins it holds. Pins that never settle, and a
     project refused in the settled tree, fail the plan."""
 
     def refs(pins: Mapping[str, Pin]) -> dict[str, str]:
         return {project: pin.ref for project, pin in sorted(pins.items())}
 
-    pins = pins_of({first: member})
+    pins = pins_of({root: member})
     tried: list[dict[str, str]] = []
     while True:
-        found = walk(first, member, pins, ask)
+        found = walk(root, member, pins, ask)
         held = pins_of(found)
         if refs(held) == refs(pins):
             break
@@ -154,23 +154,22 @@ def settled(first: str, member: Member, ask: Ask) -> dict[str, Member]:
 # ---------------------------------------------------------------------------
 
 
-def own_line(at: Place, first: Place, ask: Ask) -> str | None:
+def own_line(at: Place, root: Place, ask: Ask) -> str | None:
     """The release line of the build a person would start of the project at ``at``, as far as
-    this plan knows it: its branch when that is a line; on the first build's branch, the first
-    build's line, in another repository only when it has a branch of that name; else None, and
+    this plan knows it: its branch when that is a line; on the root build's branch, the root build's line, in another repository only when it has a branch of that name; else None, and
     only its own branch counts."""
     branch = branch_of(at.ref)
     if branch is None or is_release_line(branch):
         return branch
-    if at.ref != first.ref:
+    if at.ref != root.ref:
         return None
     line = ask.line()
-    known = at.repository == first.repository or ask.commit(at.repository, branch_ref(line))
+    known = at.repository == root.repository or ask.commit(at.repository, branch_ref(line))
     return line if known else None
 
 
 def writes_latest_file(
-    p: str, tree: Mapping[str, Member], under: frozenset[str], first: Place, ask: Ask
+    p: str, tree: Mapping[str, Member], under: frozenset[str], root: Place, ask: Ask
 ) -> bool:
     """Whether a build of ``p`` started for a dependency writes its branch's latest files:
     when the build a person would start on its branch at its commit takes every project
@@ -183,7 +182,7 @@ def writes_latest_file(
         repository = tree[q].place.repository
         if q in pins:
             return ask.commit(repository, pins[q].ref)
-        found = first_ref(ask, repository, default_refs(at.ref, lambda: own_line(at, first, ask)))
+        found = first_ref(ask, repository, default_refs(at.ref, lambda: own_line(at, root, ask)))
         return None if found is None else found[1]
 
     return all(own_commit(q) == tree[q].place.commit for q in sorted(under))
@@ -195,43 +194,43 @@ def writes_latest_file(
 
 
 def make_plan(
-    first: FirstBuild,
+    root: RootBuild,
     own: Declaration,
     latest: tuple[Latest, ...],
     git,
     pipelines: Callable[[str], PipelineFacts],
 ) -> Plan:
-    """The plan of ``first``. ``own`` is the declaration of its own commit, ``latest`` its
+    """The plan of ``root``. ``own`` is the declaration of its own commit, ``latest`` its
     latest successful downloads with the keys read for them. Raises ``PlanError`` when the
     tree cannot be planned; errors of git, of Buildkite and of templates pass through."""
     pipeline = functools.cache(pipelines)
-    at = Place(pipeline(first.project).repository, named_ref(first.name, first.refs), first.commit)
-    named = {ref: first.refs.get(ref) for ref in name_refs(first.name)}
-    ask = asking(git, pipeline, at, first.name, named)
-    tree = settled(first.project, Member(at, own), ask)
+    at = Place(pipeline(root.project).repository, named_ref(root.name, root.refs), root.commit)
+    named = {ref: root.refs.get(ref) for ref in name_refs(root.name)}
+    ask = asking(git, pipeline, at, root.name, named)
+    tree = settled(root.project, Member(at, own), ask)
     deps = {p: tuple(sorted(snapshot_dependencies(m.declaration))) for p, m in tree.items()}
     # Before ``below``: a cycle fails the plan here.
     order = dependencies_first(deps)
 
     def planned(p: str) -> Planned:
-        is_first = p == first.project
+        is_root = p == root.project
         place = tree[p].place
         return Planned(
             ref=place.ref,
             commit=place.commit,
             key=None,
-            writes_latest_file=is_first or writes_latest_file(p, tree, below(deps, p), at, ask),
+            writes_latest_file=is_root or writes_latest_file(p, tree, below(deps, p), at, ask),
             deps=deps[p],
             steps=tree[p].declaration.steps,
-            latest=latest if is_first else (),
+            latest=latest if is_root else (),
         )
 
     return keyed(
         Plan(
-            id=first.build_id,
-            context=first.name,
-            rebuild=first.rebuild,
-            first=First(first.project, first.build_number),
+            id=root.build_id,
+            context=root.name,
+            rebuild=root.rebuild,
+            root=Root(root.project, root.build_number),
             projects={p: planned(p) for p in order},
         )
     )

@@ -45,7 +45,7 @@ from lib.job import Build
 from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured
-from lib.snapshot.plan import First, Plan, Planned, encode_plan, keyed
+from lib.snapshot.plan import Plan, Planned, Root, encode_plan, keyed
 from lib.snapshot.records import Record
 
 
@@ -749,21 +749,21 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
 # A started build's plan step and last step through the real hooks
 # ---------------------------------------------------------------------------
 
-FIRST_BUILD = 9
+ROOT_BUILD = 9
 ENGINE_COMMIT = "e" * 40
 ENGINE_BUILD = 7
 OUTCOMES = ("every-step-passes", "the-last-platform-fails")
 
 
-def first_build_plan(widget_commit: str) -> Plan:
-    """The plan of a first build of app: app takes widget, widget takes engine, each of one
+def root_build_plan(widget_commit: str) -> Plan:
+    """The plan of a root build of app: app takes widget, widget takes engine, each of one
     step id, with the keys their commits give."""
     projects = {
         "app": Planned(MASTER, "a" * 40, None, True, ("widget",), ("build",)),
         "widget": Planned(MASTER, widget_commit, None, True, ("engine",), ("build",)),
         "engine": Planned(MASTER, ENGINE_COMMIT, None, True, (), ("build",)),
     }
-    return keyed(Plan(build_id(FIRST_BUILD), "master", "none", First("app", FIRST_BUILD), projects))
+    return keyed(Plan(build_id(ROOT_BUILD), "master", "none", Root("app", ROOT_BUILD), projects))
 
 
 def engine_file(number: int, variant: str) -> dict:
@@ -816,11 +816,11 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     job.write(
         {GENERATED: generated(template, MASTER), **{f"out/{v}.bin": v.encode() for v in matrix}}
     )
-    plan = first_build_plan(job.commit)
+    plan = root_build_plan(job.commit)
     needs = json.dumps([[v, "build"] for v in sorted(matrix)])
-    agent.set(build_id(FIRST_BUILD), "meta-data", "snapshot-plan", encode_plan(plan))
+    agent.set(build_id(ROOT_BUILD), "meta-data", "snapshot-plan", encode_plan(plan))
     agent.set(build_id(1), "meta-data", "snapshot-arrived", str(int(time.time())))
-    started = job.with_env(SNAPSHOT_PLAN=build_id(FIRST_BUILD), SNAPSHOT_NEEDS=needs)
+    started = job.with_env(SNAPSHOT_PLAN=build_id(ROOT_BUILD), SNAPSHOT_NEEDS=needs)
 
     planned = (
         started.with_env(BUILDKITE_STEP_KEY="snapshot-enter")

@@ -1,4 +1,4 @@
-"""The release line of a first build.
+"""The release line of a root build.
 
 A release line is a branch named ``master``, ``main`` or ``<digits>.<digits>.x``. A build's
 line is its branch when that is one, else the line of its repository whose merge-base with

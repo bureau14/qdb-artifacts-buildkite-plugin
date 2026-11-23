@@ -1,9 +1,9 @@
-"""The downloads of a first build that take the latest successful build of another project.
+"""The downloads of a root build that take the latest successful build of another project.
 
 Such a download is not planned: the key of each step it takes is the one that project's
 latest files name, by the walk the jobs take (``resolve``). The plan step reads them once and
 the plan holds them, so its second run and every job take the same keys, and the build's key
-holds them. Under a first build at a tag only the entry's own branch is read. A download that
+holds them. Under a root build at a tag only the entry's own branch is read. A download that
 finds no latest file fails the plan before anything runs.
 """
 
@@ -49,7 +49,7 @@ def read_latest(
     store, downloads: Sequence[LatestDownload], declaration: Declaration, at_tag: bool
 ) -> tuple[Latest, ...]:
     """Each of ``downloads``, once, with the key of each step it takes. ``declaration`` names
-    the template of each; ``at_tag`` is whether the first build is at a tag. A download that
+    the template of each; ``at_tag`` is whether the root build is at a tag. A download that
     finds no key fails the plan, every such download named."""
     found, problems = [], []
     for d in dict.fromkeys(downloads):

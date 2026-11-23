@@ -48,7 +48,7 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[
         "build": {
             "branch": name_of(n.ref),
             "commit": n.commit,
-            "message": f"snapshot dependency of {plan.first.project} build {plan.first.build_number}",
+            "message": f"snapshot dependency of {plan.root.project} build {plan.root.build_number}",
             "env": {
                 "SNAPSHOT_PLAN": plan.id,
                 "SNAPSHOT_NEEDS": needs_value(needs),

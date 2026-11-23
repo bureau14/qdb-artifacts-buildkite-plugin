@@ -169,10 +169,10 @@ ANSWERS = {"200": (200,), "404": (404,), "401": (401,), "503-then-200": (503, 20
 @pytest.mark.parametrize("token_source", ["variable", "ssm"])
 @pytest.mark.parametrize("answers", sorted(ANSWERS))
 def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_source, answers):
-    """The plan step of a first build sends the Buildkite API token to the API, again after an
+    """The plan step of a root build sends the Buildkite API token to the API, again after an
     answer that a retry may repair, and puts it in nothing the builds of its tree print, log,
     annotate, raise, set as meta-data, upload or store, whatever the API answers and wherever
-    the token was read; the first build passes when the API gives the pipelines in the end.
+    the token was read; the root build passes when the API gives the pipelines in the end.
     (Every job of
     ``world.py`` holds the token too, and its ``Job.run`` fails a hook that prints it.)"""
     received: list[str] = []
@@ -186,7 +186,7 @@ def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_sour
     world = worlds(GRAPHS["diamond"])
     world.pipelines = buildkite_pipelines(TokenParameter())
 
-    first_build = world.build("app")
+    root_build = world.build("app")
 
     printed = capsys.readouterr()
     kept = (world.agents.meta_data, world.agents.annotations, world.agents.uploads)
@@ -196,7 +196,7 @@ def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_sour
         *(line for b in world.builds for line in b.outputs),
         *map(json.dumps, kept),
     ]
-    assert first_build.state == ("passed" if ANSWERS[answers][-1] == 200 else "failed")
+    assert root_build.state == ("passed" if ANSWERS[answers][-1] == 200 else "failed")
     assert received and set(received) == {TOKEN}
     assert [text for text in shown if TOKEN in text] == []
     assert [key for key, body in world.store.objects.items() if TOKEN.encode() in body] == []

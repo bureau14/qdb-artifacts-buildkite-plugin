@@ -58,11 +58,11 @@ def tree_lines(plan: Plan, project: str) -> list[str]:
 def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str, str]]) -> str:
     """The plan as ``project`` builds it. ``left_out`` names each download of the project's
     own at another ref, as step, platform and ref: its key leaves such a download out."""
-    first = plan.first
+    root = plan.root
     heading = f"Snapshot plan of `{project}`" + (
-        f" build {first.build_number}"
-        if project == first.project
-        else f", started for `{first.project}` build {first.build_number}"
+        f" build {root.build_number}"
+        if project == root.project
+        else f", started for `{root.project}` build {root.build_number}"
     )
     outside = [
         f"not in the key: step {step} takes {project} {platform} of branch {name_of(ref)}; its "
@@ -172,7 +172,7 @@ def cause_line(plan: Plan, c: Cause, r: Record | None, nested: bool) -> str:
     return f"{which_build(plan, c)} has no {shown_folders(c.missing)}."
 
 
-SHARED = "build {number} of the same snapshot failed after the first build of this plan started."
+SHARED = "build {number} of the same snapshot failed after the root build of this plan started."
 
 
 def failed_in(project: str, b: Build) -> str:
@@ -229,18 +229,18 @@ def failure_lines(
     return lines, retry
 
 
-def retry_sentence(builds: Iterable[tuple[str, Build]], first: str) -> str:
-    """How to retry: each failed job, then a new build of ``first``; with no job to retry, a
+def retry_sentence(builds: Iterable[tuple[str, Build]], root: str) -> str:
+    """How to retry: each failed job, then a new build of ``root``; with no job to retry, a
     new build once the cause is fixed."""
     jobs = list(dict.fromkeys(f"`{pipeline}` `{b.number}`" for pipeline, b in builds))
     reused = "Everything that passed is reused."
     if not jobs:
-        return f"To retry: start a new build of `{first}` when the cause is fixed. {reused}"
+        return f"To retry: start a new build of `{root}` when the cause is fixed. {reused}"
     named = jobs[0] if len(jobs) == 1 else f"{', '.join(jobs[:-1])} and {jobs[-1]}"
     one = len(jobs) == 1
     return (
         f"To retry: retry the failed job{'' if one else 's'} in {named}. When "
-        f"{'it passes' if one else 'they pass'}, start a new build of `{first}`. {reused}"
+        f"{'it passes' if one else 'they pass'}, start a new build of `{root}`. {reused}"
     )
 
 
@@ -258,4 +258,4 @@ def failure_annotation(plan: Plan, r: Record, records: Mapping[str, Record]) -> 
     why = "did not give its snapshot:" if built else "was not built, because:"
     head = f"{r.project} build {r.build.number} {why}"
     lines, retry = failure_lines(plan, r, records)
-    return f"{title}\n\n{fenced([head, *lines])}\n\n{retry_sentence(retry, plan.first.project)}"
+    return f"{title}\n\n{fenced([head, *lines])}\n\n{retry_sentence(retry, plan.root.project)}"

@@ -27,8 +27,8 @@ HARD_FAILED = "hard_failed"
 PASSED = "passed"
 
 # A record of another build counts as a failure this build shares only when it was recorded
-# this many seconds after this build's first build began: an older one belongs to a build that
-# ended before, and a new first build tries the key again.
+# this many seconds after this build's root build began: an older one belongs to a build that
+# ended before, and a new root build tries the key again.
 SHARED_AFTER = 5
 
 
@@ -149,8 +149,7 @@ def shared_failure(
     records: Iterable[Record], own_build: str, began: float, wanted: Iterable[Folder]
 ) -> Record | None:
     """The most recent record of another build of this key that hard failed on every folder of
-    ``wanted`` more than ``SHARED_AFTER`` seconds after ``began``, when this build's first
-    build began. A record that copies a failure (``shared_with``) never counts: the failure it
+    ``wanted`` more than ``SHARED_AFTER`` seconds after ``began``, when this build's root build began. A record that copies a failure (``shared_with``) never counts: the failure it
     copies is a record of the same key and counts by its own time."""
     needed = frozenset(wanted)
     return most_recent(
