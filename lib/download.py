@@ -1,120 +1,96 @@
 """Download: find the steps of each entry, take the files their manifests name, fetch them.
 
-An entry takes one or several steps of a project's platform; ``resolve``
-finds each at its key. "No file matched" is judged over the whole entry: it
-fails only when no step gives a file. Steps are fetched in the order of their
-ids, so of two files of one path the last stays. The files travel through
-``transfer``, as uploads do. The log names the build each step is taken of
-as soon as the step is found, so an entry that then fails names them too;
+Every entry is resolved before a file travels, so a step that cannot be found fails the job
+before it downloads. "No file matched" is judged over a whole entry: it fails only when no
+step gives a file. Steps are fetched in the order of their ids, so of two files of one path
+the last stays. The log names the build each step is taken of as soon as the step is found;
 after the last entry the build page names them all.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 
 from . import transfer
 from .annotation import annotate_downloads
-from .clients import aws_clients, resolve_object_auth
-from .config import load_store_config
 from .extract import extract_local_archive
-from .layout import Folder
+from .job import Job
+from .key import own_key
 from .log import fmt_size, log
-from .objects import destination_store
+from .objects import open_destination
+from .options import CONCURRENCY, PARALLEL, Download, Entry, Options
 from .resolve import (
+    ResolvedArtifact,
+    ResolvedStep,
     entry_name,
-    keyed_step,
+    entry_steps,
     log_step,
     nothing_matched,
     resolve_artifacts,
     selected,
-    walk_named,
-    walk_newest,
 )
 from .rules import parse_rules
 
 
-@dataclass(frozen=True)
-class Entry:
-    """A download entry as the job reads it.
-
-    ``keys`` are the keys the plan step wrote, by step id; ``steps`` the step
-    ids the entry names, none when it names none; ``own_key`` the build's key
-    for an entry of the build's own project and branch, else None.
-    """
-
-    project: str
-    variant: str
-    files: tuple[str, ...]
-    exclude: tuple[str, ...]
-    output_dir: str
-    extract: bool
-    keys: Mapping[str, str]
-    steps: tuple[str, ...]
-    git_ref: str | None
-    strict: bool
-    own_key: str | None
+def shown_rules(entry_rules) -> str:
+    """The entry filters and stripped prefixes of an extracted archive, for its log line."""
+    extras = [
+        text
+        for entry_filter, strip_prefix in entry_rules
+        for text in (
+            f"filter={entry_filter}" if entry_filter else None,
+            f"strip={strip_prefix}" if strip_prefix else None,
+        )
+        if text
+    ]
+    return f"  ({', '.join(extras)})" if extras else ""
 
 
-def fetch(cfg, auth, bucket, objects, output_dir=".", extract=False, parallel=4, concurrency=32):
-    """Download ``objects``, and extract archives with ``extract``, into ``output_dir``.
+def fetch_extracted(client, bucket: str, obj: ResolvedArtifact, out: Path, tc) -> None:
+    """Download the archive ``obj`` to a temporary file in ``out``, extract it, remove it."""
+    with tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        client.download_file(bucket, obj.key, tmp_path, Config=tc)
+        extract_local_archive(tmp_path, obj.rel, out, obj.entry_rules)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
-    With extract, an archive is downloaded to a temp file through boto3's
-    transfer manager (parallel ranged GETs), extracted, then removed.
-    """
+
+def fetch_file(client, bucket: str, obj: ResolvedArtifact, out: Path, tc) -> None:
+    dest = out / obj.rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, obj.key, str(dest), Config=tc)
+
+
+def fetch(cfg, bucket, objects, output_dir, extract, parallel, concurrency):
+    """Download ``objects``, and extract archives with ``extract``, into ``output_dir``."""
     tc = transfer.transfer_config(concurrency)
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
-
     total_bytes = sum(obj.size for obj in objects)
     log(
         f"Downloading {len(objects)} artifact(s) ({fmt_size(total_bytes)}) via backend={cfg.backend}"
     )
     transfer.log_settings(parallel, concurrency)
+    fetch_one = fetch_extracted if extract else fetch_file
 
     def download_one(obj):
-        key, rel, sz, entry_rules = obj.key, obj.rel, obj.size, obj.entry_rules
-        log(f"  start: {rel} ({fmt_size(sz)})")
-
-        def attempt(client):
-            if extract:
-                with tempfile.NamedTemporaryFile(dir=out, suffix=".tmp", delete=False) as tmp:
-                    tmp_path = tmp.name
-                try:
-                    client.download_file(bucket, key, tmp_path, Config=tc)
-                    extract_local_archive(tmp_path, rel, out, entry_rules=entry_rules)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            else:
-                dest = out / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                client.download_file(bucket, key, str(dest), Config=tc)
-
-        elapsed = transfer.one_file(cfg, auth, rel, attempt)
-        speed = sz / elapsed if elapsed > 0 else 0
-        # Loud destination line. rel is repeated so parallel-interleaved logs are still parseable.
-        if extract:
-            extras = []
-            for entry_filter, strip_prefix in entry_rules:
-                if entry_filter:
-                    extras.append(f"filter={entry_filter}")
-                if strip_prefix:
-                    extras.append(f"strip={strip_prefix}")
-            extra_str = f"  ({', '.join(extras)})" if extras else ""
-            log(
-                f"  done : {rel} -> extracted into {out}/{extra_str}  "
-                f"[{elapsed:.1f}s, {fmt_size(speed)}/s]"
-            )
-        else:
-            log(f"  done : {rel} -> {out / rel}  [{elapsed:.1f}s, {fmt_size(speed)}/s]")
+        log(f"  start: {obj.rel} ({fmt_size(obj.size)})")
+        elapsed = transfer.one_file(
+            cfg, obj.rel, lambda client: fetch_one(client, bucket, obj, out, tc)
+        )
+        speed = fmt_size(obj.size / elapsed if elapsed > 0 else 0)
+        # rel is repeated so that lines of parallel transfers can be told apart.
+        where = f"extracted into {out}/{shown_rules(obj.entry_rules)}" if extract else out / obj.rel
+        log(f"  done : {obj.rel} -> {where}  [{elapsed:.1f}s, {speed}/s]")
 
     elapsed = transfer.run(download_one, sorted(objects, key=lambda obj: obj.key), parallel)
     transfer.log_done("Downloaded", len(objects), total_bytes, elapsed)
@@ -122,7 +98,6 @@ def fetch(cfg, auth, bucket, objects, output_dir=".", extract=False, parallel=4,
 
 def download_artifacts(
     cfg,
-    auth,
     project_id,
     variant,
     step,
@@ -131,83 +106,54 @@ def download_artifacts(
     exclude_patterns=None,
     output_dir=".",
     extract=False,
-    parallel=4,
-    concurrency=32,
+    parallel=PARALLEL,
+    concurrency=CONCURRENCY,
 ):
-    """Find one step of a project's platform in ``build``, a ``Branch`` or a ``Key``, as
-    ``resolve_artifacts`` does, and download its matching artifacts into ``output_dir``,
-    extracting archives with ``extract``.
-
-    Uses explicit cfg and auth; no Buildkite environment or SSM configuration
-    is required. It creates the output directory if needed but does not clean
-    it. Returns (bucket, ResolvedStep, objects) after all transfers complete,
-    so a caller can record the step and artifacts without resolving them again.
-    """
+    """``resolve_artifacts``, then download what it selected into ``output_dir``, extracting
+    archives with ``extract``. Returns what ``resolve_artifacts`` returns, after all transfers.
+    Creates the output directory if needed and does not clean it."""
     bucket, resolved, objects = resolve_artifacts(
-        cfg=cfg,
-        auth=auth,
-        project_id=project_id,
-        variant=variant,
-        step=step,
-        build=build,
-        patterns=patterns,
-        exclude_patterns=exclude_patterns,
+        cfg, project_id, variant, step, build, patterns, exclude_patterns
     )
-    fetch(cfg, auth, bucket, objects, output_dir, extract, parallel, concurrency)
+    fetch(cfg, bucket, objects, output_dir, extract, parallel, concurrency)
     return bucket, resolved, objects
 
 
-def resolved_steps(store, prefix, e: Entry, name: str):
-    """The steps entry ``e`` takes, in the order of their ids.
-
-    The plan step's keys; else, for an entry of the build's own project and
-    branch, the steps it names at the build's key; else the walk, for each
-    step it names, or for the newest key of its platform when it names none.
-    """
-    if e.keys:
-        return [
-            keyed_step(store, prefix, e.project, key, Folder(e.variant, step), name)
-            for step, key in sorted(e.keys.items())
-        ]
-    if e.own_key is not None:
-        return [
-            keyed_step(store, prefix, e.project, e.own_key, Folder(e.variant, step), name)
-            for step in sorted(e.steps)
-        ]
-    if e.steps:
-        return [
-            walk_named(store, prefix, e.project, e.git_ref, e.strict, Folder(e.variant, step))
-            for step in sorted(e.steps)
-        ]
-    return walk_newest(store, prefix, e.project, e.git_ref, e.strict, e.variant)
+def taken(
+    store, n: int, e: Entry, job: Job, own_key
+) -> list[tuple[ResolvedStep, list[ResolvedArtifact]]]:
+    """Each step the ``n``-th entry ``e`` takes, with its files that match."""
+    name = entry_name(n, e.project_id or job.project, e.variant)
+    steps = entry_steps(store, e, job, own_key, name)
+    for s in steps:
+        log_step(name, s)
+    rules = parse_rules(e.files)
+    found = [(s, selected(s, rules, e.exclude)) for s in steps]
+    if not any(files for _, files in found):
+        raise nothing_matched(name, e.files, e.exclude, steps)
+    return found
 
 
-def download(entries, dirs_to_clean, parallel=4, concurrency=32):
-    """Download every entry: its steps, the files of each that match, fetched step by step;
-    then annotate the build with every step taken."""
-    for d in dirs_to_clean:
-        if d.exists():
-            log(f"Cleaning {d}")
-            shutil.rmtree(d)
+def clean_outputs(d: Download) -> None:
+    """Remove the output folder of every entry, each once."""
+    for out in {Path(e.output_dir).resolve() for e in d.projects}:
+        if out.exists():
+            log(f"Cleaning {out}")
+            shutil.rmtree(out)
 
-    _, ssm = aws_clients()
-    cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
-    store, prefix = destination_store(cfg, auth)
-    shown = []
-    for n, e in enumerate(entries, start=1):
-        name = entry_name(n, e.project, e.variant)
-        steps = resolved_steps(store, prefix, e, name)
-        for s in steps:
-            log_step(name, s)
-        rules = parse_rules(e.files)
-        taken = [selected(s, rules, e.exclude) for s in steps]
-        if not any(taken):
-            raise nothing_matched(name, e.files, e.exclude, steps)
-        for objects in taken:
-            if objects:
-                fetch(
-                    cfg, auth, store.bucket, objects, e.output_dir, e.extract, parallel, concurrency
-                )
-        shown.extend(steps)
-    annotate_downloads(shown)
+
+def download(job: Job, o: Options) -> None:
+    """Download every entry of the step's download block, then annotate the build with every
+    step taken."""
+    d = o.download
+    if d.clean:
+        clean_outputs(d)
+    at = open_destination()
+    own = functools.cache(lambda: own_key(job, o.key).key)
+    found = [taken(at.store, n, e, job, own) for n, e in enumerate(d.projects, start=1)]
+    parallel, concurrency = int(d.parallel), int(d.concurrency)
+    for e, steps in zip(d.projects, found):
+        for objects in (files for _, files in steps if files):
+            bucket = at.store.bucket
+            fetch(at.cfg, bucket, objects, e.output_dir, e.extract, parallel, concurrency)
+    annotate_downloads([s for steps in found for s, _ in steps])

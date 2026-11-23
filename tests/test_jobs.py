@@ -2,7 +2,7 @@
 agent runs them, against the object store of ``world.py``: a download gets the steps its entry
 names at the keys it names, among builds that compete for them; an upload and a promote add
 exactly what they make; the first promote of a folder wins; the library gives what the hooks
-give; and a chain node passes its gate.
+give; and a build started for a dependency passes its plan step and its last step.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import NamedTuple
 import pytest
 import yaml
 import zstandard
-from chain import MATRICES, PLUGIN, SHAPED, build_step, entry, generated
+from builds import MATRICES, PLUGIN, SHAPED, build_step, entry, generated
 from world import (
     BUCKET,
     GENERATED,
@@ -39,20 +39,19 @@ from world import (
 )
 
 from lib import layout
+from lib.codec import decoded, encoded
 from lib.forms import branch_ref, name_of
+from lib.job import Build
 from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
-from lib.manifest import (
-    Build,
-    Promoted,
-    Uploaded,
-    captured,
-    decode_manifest,
-    encode_manifest,
-    promoted_by,
-)
+from lib.manifest import Manifest, Promoted, Uploaded, captured
 from lib.snapshot.plan import First, Plan, Planned, encode_plan, keyed
-from lib.snapshot.records import decode_record
+from lib.snapshot.records import Record
+
+
+def decode_manifest(body: bytes) -> Manifest:
+    return decoded(Manifest, body)
+
 
 FEATURE = "refs/heads/feature"
 TAG = "refs/tags/v1.0.0"
@@ -93,9 +92,9 @@ def step_wrote(key, ref, folder, files, number, promoted, project="widget", unde
     build = Build(build_id(number), number, build_url(project, number))
     m = captured(((rel, len(data)) for rel, data in files.items()), Uploaded(name_of(ref), build))
     if promoted:
-        m = promoted_by(m, Promoted(PROMOTED_AT, name_of(ref), build))
+        m = dataclasses.replace(m, promoted=Promoted(PROMOTED_AT, name_of(ref), build))
     objects = {f"{location}/{rel}": data for rel, data in files.items()}
-    objects[layout.manifest(location)] = encode_manifest(m)
+    objects[layout.manifest(location)] = encoded(m)
     if promoted:
         objects[layout.latest_file(under, project, latest_ref(ref), folder)] = key.encode()
     return objects
@@ -382,7 +381,7 @@ TRANSFERS = [
 
 # Where the key of the build under test comes from: its plan step, or each job of a build
 # without one.
-PRODUCERS = ("its-plan-step", "each-job")
+KEY_SOURCES = ("its-plan-step", "each-job")
 
 
 def names_each(text: str, taken: set[tuple[str, str]]) -> bool:
@@ -396,12 +395,12 @@ def names_each(text: str, taken: set[tuple[str, str]]) -> bool:
 
 
 @pytest.mark.parametrize(
-    "payload, naming, transfer, ref, producer, backend",
-    paired(PAYLOADS, NAMINGS, TRANSFERS, REFS, PRODUCERS, BACKENDS),
+    "payload, naming, transfer, ref, key_source, backend",
+    paired(PAYLOADS, NAMINGS, TRANSFERS, REFS, KEY_SOURCES, BACKENDS),
     ids=case_id,
 )
 def test_a_download_gets_the_bytes_of_the_steps_it_names(
-    jobs, store, agent, payload, naming, transfer, ref, producer
+    jobs, store, agent, payload, naming, transfer, ref, key_source
 ):
     """Among builds of other refs, platforms and keys, earlier and later, promoted and not, a
     step whose entry names steps of a build (its own build's, by their keys, or the latest
@@ -416,7 +415,7 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     maker = jobs("widget", SUBJECT, ref)
     for s in STEPS:
         maker.write(payload.made(stamp(SUBJECT, ref, "linux", s), s))
-    planned = {"key": PLANNED_KEY} if producer == "its-plan-step" else {}
+    planned = {"key": PLANNED_KEY} if key_source == "its-plan-step" else {}
     outcomes = [
         maker.with_env(
             BUILDKITE_COMMAND_EXIT_STATUS="0" if s == "build" or naming.notes_pass else "1"
@@ -435,8 +434,8 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     key = PLANNED_KEY if planned else key_of(own)
     if naming.later_promoted:
         store.put_all(built(payload, LATER, ref, "linux", promoted=True))
-    consumer = maker if naming.same_build else jobs(naming.pipeline, 9, naming.own_ref)
-    consumer.write(transfer.left_over)
+    downloader = maker if naming.same_build else jobs(naming.pipeline, 9, naming.own_ref)
+    downloader.write(transfer.left_over)
     entries = [
         {"variant": "linux", "output-dir": "in", **naming.entry(latest_ref(ref), key)},
         {
@@ -448,12 +447,12 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     ]
     projects = [{**e, **payload.download} for e in entries]
     download = {"download": {"projects": projects, **transfer.download}, **transfer.plugin}
-    fetched = consumer.with_plugin({**(planned if naming.same_build else {}), **download}).run(
+    fetched = downloader.with_plugin({**(planned if naming.same_build else {}), **download}).run(
         "pre-command"
     )
 
     annotations = agent.files(maker.env["BUILDKITE_BUILD_ID"], "annotations/artifacts")
-    shown = agent.files(consumer.env["BUILDKITE_BUILD_ID"], "annotations/artifacts-downloads")
+    shown = agent.files(downloader.env["BUILDKITE_BUILD_ID"], "annotations/artifacts-downloads")
     expected = {
         rel: data
         for s, number in sorted(naming.taken.items())
@@ -477,8 +476,8 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     assert [o.code for o in (*outcomes, fetched)] == [0, 0, 0], [
         o.output for o in (*outcomes, fetched)
     ]
-    assert consumer.files("in") == expected
-    assert consumer.files("in-macos") == macos
+    assert downloader.files("in") == expected
+    assert downloader.files("in-macos") == macos
     assert names_each(fetched.stderr, taken)
     assert all(latest in fetched.stderr for _, latest in walked)
     assert len(shown) == 1 and names_each(shown[0], taken)
@@ -610,11 +609,11 @@ BRANCH_BUILDS = (None, "true", "false")
 
 
 @pytest.mark.parametrize(
-    "prefix, ref, producer, branch_build",
-    paired(["", "ci/artifacts"], REFS, PRODUCERS, BRANCH_BUILDS),
+    "prefix, ref, key_source, branch_build",
+    paired(["", "ci/artifacts"], REFS, KEY_SOURCES, BRANCH_BUILDS),
     ids=case_id,
 )
-def test_storage_is_additive(jobs, store, prefix, ref, producer, branch_build):
+def test_storage_is_additive(jobs, store, prefix, ref, key_source, branch_build):
     """An upload and a promote on a branch add exactly the step's files, its manifest, the
     branch's latest file (none in a build whose SNAPSHOT_BRANCH_BUILD is false) and, in a build
     without a plan step, the key.json of the key the job computed; and leave every other object
@@ -632,7 +631,7 @@ def test_storage_is_additive(jobs, store, prefix, ref, producer, branch_build):
     job = jobs("widget", 1, ref, destination=f"s3://{BUCKET}/{prefix}".rstrip("/"))
     job = job.with_env(SNAPSHOT_BRANCH_BUILD=branch_build)
     job.write({f"dist/{rel}": data for rel, data in files.items()})
-    planned = {"key": PLANNED_KEY} if producer == "its-plan-step" else {}
+    planned = {"key": PLANNED_KEY} if key_source == "its-plan-step" else {}
     options = {**planned, **upload_and_promote(files="dist/**/*", base_dir="dist")}
 
     outcome = job.with_plugin(options).run("post-command")
@@ -670,8 +669,8 @@ def test_the_library_downloads_what_the_hooks_download(
     one step of a platform, by a branch or by a key, and gets the same files at the same key
     as the download hook, among builds that compete."""
     store.put_all(history(payload, MASTER))
-    producer, consumer = jobs("widget", SUBJECT), jobs("app", 9)
-    producer.write(payload.made(stamp(SUBJECT, MASTER, "linux", "build"), "build"))
+    dependency, dependent = jobs("widget", SUBJECT), jobs("app", 9)
+    dependency.write(payload.made(stamp(SUBJECT, MASTER, "linux", "build"), "build"))
     options = {"key": PLANNED_KEY, **upload_and_promote(**payload.options("build"))}
     found = {"git_ref": MASTER} if by == "branch" else {"key": PLANNED_KEY}
     hooks_found = {"git_ref": MASTER} if by == "branch" else {"keys": {"build": PLANNED_KEY}}
@@ -696,8 +695,8 @@ def test_the_library_downloads_what_the_hooks_download(
     (tree / "vendor").mkdir(parents=True)
     (tree / "vendor" / "qdb_artifacts").symlink_to(plugin.root, target_is_directory=True)
 
-    made = producer.with_plugin(options).run("post-command")
-    fetched = consumer.with_plugin({"download": {"projects": [project]}}).run("pre-command")
+    made = dependency.with_plugin(options).run("post-command")
+    fetched = dependent.with_plugin({"download": {"projects": [project]}}).run("pre-command")
     caller = subprocess.run(
         [
             sys.executable,
@@ -723,7 +722,7 @@ def test_the_library_downloads_what_the_hooks_download(
         for p in (tmp_path / "library").rglob("*")
         if p.is_file()
     }
-    assert files == consumer.files("in")
+    assert files == dependent.files("in")
 
 
 @pytest.mark.parametrize("step_kind", sorted(STEP_KINDS))
@@ -739,7 +738,7 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
         run = [venv, "-c", script]
         return subprocess.run(run, cwd=plugin.root, capture_output=True, text=True, check=False)
 
-    job_side, planning = imports("lib.cli"), imports("lib.snapshot.enter")
+    job_side, planning = imports("lib.cli"), imports("lib.snapshot.plan_step")
     assert plugin.prepared[step_kind].code == 0, plugin.prepared[step_kind].output
     assert plugin.unnamed[step_kind].code != 0, plugin.unnamed[step_kind].output
     assert job_side.stdout.strip() == platform.python_version(), job_side.stderr
@@ -747,24 +746,24 @@ def test_post_checkout_makes_the_venv_of_the_step(plugin, step_kind):
 
 
 # ---------------------------------------------------------------------------
-# A chain node's gate through the real hooks
+# A started build's plan step and last step through the real hooks
 # ---------------------------------------------------------------------------
 
-ROOT = 9
+FIRST_BUILD = 9
 ENGINE_COMMIT = "e" * 40
 ENGINE_BUILD = 7
 OUTCOMES = ("every-step-passes", "the-last-platform-fails")
 
 
-def chain_plan(widget_commit: str) -> Plan:
-    """The plan of a root build of app: app takes widget, widget takes engine, each of one
+def first_build_plan(widget_commit: str) -> Plan:
+    """The plan of a first build of app: app takes widget, widget takes engine, each of one
     step id, with the keys their commits give."""
     projects = {
         "app": Planned(MASTER, "a" * 40, None, True, ("widget",), ("build",)),
         "widget": Planned(MASTER, widget_commit, None, True, ("engine",), ("build",)),
         "engine": Planned(MASTER, ENGINE_COMMIT, None, True, (), ("build",)),
     }
-    return keyed(Plan(build_id(ROOT), "master", "none", First("app", ROOT), projects))
+    return keyed(Plan(build_id(FIRST_BUILD), "master", "none", First("app", FIRST_BUILD), projects))
 
 
 def engine_file(number: int, variant: str) -> dict:
@@ -800,12 +799,14 @@ def artifacts_options(step: dict) -> dict:
 @pytest.mark.parametrize(
     "matrix, backend, outcome", paired(sorted(MATRICES.values()), BACKENDS, OUTCOMES), ids=case_id
 )
-def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store, matrix, outcome):
-    """Through the real hooks, a chain node's plan step creates the key.json of its planned key
-    and triggers the dependency it lacks, its resume step uploads the pipeline, each build step
-    downloads the dependency's step at the key the plan names although its latest files name
-    another, and promotes the node's folder at its key after a passed command; leave records
-    exactly the folder whose command failed."""
+def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
+    jobs, agent, store, matrix, outcome
+):
+    """Through the real hooks, the plan step of a build started for a dependency creates the
+    key.json of its planned key and triggers the dependency it lacks, its second run uploads
+    the pipeline, each build step downloads the dependency's step at the key the plan names
+    although its latest files name another, and promotes the project's folder at its key after
+    a passed command; the last step records exactly the folder whose command failed."""
     failing = set(matrix[-1:]) if outcome == "the-last-platform-fails" else set()
     steps = [build_step("widget", v, [entry("engine", v)]) for v in matrix]
     template = yaml.safe_dump({"steps": steps})
@@ -815,21 +816,21 @@ def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store,
     job.write(
         {GENERATED: generated(template, MASTER), **{f"out/{v}.bin": v.encode() for v in matrix}}
     )
-    plan = chain_plan(job.commit)
+    plan = first_build_plan(job.commit)
     needs = json.dumps([[v, "build"] for v in sorted(matrix)])
-    agent.set(build_id(ROOT), "meta-data", "snapshot-plan", encode_plan(plan))
+    agent.set(build_id(FIRST_BUILD), "meta-data", "snapshot-plan", encode_plan(plan))
     agent.set(build_id(1), "meta-data", "snapshot-arrived", str(int(time.time())))
-    gate = job.with_env(SNAPSHOT_PLAN=build_id(ROOT), SNAPSHOT_NEEDS=needs)
+    started = job.with_env(SNAPSHOT_PLAN=build_id(FIRST_BUILD), SNAPSHOT_NEEDS=needs)
 
     planned = (
-        gate.with_env(BUILDKITE_STEP_KEY="snapshot-enter")
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-enter")
         .with_plugin({"plan": GENERATED})
         .run("post-command")
     )
     for v in matrix:
         store.put_all(engine_made(plan, v))
     resumed = (
-        gate.with_env(BUILDKITE_STEP_KEY="snapshot-resume")
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-resume")
         .with_plugin({"resume": GENERATED})
         .run("post-command")
     )
@@ -844,8 +845,8 @@ def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store,
         status = 1 if v in failing else 0
         ran.append(this.with_env(BUILDKITE_COMMAND_EXIT_STATUS=str(status)).run("post-command"))
         agent.set(build_id(1), "outcomes", step["key"], "hard_failed" if status else "passed")
-    left = (
-        gate.with_env(BUILDKITE_STEP_KEY="snapshot-leave")
+    last = (
+        started.with_env(BUILDKITE_STEP_KEY="snapshot-leave")
         .with_plugin({"leave": True})
         .run("post-command")
     )
@@ -856,12 +857,10 @@ def test_a_chain_node_passes_its_gate_through_the_real_hooks(jobs, agent, store,
         for v in matrix
     }
     made = {v for v, m in manifests.items() if m and decode_manifest(m).promoted is not None}
-    records = [
-        decode_record(body.decode(), "widget", key)
-        for k, body in store.objects(f"widget/{key}/failures/").items()
-    ]
-    assert all(o.code == 0 for o in (planned, resumed, *ran, left)), [
-        o.output for o in (planned, resumed, *ran, left)
+    stored = store.objects(f"widget/{key}/failures/").values()
+    records = [decoded(Record, body) for body in stored]
+    assert all(o.code == 0 for o in (planned, resumed, *ran, last)), [
+        o.output for o in (planned, resumed, *ran, last)
     ]
     assert store.get(layout.key_json("", "widget", key)) is not None
     assert [s.get("trigger") for s in triggers if "trigger" in s] == ["engine"]

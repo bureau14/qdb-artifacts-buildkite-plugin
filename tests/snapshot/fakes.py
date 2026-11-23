@@ -20,9 +20,9 @@ import hashlib
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 
+from lib.errors import ArtifactsError
 from lib.forms import branch_of, branch_ref, tag_ref
 from lib.objects import Listed
-from lib.snapshot.agent import MetaDataAbsent
 from lib.snapshot.buildkite import PipelineFacts, PipelineNotFound
 
 EPOCH = datetime.datetime(2026, 11, 20, tzinfo=datetime.timezone.utc)
@@ -33,6 +33,7 @@ class MemoryStore:
     create that finds one."""
 
     bucket = "example-artifacts"
+    prefix = ""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -79,7 +80,7 @@ class Hosting:
         self.count = itertools.count(1)
 
     def follows(self, project: str, branch: str | None) -> str | None:
-        """The commit a new commit on ``branch`` follows: the branch's head; master's when the
+        """The commit a new commit on ``branch`` follows: the branch's tip; master's when the
         branch is new or there is none; none for the repository's first commit."""
         own = None if branch is None else self.refs.get((url(project), branch_ref(branch)))
         return own or self.refs.get((url(project), branch_ref("master")))
@@ -87,7 +88,7 @@ class Hosting:
     def commit(
         self, project: str, files: Mapping[str, str | bytes], branch: str | None = "master"
     ) -> str:
-        """A new commit of ``files`` at the head of ``branch``, or on no branch, after the
+        """A new commit of ``files`` at the tip of ``branch``, or on no branch, after the
         commit it follows; its id."""
         commit = hashlib.sha1(f"{project} {branch} {next(self.count)}".encode()).hexdigest()
         self.trees[commit] = {path: as_bytes(c) for path, c in files.items()}
@@ -105,19 +106,20 @@ class Hosting:
             at = self.parents[at]
         return found
 
-    def head(self, project: str, branch: str = "master") -> str:
+    def tip(self, project: str, branch: str = "master") -> str:
+        """The commit ``branch`` names."""
         return self.refs[(url(project), branch_ref(branch))]
 
     def cut(self, project: str, branch: str, start: str = "master") -> None:
-        """A new branch ``branch`` at the head of ``start``."""
-        self.refs[(url(project), branch_ref(branch))] = self.head(project, start)
+        """A new branch ``branch`` at the tip of ``start``."""
+        self.refs[(url(project), branch_ref(branch))] = self.tip(project, start)
 
     def tag(self, project: str, tag: str, commit: str) -> None:
         """The tag ``tag`` at ``commit``, put there anew when it was elsewhere."""
         self.refs[(url(project), tag_ref(tag))] = commit
 
     def checked_out(self, project: str, name: str) -> str:
-        """The commit a build under ``name`` checks out: its branch's head, else its tag's."""
+        """The commit a build under ``name`` checks out: its branch's tip, else its tag's."""
         found = self.refs.get((url(project), branch_ref(name)))
         return found or self.refs[(url(project), tag_ref(name))]
 
@@ -193,11 +195,11 @@ class BuildAgent:
     state: AgentState
     build: str
 
-    def meta_data_get(self, key: str, build: str | None = None) -> str:
+    def meta_data_get(self, key: str, build: str | None = None, default: str | None = None) -> str:
         found = self.state.meta_data[build or self.build]
-        if key not in found:
-            raise MetaDataAbsent(f"meta-data {key} is not set")
-        return found[key]
+        if key not in found and default is None:
+            raise ArtifactsError(f"meta-data {key} is not set")
+        return found.get(key, default)
 
     def meta_data_set(self, key: str, value: str) -> None:
         self.state.meta_data[self.build][key] = value

@@ -26,25 +26,9 @@ def annotate(body, context):
             "  BUILDKITE env var not set; skipping adding Buildkite annotation, not running in Buildkite?"
         )
         return
-    # We could use REST API calls here and avoid depending on the binary (and calling it from subprocess) but REST API has some limitations that make it less ideal:
-    # - auth tokens are per user not per organization, token will stop working when account is removed
-    # - API rate limits are low, you can hit them if you have a lot of builds uploading artifacts at the same time, would need a backoff and retry mechanism
-    buildkite_agent_exec = "buildkite-agent"
-    if os.name == "nt":
-        buildkite_agent_exec += ".exe"
-    args = [
-        buildkite_agent_exec,
-        "annotate",
-        body,
-        "--context",
-        context,
-        "--style",
-        "info",
-        "--priority",
-        "10",
-        "--scope",
-        "job",
-    ]
+    agent = "buildkite-agent.exe" if os.name == "nt" else "buildkite-agent"
+    options = ["--context", context, "--style", "info", "--priority", "10", "--scope", "job"]
+    args = [agent, "annotate", body, *options]
     # The body is on the build page; the log names where.
     log(f"  annotating the job under the context {context}")
     try:

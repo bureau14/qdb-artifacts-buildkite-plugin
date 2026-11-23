@@ -2,45 +2,39 @@
 
     <prefix>/<project>/<key>/<platform>/<step id>/<files>, manifest.json
 
-The upload selects the files, then captures them: it writes them and then the
-manifest, which names them and the build that uploaded them, unless a promote
-holds the folder. It reads the manifest before the files and again right
-before it writes its own, so an upload that began before a promote does not
-undo it. An upload into a promoted folder writes nothing and counts as empty,
-so the promote of its step does not run. In a build without a plan step it
-first creates ``key.json`` of the key the job computed.
+The upload writes the files and then the manifest, which names them and the build that
+uploaded them, unless a promote holds the folder. It reads the manifest before the files and
+again right before it writes its own, so an upload that began before a promote does not undo
+it. An upload into a promoted folder writes nothing and counts as empty, so the promote of its
+step does not run. In a build without a plan step it first creates ``key.json`` of the key the
+job computed.
 """
+
+from __future__ import annotations
 
 import glob
 from pathlib import Path
 
 from . import layout, transfer
 from .annotation import annotate_upload
-from .clients import aws_clients, resolve_object_auth
-from .config import load_store_config
 from .errors import ArtifactsError
-from .key import create_key_json
+from .job import Job
+from .key import create_key_json, own_key
 from .log import fmt_size, log
-from .manifest import captured, is_made, read_manifest_at, write_manifest
-from .objects import destination_store
+from .manifest import Manifest, Uploaded, captured, is_made, read_manifest_at, write_manifest
+from .objects import Opened, open_destination
+from .options import Options, Upload, uploaded_folder
 from .rules import is_excluded
 
 
-def matched_files(patterns):
+def matched_files(patterns) -> list[Path]:
     """The files ``patterns`` match below the checkout, sorted."""
-    return sorted(
-        {
-            Path(f).resolve()
-            for p in patterns
-            for f in glob.glob(p, recursive=True)
-            if Path(f).is_file()
-        }
-    )
+    found = {Path(f).resolve() for p in patterns for f in glob.glob(p, recursive=True)}
+    return sorted(f for f in found if f.is_file())
 
 
-def base_folder(base_dir):
-    """The folder whose path the object keys of the files drop: ``base_dir``, else the
-    checkout."""
+def base_folder(base_dir: str | None) -> Path:
+    """The folder whose path the object keys drop: ``base_dir``, else the checkout."""
     if not base_dir:
         return Path.cwd().resolve()
     base_path = Path(base_dir).resolve()
@@ -49,16 +43,15 @@ def base_folder(base_dir):
     return base_path
 
 
-def check_below(files, base_path, base_dir):
-    """Every file must lie below ``base_dir``, whose path its object key drops."""
-    for f in files:
-        try:
-            f.relative_to(base_path)
-        except ValueError:
-            raise ArtifactsError(f"file {f} is not under base_dir {base_dir}") from None
+def below(f: Path, base_path: Path, base_dir: str | None) -> str:
+    """The path of ``f`` below ``base_path``, which its object key keeps."""
+    try:
+        return f.relative_to(base_path).as_posix()
+    except ValueError:
+        raise ArtifactsError(f"file {f} is not under base_dir {base_dir}") from None
 
 
-def empty_upload(why, allow_empty):
+def empty_upload(why: str, allow_empty: bool) -> list:
     """An upload without files: nothing to upload with allow_empty, else an error."""
     if not allow_empty:
         raise ArtifactsError(why)
@@ -66,30 +59,27 @@ def empty_upload(why, allow_empty):
     return []
 
 
-def selected_files(patterns, base_dir, exclude_patterns, allow_empty):
-    """Each file to upload with its path below ``base_dir``, else below the checkout: those
-    ``patterns`` match, less those ``exclude_patterns`` drop by that path. None to upload
-    fails, unless ``allow_empty``."""
-    base_path = base_folder(base_dir)
-    matched = matched_files(patterns)
+def selected_files(u: Upload) -> list[tuple[Path, str]]:
+    """Each file to upload with its path below the base folder: those the patterns match, less
+    those an exclude drops by that path. None to upload fails, unless ``allow_empty``."""
+    base_path = base_folder(u.base_dir)
+    matched = matched_files(u.files)
     if not matched:
-        return empty_upload(f"no files matched: {patterns}", allow_empty)
-    if base_dir:
-        check_below(matched, base_path, base_dir)
-    below = [(f, f.relative_to(base_path).as_posix()) for f in matched]
-    kept = [(f, rel) for f, rel in below if not is_excluded(rel, exclude_patterns)]
+        return empty_upload(f"no files matched: {list(u.files)}", u.allow_empty)
+    relative = [(f, below(f, base_path, u.base_dir)) for f in matched]
+    kept = [(f, rel) for f, rel in relative if not is_excluded(rel, u.exclude)]
     if not kept:
-        why = f"no files left after applying exclude patterns: {exclude_patterns or []}"
-        return empty_upload(why, allow_empty)
+        why = f"no files left after applying exclude patterns: {list(u.exclude)}"
+        return empty_upload(why, u.allow_empty)
     return kept
 
 
-def capture_step(store, location, write_files, manifest):
+def capture_step(store, location: str, write_files, manifest: Manifest) -> Manifest | None:
     """Write a step's files (``write_files()``), then its manifest, unless a promote holds the
     folder; the promoted manifest that stopped it, before the files or after them, else None.
 
-    A promote that lands after the second read is overwritten by this manifest,
-    which says captured: the next build of the key builds the step again.
+    A promote that lands after the second read is overwritten by this manifest: the next build
+    of the key builds the step again.
     """
     held = read_manifest_at(store, location)
     if is_made(held):
@@ -102,102 +92,76 @@ def capture_step(store, location, write_files, manifest):
     return None
 
 
-def log_promoted(folder, key, held):
-    b = held.promoted.build
-    log(
-        f"The files of {folder} at {key} were promoted by build {b.number} ({b.url}), so this "
-        "upload writes nothing."
-    )
-
-
-def annotated(held, relative):
-    """The title of the upload's annotation and the files it links (path and size): those of
-    the build that promoted the folder when it ``held`` it, else those this upload wrote."""
+def annotated(held: Manifest | None, relative) -> tuple[str, list[tuple[str, int]]]:
+    """The title of the upload's annotation and the files it links: those of the build that
+    promoted the folder when it ``held`` it, else those this upload wrote."""
     if held is None:
         return "Uploaded artifacts", relative
     files = [(f.path, f.size) for f in held.files]
     return f"Artifacts promoted by build {held.promoted.build.number}", files
 
 
-def upload(
-    project,
-    key_of_build,
-    folder,
-    uploaded,
-    patterns,
-    parallel=4,
-    concurrency=32,
-    base_dir=None,
-    annotate=True,
-    exclude_patterns=None,
-    allow_empty=False,
-):
-    """Capture the files ``patterns`` match as the step ``folder`` (platform and step id) of
-    ``project`` at the build's key; True when it wrote them, False when it wrote nothing.
+def put_file(at: Opened, location: str, tc, f: Path, rel: str) -> None:
+    """Upload ``f`` as ``rel`` below ``location``; a browser saves it under its own name."""
+    log(f"  {rel} ({fmt_size(f.stat().st_size)})")
+    transfer.one_file(
+        at.cfg,
+        rel,
+        lambda client: client.upload_file(
+            str(f),
+            at.store.bucket,
+            layout.key_join(location, rel),
+            ExtraArgs={"ContentDisposition": f'attachment; filename="{f.name}"'},
+            Config=tc,
+        ),
+    )
 
-    Paths relative to the checkout, or to ``base_dir``, become the object key
-    suffix below the folder. ``key_of_build()`` gives the build's key, and the
-    ``key.json`` to create when the job computed it; it is called once there
-    are files, so an upload that allow_empty skips asks git nothing.
-    ``uploaded`` is the build and branch the manifest names.
 
-    1. Select the files; none, with allow_empty, is an empty upload.
-    2. A promoted folder: log who promoted it, annotate its files, write nothing.
-    3. Without a plan step, create key.json.
-    4. Transfer the files, read the manifest again, write it.
-    5. Annotate the build with links to the files.
+def put_files(at: Opened, location: str, u: Upload, files: list[tuple[Path, str]]) -> None:
+    """Upload ``files`` below ``location``, ``u.parallel`` at a time, and log what was done."""
+    total = sum(f.stat().st_size for f, _ in files)
+    log(
+        f"Uploading {len(files)} artifact(s) ({fmt_size(total)}) to "
+        f"s3://{at.store.bucket}/{location}/ via backend={at.cfg.backend}"
+    )
+    transfer.log_settings(int(u.parallel), int(u.concurrency))
+    if u.exclude:
+        log(f"  exclude={list(u.exclude)}")
+    tc = transfer.transfer_config(int(u.concurrency))
+    seconds = transfer.run(lambda x: put_file(at, location, tc, *x), files, int(u.parallel))
+    transfer.log_done("Uploaded", len(files), total, seconds)
 
-    Creds are minted once before the pool -- for R2, ensure TTL covers the full upload.
-    """
-    files = selected_files(patterns, base_dir, exclude_patterns, allow_empty)
+
+def upload(job: Job, o: Options) -> bool:
+    """Capture the files of the step's upload block at the build's key; True when it wrote
+    them, False when there were none or a promote holds the folder."""
+    u = o.upload
+    files = selected_files(u)
     if not files:
         return False
-
-    own = key_of_build()
-    _, ssm = aws_clients()
-    cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-write")
-    store, dest_prefix = destination_store(cfg, auth)
-    bucket = store.bucket
-    location = layout.step_folder(dest_prefix, project, own.key, folder)
-    tc = transfer.transfer_config(concurrency)
+    # Asked only now: an upload that allow_empty skips asks git nothing.
+    own = own_key(job, o.key)
+    folder = uploaded_folder(o)
+    at = open_destination()
+    location = layout.step_folder(at.store.prefix, job.project, own.key, folder)
     relative = [(rel, f.stat().st_size) for f, rel in files]
-    total_bytes = sum(size for _, size in relative)
-
-    def upload_one(item):
-        f, rel = item
-        log(f"  {rel} ({fmt_size(f.stat().st_size)})")
-
-        def attempt(client):
-            client.upload_file(
-                str(f),
-                bucket,
-                layout.key_join(location, rel),
-                ExtraArgs={"ContentDisposition": f'attachment; filename="{f.name}"'},
-                Config=tc,
-            )
-
-        transfer.one_file(cfg, auth, rel, attempt)
 
     def write_files():
         if own.stands_for is not None:
-            create_key_json(store, dest_prefix, own.key, own.stands_for)
-        log(
-            f"Uploading {len(files)} artifact(s) ({fmt_size(total_bytes)}) to "
-            f"s3://{bucket}/{location}/ via backend={cfg.backend}"
-        )
-        transfer.log_settings(parallel, concurrency)
-        if exclude_patterns:
-            log(f"  exclude={exclude_patterns}")
-        seconds = transfer.run(upload_one, files, parallel)
-        transfer.log_done("Uploaded", len(files), total_bytes, seconds)
+            create_key_json(at.store, own.key, own.stands_for)
+        put_files(at, location, u, files)
 
-    held = capture_step(store, location, write_files, captured(relative, uploaded))
+    manifest = captured(relative, Uploaded(job.branch, job.build))
+    held = capture_step(at.store, location, write_files, manifest)
     if held is not None:
-        log_promoted(folder, own.key, held)
-    if annotate:
+        b = held.promoted.build
+        log(
+            f"The files of {folder} at {own.key} were promoted by build {b.number} ({b.url}), "
+            "so this upload writes nothing."
+        )
+    if u.annotate:
         title, shown = annotated(held, relative)
-        annotate_upload(cfg.artifacts_domain, location, shown, title)
+        annotate_upload(at.cfg.artifacts_domain, location, shown, title)
     else:
         log("  annotate=false; skipping Buildkite annotation")
     return held is None

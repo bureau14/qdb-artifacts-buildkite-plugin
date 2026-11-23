@@ -1,6 +1,6 @@
-"""The chain's world: projects generated from a graph, a platform matrix and the step ids of
-every platform, and a simulated Buildkite that plays their builds in process, over the fakes
-of ``fakes.py``.
+"""The world of the builds of a tree: projects generated from a graph, a platform matrix and
+the step ids of every platform, and a simulated Buildkite that plays their builds in process,
+over the fakes of ``fakes.py``.
 
 Every project is a repository with a step template and a ``pipeline.py`` of the
 runner's shape. Its template has, per platform, one step per step id, which writes
@@ -12,12 +12,12 @@ project's own steps at other branches (``Project.elsewhere``). The project's
 generator does what the runner's ``load_template`` does: the key
 ``<step id>-<platform>``, and the plugin's ``step``.
 
-A build starts with the runner's gate. The gate steps run the library's own
-decisions: ``enter`` and ``resume`` over a ``PlanEdge`` of the fakes, ``leave``
-over its ``Edge``. A trigger step starts the build it asks for, with its branch,
-commit and environment, and plays it to its end. A command step is a simulated
-job of the plugin, through the library's own functions: it reads its download entries
-(``options.download_entry``), finds the steps each takes (``download.resolved_steps``),
+A build starts with the runner's plan step and last step. They run the library's own
+decisions over an ``Edge`` of the fakes: the plan step and its second run (``plan_step``,
+``plan_step_again``), and the last step (``last_step``). A trigger step starts the build it
+asks for, with its branch, commit and environment, and plays it to its end. A command step is
+a simulated job of the plugin, through the library's own functions: it reads its options
+(``options.options_of``), finds the steps each download entry takes (``resolve.entry_steps``),
 compiles and captures its files when it uploads (``upload.capture_step``), and promotes
 after a passed command (``promote.promote_folder``), unless its upload found the folder
 promoted, moving its branch's latest file as its build's ``SNAPSHOT_BRANCH_BUILD`` says. The
@@ -44,21 +44,24 @@ from fakes import (
 )
 from world import paired
 
-from lib import layout, manifest
-from lib.download import Entry, resolved_steps
+from lib import job, layout
+from lib.codec import decoded
 from lib.errors import ArtifactsError
 from lib.forms import branch_ref, iso_utc
-from lib.key import KeyJson, create_key_json, key_of
+from lib.job import Job
+from lib.key import KeyJson, OwnKey, create_key_json, key_of
 from lib.layout import Folder
 from lib.manifest import Manifest, Promoted, Uploaded, captured, read_manifest_at
-from lib.options import BRANCH_BUILD, OwnKey, download_entry, is_branch_build
+from lib.options import Options, options_of, promoted_folder, uploaded_folder
 from lib.promote import promote_folder
+from lib.resolve import entry_steps
 from lib.snapshot.buildkite import PipelineFacts
-from lib.snapshot.enter import PlanEdge, enter, resume
-from lib.snapshot.job import Job
-from lib.snapshot.leave import leave
+from lib.snapshot.edge import Edge
+from lib.snapshot.last_step import last_step
+from lib.snapshot.pipeline import is_plugin_key
 from lib.snapshot.plan import decode_plan
-from lib.snapshot.records import decode_record
+from lib.snapshot.plan_step import plan_step, plan_step_again
+from lib.snapshot.records import Record
 from lib.upload import capture_step
 
 PLUGIN = "bureau14/qdb-artifacts"
@@ -118,12 +121,13 @@ def above(graph: dict, p: str) -> frozenset[str]:
     return frozenset(q for q in graph if p in below(graph, q))
 
 
-def roots(graph: dict) -> list[str]:
+def tops(graph: dict) -> list[str]:
+    """Every project no project depends on."""
     return sorted(p for p in graph if not above(graph, p))
 
 
-def tree(graph: dict, root: str) -> frozenset[str]:
-    return below(graph, root) | {root}
+def tree(graph: dict, p: str) -> frozenset[str]:
+    return below(graph, p) | {p}
 
 
 def folders(matrix: tuple, steps: tuple) -> set[Folder]:
@@ -133,26 +137,27 @@ def folders(matrix: tuple, steps: tuple) -> set[Folder]:
 
 @dataclasses.dataclass(frozen=True)
 class At:
-    """A node of a named graph, and the root of the first tree that holds it."""
+    """A project of a named graph, and the project of its first build: the first top of the
+    graph whose tree holds it."""
 
     name: str
-    node: str
+    project: str
 
     @property
     def graph(self) -> dict:
         return GRAPHS[self.name]
 
     @property
-    def root(self) -> str:
-        return next(r for r in roots(self.graph) if self.node in tree(self.graph, r))
+    def first(self) -> str:
+        return next(t for t in tops(self.graph) if self.project in tree(self.graph, t))
 
     def __str__(self) -> str:
-        return f"{self.name}-{self.node}"
+        return f"{self.name}-{self.project}"
 
 
-GRAPH_ROOTS = [At(g, r) for g in sorted(GRAPHS) for r in roots(GRAPHS[g])]
-GRAPH_NODES = [At(g, n) for g in sorted(GRAPHS) for n in sorted(GRAPHS[g])]
-LOWER_NODES = [a for a in GRAPH_NODES if a.node not in roots(a.graph)]
+GRAPH_TOPS = [At(g, t) for g in sorted(GRAPHS) for t in tops(GRAPHS[g])]
+GRAPH_PROJECTS = [At(g, p) for g in sorted(GRAPHS) for p in sorted(GRAPHS[g])]
+LOWER_PROJECTS = [a for a in GRAPH_PROJECTS if a.project not in tops(a.graph)]
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +242,7 @@ def loaded(step: dict) -> dict:
     step_id = step["step_id"]
     plugins = [
         {
-            name: {"step": step_id, **options} if name.split("#", 1)[0] == PLUGIN else options
+            name: {"step": step_id, **options} if is_plugin_key(name) else options
             for name, options in p.items()
         }
         for p in step["plugins"]
@@ -295,12 +300,12 @@ class Build:
         return "failed" if failed else "passed"
 
     @property
-    def info(self) -> manifest.Build:
-        return manifest.Build(self.id, self.number, self.url)
+    def info(self) -> job.Build:
+        return job.Build(self.id, self.number, self.url)
 
-    def chain(self) -> list[Build]:
-        """This build and every build it triggered, recursively."""
-        return [self, *(b for c in self.children for b in c.chain())]
+    def tree(self) -> list[Build]:
+        """This build and every build it triggered, recursively: the builds of its tree."""
+        return [self, *(b for c in self.children for b in c.tree())]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -321,20 +326,12 @@ class Download:
     made_by: str
 
 
-def agent_view(value):
-    """Options as the agent reads them: every key upper case, ``-`` as ``_``."""
-    if isinstance(value, dict):
-        return {str(k).upper().replace("-", "_"): agent_view(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [agent_view(v) for v in value]
-    return value
-
-
-def artifacts_options(step: dict) -> dict | None:
+def artifacts_options(step: dict) -> Options | None:
+    """The plugin's options of a step, as its job reads them."""
     for plugin in step.get("plugins", []):
         for name, options in plugin.items():
             if name.split("#", 1)[0] == PLUGIN:
-                return agent_view(options or {})
+                return options_of(options)
     return None
 
 
@@ -348,41 +345,26 @@ def dependencies(step: dict) -> list[tuple[str, bool]]:
     ]
 
 
-def entry_of(n: int, e: dict, build: Build, own: OwnKey) -> Entry:
-    """The ``n``-th download entry as a job of ``build``, whose key ``own`` is, reads it: the
-    options the agent hands it, checked and completed by the plugin."""
-    steps = e.get("STEP") or []
-    handed = {
-        "variant": e["VARIANT"],
-        "git_ref": e.get("GIT_REF"),
-        "require_strict_ref_match": bool(e.get("REQUIRE_STRICT_REF_MATCH")),
-        "project_id": e.get("PROJECT_ID"),
-        "step": [steps] if isinstance(steps, str) else list(steps),
-        "keys": {s.lower(): k for s, k in e.get("KEYS", {}).items()},
-        "output_dir": ".",
-        "extract": False,
-        "files": e["FILES"],
-        "exclude": [],
-    }
-    return download_entry(n, handed, build.project, branch_ref(build.branch), lambda: own)
-
-
 def made_by(m: Manifest) -> str:
     """The build whose bytes a folder holds: the one that promoted it, else the uploader."""
     return (m.promoted or m.uploaded).build.id
 
 
-# The runner's gate: enter, and leave after every other step.
-ENTER = {"key": "snapshot-enter"}
-LEAVE = {"key": "snapshot-leave", "depends_on": [{"step": "snapshot-enter", "allow_failure": True}]}
+# The runner's plan step, and the last step after every other step.
+PLAN_STEP = {"key": "snapshot-enter"}
+LAST_STEP = {
+    "key": "snapshot-leave",
+    "depends_on": [{"step": "snapshot-enter", "allow_failure": True}],
+}
 FAILED = ("hard_failed", "broken")
 
 
 class World:
     """Repositories of the projects of ``graph``, the store, and Buildkite playing builds.
 
-    ``at_gate`` is what happens while a triggered build waits at its gate, after it
-    arrived and before it plays: nothing, unless a test plays another chain there.
+    ``at_plan_step`` is what happens while a triggered build waits at its plan step, after
+    it arrived and before it plays: nothing, unless a test plays the builds of another tree
+    there.
     """
 
     def __init__(self, directory, graph: dict, matrix: tuple, steps: tuple) -> None:
@@ -404,7 +386,7 @@ class World:
         self.now = T0
         self.ids = itertools.count(1)
         self.numbers = collections.defaultdict(lambda: itertools.count(1))
-        self.at_gate = lambda build: None
+        self.at_plan_step = lambda build: None
         for p in graph:
             self.commit(p)
 
@@ -458,7 +440,7 @@ class World:
         self, project: str, branch: str = "master", commit: str | None = None, **env: str
     ) -> Build:
         """A build of ``project`` started by a person under the name ``branch``, played to its
-        end: of ``commit``, else of the head of the branch, else of the tag, of that name."""
+        end: of ``commit``, else of the tip of the branch, else of the tag, of that name."""
         return self.play(self.start(project, branch, commit, env))
 
     def start(self, project: str, branch: str, commit: str | None, env: dict) -> Build:
@@ -471,7 +453,7 @@ class World:
             branch=branch,
             commit=commit or self.hosting.checked_out(project, branch),
             env=dict(env),
-            steps=[dict(ENTER), dict(LEAVE)],
+            steps=[dict(PLAN_STEP), dict(LAST_STEP)],
         )
         self.agents.meta_data[build.id]["snapshot-arrived"] = str(int(self.clock()))
         self.builds.append(build)
@@ -484,14 +466,15 @@ class World:
         return build
 
     def next_step(self, build: Build) -> dict | None:
-        """The last step whose dependencies ended; leave once every other step ended.
+        """The ready step furthest down the pipeline, whose dependencies ended; the last step
+        once every other step ended.
 
-        Buildkite may start ready steps in any order. The last first is one of
-        them, and it runs a step that waits for less than it should before what
-        it should have waited for.
+        Buildkite may start ready steps in any order. The one furthest down first
+        is one of them, and it runs a step that waits for less than it should
+        before what it should have waited for.
         """
         pending = [s for s in build.steps if s["key"] not in build.outcomes]
-        others = [s for s in pending if s["key"] != LEAVE["key"]]
+        others = [s for s in pending if s["key"] != LAST_STEP["key"]]
         ready = [s for s in others if all(d in build.outcomes for d, _ in dependencies(s))]
         if others and not ready:
             raise AssertionError(f"{build.project} {build.number}: steps wait forever: {others}")
@@ -505,46 +488,46 @@ class World:
 
     def run(self, build: Build, step: dict) -> str:
         if step["key"] == "snapshot-enter":
-            return self.gate(build, step, "plan", enter)
+            return self.plan_step_run(build, step, "plan", plan_step)
         if step["key"] == "snapshot-leave":
-            return self.leave(build)
+            return self.last_step_run(build)
         if "trigger" in step:
             return self.trigger(build, step)
         options = artifacts_options(step)
-        if options is not None and "RESUME" in options:
-            return self.gate(build, step, "resume", resume)
+        if options is not None and options.resume:
+            return self.plan_step_run(build, step, "resume", plan_step_again)
         return self.job(build, options)
 
     def git_at(self, commit: str) -> FakeGit:
         """Git in a checkout of ``commit``, whose questions join the world's (``git.asked``)."""
         return dataclasses.replace(self.git, head=commit)
 
-    def edge(self, build: Build) -> PlanEdge:
-        return PlanEdge(
+    def edge(self, build: Build) -> Edge:
+        return Edge(
             store=self.store,
-            prefix="",
             agent=BuildAgent(self.agents, build.id),
             checkout=FakeCheckout(self.hosting, build.commit),
-            clock=self.clock,
-            log=build.outputs.append,
             git=self.git_at(build.commit),
             pipelines=self.pipelines,
             plugin_commit=lambda: PLUGIN_COMMIT,
+            clock=self.clock,
+            log=build.outputs.append,
         )
 
-    def gate_job(self, build: Build, path) -> Job:
+    def job_of(self, build: Build) -> Job:
+        """The job of a step of ``build``, whose command passed."""
         return Job(
-            pipeline=path,
             project=build.project,
             repository=url(build.project),
+            branch=build.branch,
+            tag=None,
             build=build.info,
-            name=build.branch,
             command="generate",
             exit_status=0,
-            plan_id=build.env.get("SNAPSHOT_PLAN"),
+            first_build=build.env.get("SNAPSHOT_PLAN"),
             needs=build.env.get("SNAPSHOT_NEEDS"),
             rebuild=build.env.get("SNAPSHOT_REBUILD"),
-            branch_build=build.env.get(BRANCH_BUILD),
+            writes_latest_files=build.env.get("SNAPSHOT_BRANCH_BUILD") != "false",
         )
 
     def outcome(self, build: Build, call) -> str:
@@ -555,41 +538,40 @@ class World:
             return "hard_failed"
         return "passed"
 
-    def gate(self, build: Build, step: dict, kind: str, decide) -> str:
-        """Enter or resume: the command generates the pipeline, the plugin decides, and
-        what it uploads joins the build after this step."""
+    def plan_step_run(self, build: Build, step: dict, kind: str, decide) -> str:
+        """The plan step or its second run: the command generates the pipeline, the plugin
+        decides, and what it uploads joins the build after this step."""
         path = self.directory / f"{build.project}-{build.number}-{kind}.yml"
         text = self.hosting.trees[build.commit][".buildkite/steps.yml"].decode()
         path.write_text(generated(text, branch_ref(build.branch)))
-        job = self.gate_job(build, str(path))
         uploads = self.agents.uploads[build.id]
         before = len(uploads)
-        outcome = self.outcome(build, lambda: decide(job, self.edge(build)))
+        decided = lambda: decide(self.job_of(build), self.edge(build), str(path))
+        outcome = self.outcome(build, decided)
         added = [s for text in uploads[before:] for s in yaml.safe_load(text)["steps"]]
         at = build.steps.index(step) + 1
         build.steps[at:at] = added
         return outcome
 
-    def leave(self, build: Build) -> str:
-        """The leave step: its command fails when no plan step set a mode; its plugin records."""
-        job = self.gate_job(build, None)
-        outcome = self.outcome(build, lambda: leave(job, self.edge(build)))
+    def last_step_run(self, build: Build) -> str:
+        """The last step: its command fails when no plan step set a mode; its plugin records."""
+        outcome = self.outcome(build, lambda: last_step(self.job_of(build), self.edge(build)))
         return outcome if "snapshot-mode" in self.agents.meta_data[build.id] else "hard_failed"
 
     def trigger(self, build: Build, step: dict) -> str:
         asked = step["build"]
         child = self.start(step["trigger"], asked["branch"], asked["commit"], asked.get("env", {}))
         build.children.append(child)
-        self.at_gate(child)
+        self.at_plan_step(child)
         if self.play(child).state == "passed":
             return "passed"
         return "soft_failed" if step.get("soft_fail") else "hard_failed"
 
-    def own_key(self, build: Build, options: dict) -> OwnKey:
+    def own_key(self, build: Build, options: Options) -> OwnKey:
         """The build's key: the plan step's; else, as a job computes it, a key of the build's
         own, whose key.json its upload creates."""
-        if options.get("KEY"):
-            return OwnKey(options["KEY"], None)
+        if options.key:
+            return OwnKey(options.key, None)
         stands_for = KeyJson(build.project, build.commit, (), build.id)
         return OwnKey(key_of(stands_for), stands_for)
 
@@ -601,31 +583,27 @@ class World:
 
         def write_files() -> None:
             if own.stands_for is not None:
-                create_key_json(self.store, "", own.key, own.stands_for)
+                create_key_json(self.store, own.key, own.stands_for)
             self.store.put(f"{location}/{name}", build.id.encode(), "application/octet-stream")
 
         uploaded = captured([(name, len(build.id))], Uploaded(build.branch, build.info))
         return capture_step(self.store, location, write_files, uploaded)
 
-    def job(self, build: Build, options: dict | None) -> str:
+    def job(self, build: Build, options: Options | None) -> str:
         """A job of the plugin: download; compile and capture its files when it uploads; then
         promote after a passed command, unless its upload found the folder promoted already,
         which makes it empty."""
         if options is None:  # a step completion put in place of one whose folders are made
             return "passed"
         own = self.own_key(build, options)
-        for n, e in enumerate(options.get("DOWNLOAD", {}).get("PROJECTS", []), start=1):
-            found = entry_of(n, e, build, own)
-            for s in resolved_steps(self.store, "", found, f"{build.project} {found.variant}"):
+        job = self.job_of(build)
+        for e in options.download.projects if options.download else ():
+            name = f"{build.project} {e.variant}"
+            for s in entry_steps(self.store, e, job, lambda: own.key, name):
                 made = made_by(s.manifest)
                 self.downloads.append(Download(build, s.project, s.folder, s.key, made))
-        upload, promote = options.get("UPLOAD"), options.get("PROMOTE")
-        uploads = None if upload is None else Folder(upload["VARIANT"], options["STEP"])
-        promotes = (
-            None
-            if promote is None
-            else Folder(promote["VARIANT"], promote.get("STEP") or options["STEP"])
-        )
+        uploads = uploaded_folder(options) if options.upload else None
+        promotes = promoted_folder(options) if options.promote else None
         held = None if uploads is None else self.capture(build, own, uploads)
         if (build.project, promotes) in self.broken:
             return "hard_failed"
@@ -633,10 +611,10 @@ class World:
             self.compiled.append(Compiled(build, uploads))
         self.ran.extend(Compiled(build, f) for f in (uploads, promotes) if f is not None)
         if promotes is not None and held is None:
-            # Read, not advanced: the margin of a shared failure counts the gate's ticks only.
+            # Read, not advanced: the margin of a shared failure counts the plan step's ticks only.
             promotion = Promoted(iso_utc(float(self.now)), build.branch, build.info)
-            writes = is_branch_build(build.env.get(BRANCH_BUILD))
-            promote_folder(self.store, "", build.project, own.key, promotes, promotion, writes)
+            writes = job.writes_latest_files
+            promote_folder(self.store, build.project, own.key, promotes, promotion, writes)
         return "passed"
 
     # -- what a test reads -------------------------------------------------
@@ -644,8 +622,8 @@ class World:
     def builds_of(self, project: str) -> list[Build]:
         return [b for b in self.builds if b.project == project]
 
-    def plan(self, root: Build):
-        return decode_plan(self.agents.meta_data[root.id]["snapshot-plan"])
+    def plan(self, first_build: Build):
+        return decode_plan(self.agents.meta_data[first_build.id]["snapshot-plan"])
 
     def made(self, project: str, key: str, folder: Folder) -> Manifest | None:
         """The manifest of ``folder`` of ``project`` at ``key`` when it says promoted."""
@@ -658,7 +636,7 @@ class World:
     def records(self) -> list:
         found = (k.split("/") for k in self.store.objects)
         paths = [p for p in found if len(p) == 4 and p[2] == layout.FAILURES]
-        return [decode_record(self.store.objects["/".join(p)].decode(), p[0], p[1]) for p in paths]
+        return [decoded(Record, self.store.objects["/".join(p)]) for p in paths]
 
     def latest(self, project: str, ref: str, folder: Folder) -> str | None:
         found = self.store.get(layout.latest_file("", project, ref, folder))
@@ -670,21 +648,21 @@ class World:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=GRAPH_ROOTS, ids=str)
-def graph_root(request) -> At:
-    """Every root of every graph."""
+@pytest.fixture(params=GRAPH_TOPS, ids=str)
+def graph_first(request) -> At:
+    """The project of every first build: every top of every graph."""
     return request.param
 
 
-@pytest.fixture(params=GRAPH_NODES, ids=str)
-def graph_node(request) -> At:
-    """Every node of every graph."""
+@pytest.fixture(params=GRAPH_PROJECTS, ids=str)
+def graph_project(request) -> At:
+    """Every project of every graph."""
     return request.param
 
 
-@pytest.fixture(params=LOWER_NODES, ids=str)
-def lower_node(request) -> At:
-    """Every node of every graph that is a snapshot dependency of another."""
+@pytest.fixture(params=LOWER_PROJECTS, ids=str)
+def lower_project(request) -> At:
+    """Every project of every graph that is a snapshot dependency of another."""
     return request.param
 
 

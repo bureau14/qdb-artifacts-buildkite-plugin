@@ -1,35 +1,20 @@
-"""Everything the planning half asks of git.
+"""Everything the planning side asks of git.
 
-Two interfaces, one for each caller. ``Git`` is what the planner asks:
+Of another repository (``url``):
 
-- ``commits_of(url, refs)``: the commit of each of the full refs ``refs``
-  that the repository at ``url`` has, as ``{ref: commit}``, in one question:
-  the head of ``refs/heads/<name>``, or the commit ``refs/tags/<name>``
-  names, an annotated tag peeled; a ref it does not have is not in the answer;
-- ``read_files(url, commit, directory, wanted)``: the files under
-  ``directory`` in the tree of ``commit`` whose path ``wanted`` accepts, as
-  ``{path: bytes}``; which paths count is the caller's business;
-- ``branches(url)``: ``{branch: commit}`` of every branch of ``url``;
-- ``merge_base_times(url, commits)``: for each of ``commits`` of ``url``, the
-  committer time of its merge-base with the commit checked out in the current
-  directory. None for a commit that shares no history with it (a release line
-  begun from another root commit); ``lines`` reads it as no time.
+- ``commits_of(url, refs)``: ``{ref: commit}`` of those of the full refs ``refs`` it has, an
+  annotated tag peeled;
+- ``read_files(url, commit, directory, wanted)``: ``{path: bytes}`` of the files under
+  ``directory`` in the tree of ``commit`` whose path ``wanted`` accepts;
+- ``branches(url)``: ``{branch: commit}`` of every branch;
+- ``merge_base_times(url, commits)``: for each commit, the committer time of its merge-base
+  with the commit checked out; None for one that shares no history with it.
 
-``Checkout`` is what a build asks of its own checkout, in the current
-directory:
+Of the build's own checkout: ``head_commit()``, and ``checkout_files(directory, wanted)``,
+read from the commit's tree and never from the working tree.
 
-- ``head_commit()``: the commit checked out;
-- ``checkout_files(directory, wanted)``: the same as ``read_files`` of that
-  commit, read from its tree and not from the working tree.
-
-What these facts decide (which branch is a release line, which line a branch
-belongs to) is not decided here: see ``lines``.
-
-``RealGit`` runs git and is both; ``tests/snapshot/fakes.py`` holds
-``FakeGit`` and ``FakeCheckout``. A command that fails raises
-``ArtifactsError``: a transport error is never read as "no such ref" or "no
-files". An absent ref is an answer (None). Every value comes after ``--`` or
-``--end-of-options`` on a git command line, so git never reads it as an
+A command that fails raises ``ArtifactsError``: a transport error is never read as "no such
+ref". Every value comes after ``--`` or ``--end-of-options``, so git never reads it as an
 option, and nothing goes through a shell.
 """
 
@@ -38,51 +23,21 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Callable, Protocol
 
 from ..errors import ArtifactsError
 from ..forms import branch_of, is_tag
-from ..options import checkout_commit
+from ..job import checkout_commit
 
 # How ``git ls-remote`` names the commit an annotated tag points to.
 PEELED = "^{}"
 
-# Sent on every command that talks to a remote: git then gives the job's
-# credential helper's answer at once instead of after a 401.
-# Every job has the helper; without one, git fails at once, even on a public
-# repository ("could not read Username").
+# Git then gives the job's credential helper's answer at once instead of after a 401; without
+# it git fails at once, even on a public repository.
 PROACTIVE_AUTH = ("-c", "http.proactiveAuth=basic")
 
-
-class Git(Protocol):
-    """What the planner asks of git. See the module docstring."""
-
-    def commits_of(self, url: str, refs: Sequence[str]) -> Mapping[str, str]: ...
-
-    def read_files(
-        self, url: str, commit: str, directory: str, wanted: Callable[[str], bool]
-    ) -> Mapping[str, bytes]: ...
-
-    def branches(self, url: str) -> Mapping[str, str]: ...
-
-    def merge_base_times(self, url: str, commits: Sequence[str]) -> Mapping[str, int | None]: ...
-
-
-class Checkout(Protocol):
-    """What a build asks of its own checkout. See the module docstring."""
-
-    def head_commit(self) -> str: ...
-
-    def checkout_files(
-        self, directory: str, wanted: Callable[[str], bool]
-    ) -> Mapping[str, bytes]: ...
-
-
-# ---------------------------------------------------------------------------
-# Reading git's output
-# ---------------------------------------------------------------------------
+FETCH = ("fetch", "-q", "--no-tags", "--recurse-submodules=no")
 
 
 def listed_refs(output: str) -> dict[str, str]:
@@ -92,31 +47,16 @@ def listed_refs(output: str) -> dict[str, str]:
 
 
 def parse_ls_remote(output: str, refs: Sequence[str]) -> dict[str, str]:
-    """``{ref: commit}`` of those of ``refs`` that ``git ls-remote`` output lists exactly.
-
-    ``git ls-remote <url> <pattern>`` matches the pattern against the tail of
-    ref names, so ``refs/heads/x`` also matches ``refs/heads/a/refs/heads/x``;
-    only the exact name counts. An annotated tag is listed as the tag object
-    under its name and, when asked for, as the commit it names under
-    ``<name>^{}``; that peeled line wins.
-    """
+    """``{ref: commit}`` of those of ``refs`` that the output lists exactly: ls-remote matches
+    a pattern against the tail of ref names. A tag's peeled line wins."""
     rows = listed_refs(output)
     found = {ref: rows.get(ref + PEELED) or rows.get(ref) for ref in refs}
     return {ref: commit for ref, commit in found.items() if commit is not None}
 
 
-def parse_branches(output: str) -> dict[str, str]:
-    """``{branch: commit}`` from the output of ``git ls-remote --heads``."""
-    return {branch_of(ref): commit for ref, commit in listed_refs(output).items()}
-
-
 def tree_files(listing: bytes) -> list[tuple[str, str]]:
-    """``(path, blob id)`` of every blob in ``git ls-tree -r -z`` output.
-
-    Each record is ``<mode> <type> <id>TAB<path>`` ended by NUL; with ``-z``
-    paths are not quoted, so a path may hold spaces. A submodule is listed as
-    a ``commit``, not a blob, and is never descended into.
-    """
+    """``(path, blob id)`` of every blob in ``git ls-tree -r -z`` output. A submodule is listed
+    as a commit, not a blob, and is never descended into."""
     out = []
     for record in listing.split(b"\0"):
         meta, tab, path = record.partition(b"\t")
@@ -127,11 +67,8 @@ def tree_files(listing: bytes) -> list[tuple[str, str]]:
 
 
 def parse_batch(output: bytes, oids: Sequence[str]) -> dict[str, bytes]:
-    """The content of each blob of ``oids`` in ``git cat-file --batch`` output.
-
-    For each id asked, in order: ``<id> blob <size>``, a newline, the content
-    and a newline.
-    """
+    """The content of each blob of ``oids`` in ``git cat-file --batch`` output: for each id, in
+    order, ``<id> blob <size>``, a newline, the content and a newline."""
     blobs: dict[str, bytes] = {}
     pos = 0
     for oid in oids:
@@ -142,143 +79,75 @@ def parse_batch(output: bytes, oids: Sequence[str]) -> dict[str, bytes]:
     return blobs
 
 
-# ---------------------------------------------------------------------------
-# Running git
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Completed:
-    """The outcome of one command; standard output kept as bytes, for blobs."""
-
     returncode: int
     stdout: bytes
     stderr: str
 
 
-Runner = Callable[[Sequence[str], str, "bytes | None", Mapping[str, str]], Completed]
-
-
 def run_command(
     args: Sequence[str], cwd: str, stdin: bytes | None, env: Mapping[str, str]
 ) -> Completed:
-    """Run ``args`` in ``cwd`` with ``env``; never raises on exit status."""
     p = subprocess.run(
         list(args), cwd=cwd, env=dict(env), input=stdin, capture_output=True, check=False
     )
     return Completed(p.returncode, p.stdout, p.stderr.decode("utf-8", "replace"))
 
 
-def git_environment(base: Mapping[str, str]) -> dict[str, str]:
-    """``base`` with what every git command here runs under: no prompt for credentials, and
-    messages in English. The job's credential helper (``GIT_CONFIG_*``) is kept."""
-    return {**base, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
-
-
-def fetch_commit_arguments(url: str, commit: str) -> list[str]:
-    """``git fetch`` of one commit and its trees, without blobs or history, into FETCH_HEAD."""
-    return [
-        *("fetch", "-q", "--no-tags", "--recurse-submodules=no"),
-        *("--depth", "1", "--filter=blob:none", "--", url, commit),
-    ]
-
-
-def fetch_objects_arguments(url: str, oids: Sequence[str]) -> list[str]:
-    """``git fetch`` of objects by id, writing neither a ref nor FETCH_HEAD."""
-    return [
-        *("fetch", "-q", "--no-tags", "--recurse-submodules=no"),
-        *("--no-write-fetch-head", "--", url, *oids),
-    ]
-
-
-def _ignore(msg: str) -> None:
-    pass
-
-
-# ---------------------------------------------------------------------------
-# The real implementation
-# ---------------------------------------------------------------------------
+def unique(items: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(items))
 
 
 class RealGit:
-    """``Git`` and ``Checkout`` over the git command line.
+    """Git over its command line, in the checkout ``cwd`` of the build. ``run`` executes one
+    command; ``log`` receives the merge-base times a release line is chosen by."""
 
-    ``cwd`` is the checkout of the current build. Every command that talks to
-    a remote carries ``PROACTIVE_AUTH``. Another repository's commit is read
-    in a scratch repository of its own, removed when the read is done, so
-    nothing is kept between calls. ``run`` executes one command; tests may
-    replace it. ``log`` receives the merge-base times found, which the choice
-    of a release line rests on.
-    """
-
-    def __init__(
-        self, cwd: str = ".", run: Runner = run_command, log: Callable[[str], None] = _ignore
-    ) -> None:
+    def __init__(self, cwd: str = ".", run=run_command, log: Callable[[str], None] = print) -> None:
         self._cwd = cwd
         self._run = run
         self._log = log
 
-    def _git(
-        self, args: Sequence[str], cwd: str | None = None, stdin: bytes | None = None
-    ) -> Completed:
-        return self._run(["git", *args], cwd or self._cwd, stdin, git_environment(os.environ))
+    def _git(self, args: Sequence[str], cwd: str | None, stdin: bytes | None = None) -> Completed:
+        # No prompt for credentials, and messages in English; the job's credential helper stays.
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+        return self._run(["git", *args], cwd or self._cwd, stdin, env)
 
-    def _output(self, args: Sequence[str], c: Completed) -> bytes:
-        """The standard output of the command ``args`` that ended as ``c``; raises when it failed."""
+    def _ok(self, args: Sequence[str], cwd: str | None = None, stdin: bytes | None = None) -> bytes:
+        c = self._git(args, cwd, stdin)
         if c.returncode != 0:
             shown = " ".join(["git", *args])
             raise ArtifactsError(f"{shown} failed ({c.returncode}): {c.stderr.strip()}")
         return c.stdout
 
-    def _ok(self, args: Sequence[str], cwd: str | None = None, stdin: bytes | None = None) -> bytes:
-        return self._output(args, self._git(args, cwd, stdin))
-
     def _remote(self, args: Sequence[str], cwd: str | None = None) -> bytes:
-        """``_ok`` of a command that talks to a remote, with ``PROACTIVE_AUTH``."""
         return self._ok([*PROACTIVE_AUTH, *args], cwd)
 
     def commits_of(self, url: str, refs: Sequence[str]) -> dict[str, str]:
-        """``{ref: commit}`` of those of the full refs ``refs`` that ``url`` has, in one call.
-
-        A tag is also asked for peeled (``<ref>^{}``), so an annotated tag
-        gives the commit it names, not the tag object.
-        """
-        asked = list(dict.fromkeys(refs))
+        asked = unique(refs)
         tags = [r + PEELED for r in asked if is_tag(r)]
         out = self._remote(["ls-remote", "--", url, *asked, *tags])
         return parse_ls_remote(out.decode("utf-8", "replace"), asked)
 
     def branches(self, url: str) -> dict[str, str]:
-        """``{branch: commit}`` of every branch of ``url`` (``git ls-remote --heads``)."""
-        out = self._remote(["ls-remote", "--heads", "--", url])
-        return parse_branches(out.decode("utf-8", "replace"))
+        out = self._remote(["ls-remote", "--heads", "--", url]).decode("utf-8", "replace")
+        return {branch_of(ref): commit for ref, commit in listed_refs(out).items()}
 
     def read_files(
         self, url: str, commit: str, directory: str, wanted: Callable[[str], bool]
     ) -> dict[str, bytes]:
-        """The files under ``directory`` at ``commit`` of ``url`` that ``wanted`` accepts.
-
-        In a new scratch repository: one blobless fetch of the commit, one
-        listing of ``directory``, one fetch of the blobs of the files that
-        count, and ``git cat-file --batch``. Two fetches whatever the number of
-        files; none for blobs when no file counts.
-        """
+        """In a scratch repository of its own: one fetch of the commit without blobs, then one
+        fetch of the blobs of the files that count."""
         with tempfile.TemporaryDirectory(prefix="snapshot-git-") as d:
             self._ok(["init", "-q"], d)
-            self._remote(fetch_commit_arguments(url, commit), d)
+            self._remote([*FETCH, "--depth", "1", "--filter=blob:none", "--", url, commit], d)
             files = self._listed("FETCH_HEAD", directory, wanted, d)
             if not files:
                 return {}
-            self._remote(fetch_objects_arguments(url, list(dict.fromkeys(files.values()))), d)
+            self._remote([*FETCH, "--no-write-fetch-head", "--", url, *unique(files.values())], d)
             return self._contents(files, d)
 
     def checkout_files(self, directory: str, wanted: Callable[[str], bool]) -> dict[str, bytes]:
-        """The files under ``directory`` at HEAD of ``cwd`` that ``wanted`` accepts.
-
-        Read from the tree of the commit, never from the working tree, so a
-        file a job wrote or changed there (the generated pipeline) is not
-        what is read. Local: no command talks to a remote.
-        """
         files = self._listed("HEAD", directory, wanted)
         return self._contents(files) if files else {}
 
@@ -290,48 +159,37 @@ class RealGit:
         return {path: oid for path, oid in tree_files(listing) if wanted(path)}
 
     def _contents(self, files: Mapping[str, str], cwd: str | None = None) -> dict[str, bytes]:
-        """The content of each of ``files`` (``{path: blob id}``), in one ``cat-file --batch``."""
-        oids = list(dict.fromkeys(files.values()))
+        oids = unique(files.values())
         batch = self._ok(["cat-file", "--batch"], cwd, "".join(f"{o}\n" for o in oids).encode())
         blobs = parse_batch(batch, oids)
         return {path: blobs[oid] for path, oid in files.items()}
 
     def head_commit(self) -> str:
-        """The commit checked out in ``cwd`` (``git rev-parse HEAD``)."""
         return checkout_commit(self._cwd)
 
-    def _merge_base(self, commit: str) -> str | None:
-        """The merge-base of HEAD and ``commit``; None when they share no history.
-
-        ``git merge-base`` exits 1 and prints nothing for two commits without
-        a common ancestor. Every other failure is an error.
-        """
+    def _merge_base_time(self, commit: str) -> int | None:
+        """Committer time of the merge-base of HEAD and ``commit``; None when they share no
+        history, for which ``git merge-base`` exits 1 and prints nothing."""
         args = ["merge-base", "--end-of-options", "HEAD", commit]
-        c = self._git(args)
+        c = self._git(args, None)
         if c.returncode == 1 and not c.stdout.strip() and not c.stderr.strip():
             return None
-        return self._output(args, c).decode("ascii").strip()
-
-    def _merge_base_time(self, commit: str) -> int | None:
-        """Committer time of the merge-base of HEAD and ``commit``; None when there is none."""
-        base = self._merge_base(commit)
-        if base is None:
-            return None
+        if c.returncode != 0:
+            raise ArtifactsError(
+                f"git {' '.join(args)} failed ({c.returncode}): {c.stderr.strip()}"
+            )
+        base = c.stdout.decode("ascii").strip()
         shown = self._ok(["show", "-s", "--format=%ct", "--end-of-options", base])
         return int(shown.decode("ascii").strip())
 
     def merge_base_times(self, url: str, commits: Sequence[str]) -> dict[str, int | None]:
-        """For each of ``commits`` of ``url``: the committer time of its merge-base with HEAD.
-
-        None for a commit that shares no history with HEAD. The commits are
-        fetched into the checkout in one fetch, objects only (no ref, no
-        FETCH_HEAD).
-        """
-        wanted = list(dict.fromkeys(commits))
+        """The commits are fetched into the checkout in one fetch, objects only."""
+        wanted = unique(commits)
         if wanted:
-            self._remote(fetch_objects_arguments(url, wanted))
+            self._remote([*FETCH, "--no-write-fetch-head", "--", url, *wanted])
         times = {c: self._merge_base_time(c) for c in wanted}
-        told = {c: "no shared history" if t is None else t for c, t in times.items()}
-        shown = ", ".join(f"{c[:12]} {t}" for c, t in told.items())
+        shown = ", ".join(
+            f"{c[:12]} {'no shared history' if t is None else t}" for c, t in times.items()
+        )
         self._log(f"merge-base times of HEAD with {url}: {shown or 'none asked'}")
         return times

@@ -1,9 +1,8 @@
 """Which store the plugin uses: StoreConfig, read from the environment, then SSM.
 
-Each value comes from an ARTIFACTS_* variable when the job sets a non-empty
-one, else from an SSM parameter, else from a default: variables for per-job
-overrides, SSM for the configuration all agents share, defaults for a plain S3
-setup with an IAM role.
+Each value comes from an ARTIFACTS_* variable when the job sets a non-empty one, else from an
+SSM parameter, else from a default: variables for per-job overrides, SSM for the configuration
+all agents share, defaults for a plain S3 setup with an IAM role.
 """
 
 from __future__ import annotations
@@ -15,22 +14,32 @@ from botocore.exceptions import ClientError
 
 from .errors import ArtifactsError
 
-# ---------------------------------------------------------------------------
-# SSM parameter paths
-# ---------------------------------------------------------------------------
-BACKEND_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/backend"
-DESTINATION_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/destination"
-ENDPOINT_URL_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/endpoint-url"
-R2_ACCOUNT_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/account-id"
-R2_ACCESS_KEY_ID_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/access-key-id"
-R2_SECRET_ACCESS_KEY_SSM_PARAM = "/services/buildkite/credentials/artifacts/r2/secret-access-key"
-ARTIFACTS_DOMAIN_SSM_PARAM = "/services/buildkite/config/artifacts/object-store/r2/artifacts-domain"
+SSM = "/services/buildkite/config/artifacts/object-store"
+BACKEND_SSM_PARAM = f"{SSM}/backend"
+DESTINATION_SSM_PARAM = f"{SSM}/destination"
+ENDPOINT_URL_SSM_PARAM = f"{SSM}/endpoint-url"
+ARTIFACTS_DOMAIN_SSM_PARAM = f"{SSM}/r2/artifacts-domain"
+
+CREDENTIALS = "/services/buildkite/credentials/artifacts"
+# What the R2 backend needs: the field, its variable, its SSM parameter, and its name in a
+# message.
+R2_REQUIRED = (
+    ("r2_account_id", "ARTIFACTS_R2_ACCOUNT_ID", f"{SSM}/r2/account-id", "account ID"),
+    ("r2_access_key_id", "ARTIFACTS_R2_ACCESS_KEY_ID", f"{SSM}/r2/access-key-id", "access key ID"),
+    (
+        "r2_secret_access_key",
+        "ARTIFACTS_R2_SECRET_ACCESS_KEY",
+        f"{CREDENTIALS}/r2/secret-access-key",
+        "secret access key",
+    ),
+)
+
+# Prefixes of a value that was never replaced with a real one.
+PLACEHOLDER_PREFIXES = ("SET_ME", "REPLACE_", "TODO", "CHANGEME", "FIXME")
 
 
 @dataclass(frozen=True)  # frozen -> safe to share across worker threads
 class StoreConfig:
-    """Resolved object-store backend config. Populated once by load_store_config()."""
-
     backend: str
     destination: str
     endpoint_url: str | None = None
@@ -40,128 +49,66 @@ class StoreConfig:
     artifacts_domain: str | None = None
 
 
-def _ssm_get_optional(ssm, name, with_decryption=True):
-    """Return SSM parameter value or None if absent. Re-raises non-NotFound errors
-    so IAM misconfigurations surface explicitly."""
+def ssm_value(ssm, name: str) -> str | None:
+    """The value of an SSM parameter, None when there is none. Any other error is raised, so
+    that a missing IAM permission shows."""
     try:
-        return ssm.get_parameter(Name=name, WithDecryption=with_decryption)["Parameter"]["Value"]
+        return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
     except ClientError as exc:
-        code = exc.response.get("Error", {}).get("Code")
-        if code == "ParameterNotFound":
+        error = exc.response.get("Error", {})
+        if error.get("Code") == "ParameterNotFound":
             return None
-        msg = exc.response.get("Error", {}).get("Message", str(exc))
-        raise ArtifactsError(f"failed to read SSM parameter {name}: {code} -- {msg}") from exc
-
-
-# Prefixes that indicate a placeholder / unconfigured value rather than a real one.
-_PLACEHOLDER_PREFIXES = ("SET_ME", "REPLACE_", "TODO", "CHANGEME", "FIXME")
-
-
-def _check_placeholder(value, label):
-    """Raise if value looks like a placeholder that was never replaced with a real one."""
-    if value and any(value.startswith(p) for p in _PLACEHOLDER_PREFIXES):
+        message = error.get("Message", str(exc))
         raise ArtifactsError(
-            f"{label} contains placeholder value {value!r} -- "
-            f"replace it with the real credential in Terraform tfvars or SSM"
+            f"failed to read SSM parameter {name}: {error.get('Code')} -- {message}"
+        ) from exc
+
+
+def env_or_ssm(ssm, env_name: str, ssm_name: str) -> str | None:
+    """The variable when the job sets it, else the SSM parameter."""
+    return os.environ.get(env_name) or ssm_value(ssm, ssm_name)
+
+
+def r2_value(ssm, env_name: str, param: str, label: str) -> str:
+    """One value the R2 backend needs; an absent one and a placeholder are errors."""
+    value = env_or_ssm(ssm, env_name, param)
+    if not value:
+        raise ArtifactsError(
+            f"R2 backend requires its {label}. Set env var {env_name} or SSM parameter {param}"
         )
+    if value.startswith(PLACEHOLDER_PREFIXES):
+        raise ArtifactsError(
+            f"R2 {label} (SSM {param}) contains placeholder value {value!r} -- "
+            "replace it with the real credential in Terraform tfvars or SSM"
+        )
+    return value
 
 
-def env_or_ssm(ssm, env_name, ssm_name, with_decryption=True):
-    """Env var with SSM fallback. Env takes precedence for per-job overrides.
-
-    Public, because the plan step reads its Buildkite API token in the same
-    order, and that token is no part of the store configuration."""
-    return os.environ.get(env_name) or _ssm_get_optional(
-        ssm, ssm_name, with_decryption=with_decryption
-    )
-
-
-def load_store_config(ssm):
-    """Resolve backend config: env vars -> SSM -> defaults.
-    For R2, endpoint URL defaults to https://{account_id}.r2.cloudflarestorage.com."""
-    backend = (
-        (os.environ.get("ARTIFACTS_BACKEND") or _ssm_get_optional(ssm, BACKEND_SSM_PARAM) or "s3")
-        .strip()
-        .lower()
-    )
-
+def load_store_config(ssm) -> StoreConfig:
+    """The store configuration: variables, then SSM, then defaults. For R2 the endpoint
+    defaults to https://{account_id}.r2.cloudflarestorage.com."""
+    backend = (env_or_ssm(ssm, "ARTIFACTS_BACKEND", BACKEND_SSM_PARAM) or "s3").strip().lower()
     if backend not in {"s3", "r2"}:
         raise ArtifactsError(
             f"unsupported artifact backend: {backend!r} (expected 's3' or 'r2'). "
             f"Check env var ARTIFACTS_BACKEND or SSM parameter {BACKEND_SSM_PARAM}"
         )
-
-    destination = os.environ.get("ARTIFACTS_DESTINATION") or _ssm_get_optional(
-        ssm, DESTINATION_SSM_PARAM
-    )
+    destination = env_or_ssm(ssm, "ARTIFACTS_DESTINATION", DESTINATION_SSM_PARAM)
     if not destination:
         raise ArtifactsError(
-            f"artifact destination not configured. "
+            "artifact destination not configured. "
             f"Set env var ARTIFACTS_DESTINATION or SSM parameter {DESTINATION_SSM_PARAM}"
         )
-
-    # Applies to both backends; mainly for local MinIO / dev setups.
-    endpoint_url = os.environ.get("ARTIFACTS_ENDPOINT_URL")
-
-    artifacts_domain = os.environ.get("ARTIFACTS_DOMAIN") or _ssm_get_optional(
-        ssm, ARTIFACTS_DOMAIN_SSM_PARAM
-    )
-
-    if backend == "r2":
-        endpoint_url = endpoint_url or _ssm_get_optional(ssm, ENDPOINT_URL_SSM_PARAM)
-
-        r2_account_id = env_or_ssm(ssm, "ARTIFACTS_R2_ACCOUNT_ID", R2_ACCOUNT_ID_SSM_PARAM)
-        if not r2_account_id:
-            raise ArtifactsError(
-                f"R2 backend requires Cloudflare account ID. "
-                f"Set env var ARTIFACTS_R2_ACCOUNT_ID or SSM parameter {R2_ACCOUNT_ID_SSM_PARAM}"
-            )
-        _check_placeholder(r2_account_id, f"R2 account ID (SSM {R2_ACCOUNT_ID_SSM_PARAM})")
-
-        r2_access_key_id = env_or_ssm(
-            ssm,
-            "ARTIFACTS_R2_ACCESS_KEY_ID",
-            R2_ACCESS_KEY_ID_SSM_PARAM,
-        )
-        if not r2_access_key_id:
-            raise ArtifactsError(
-                f"R2 backend requires access key ID. "
-                f"Set env var ARTIFACTS_R2_ACCESS_KEY_ID or SSM parameter {R2_ACCESS_KEY_ID_SSM_PARAM}"
-            )
-        _check_placeholder(r2_access_key_id, f"R2 access key ID (SSM {R2_ACCESS_KEY_ID_SSM_PARAM})")
-
-        r2_secret_access_key = env_or_ssm(
-            ssm,
-            "ARTIFACTS_R2_SECRET_ACCESS_KEY",
-            R2_SECRET_ACCESS_KEY_SSM_PARAM,
-            with_decryption=True,
-        )
-        if not r2_secret_access_key:
-            raise ArtifactsError(
-                f"R2 backend requires secret access key. "
-                f"Set env var ARTIFACTS_R2_SECRET_ACCESS_KEY or SSM SecureString {R2_SECRET_ACCESS_KEY_SSM_PARAM}"
-            )
-        _check_placeholder(
-            r2_secret_access_key,
-            f"R2 secret access key (SSM {R2_SECRET_ACCESS_KEY_SSM_PARAM})",
-        )
-
-        if not endpoint_url:
-            endpoint_url = f"https://{r2_account_id}.r2.cloudflarestorage.com"
-
-        return StoreConfig(
-            backend=backend,
-            destination=destination,
-            endpoint_url=endpoint_url,
-            r2_account_id=r2_account_id,
-            r2_access_key_id=r2_access_key_id,
-            r2_secret_access_key=r2_secret_access_key,
-            artifacts_domain=artifacts_domain,
-        )
-
-    return StoreConfig(
-        backend=backend,
-        destination=destination,
-        endpoint_url=endpoint_url,
-        artifacts_domain=artifacts_domain,
-    )
+    shared = {
+        "backend": backend,
+        "destination": destination,
+        # The variable applies to both backends; mainly for local MinIO and development.
+        "endpoint_url": os.environ.get("ARTIFACTS_ENDPOINT_URL"),
+        "artifacts_domain": env_or_ssm(ssm, "ARTIFACTS_DOMAIN", ARTIFACTS_DOMAIN_SSM_PARAM),
+    }
+    if backend == "s3":
+        return StoreConfig(**shared)
+    endpoint_url = shared["endpoint_url"] or ssm_value(ssm, ENDPOINT_URL_SSM_PARAM)
+    r2 = {field: r2_value(ssm, *rest) for field, *rest in R2_REQUIRED}
+    default = f"https://{r2['r2_account_id']}.r2.cloudflarestorage.com"
+    return StoreConfig(**{**shared, **r2, "endpoint_url": endpoint_url or default})

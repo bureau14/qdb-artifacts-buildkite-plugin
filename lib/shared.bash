@@ -49,16 +49,16 @@ plugin_has_any() {
   return 1
 }
 
-# The gate steps of enter and resume read pipeline documents, which needs
-# PyYAML. No other step reads one, so no other job on any platform installs it.
-step_reads_documents() {
-  plugin_has_any PLAN RESUME
+# The plan step, its second run and the last step run the planning side, which
+# needs PyYAML. No other step does, so no other job on any platform installs it.
+step_plans() {
+  plugin_has_any PLAN RESUME LEAVE
 }
 
 # Every job of one plugin commit on a host shares this checkout, and the
-# post-checkout of each makes its venv again. The steps that read documents
-# keep a venv of their own, so that no other job takes PyYAML from under them.
-if step_reads_documents; then
+# post-checkout of each makes its venv again. The steps that plan keep a venv
+# of their own, so that no other job takes PyYAML from under them.
+if step_plans; then
   VENV_DIR="${PLUGIN_DIR}/.venv-snapshot"
 else
   VENV_DIR="${PLUGIN_DIR}/.venv"

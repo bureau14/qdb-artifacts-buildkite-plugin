@@ -22,7 +22,8 @@ steps:
       # every job of the suite runs in a git checkout, and the image lacks git
       apt-get update -qq && apt-get install -y -qq --no-install-recommends git
       pip install -r tests/requirements.txt
-      # hooks, command line and library against a local S3 and SSM server; chains in process
+      # hooks, command line and library against a local S3 and SSM server;
+      # the builds of a tree in process
       python -B -m pytest -p no:cacheprovider tests
     plugins:
       - docker#v5.13.0:

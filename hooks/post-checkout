@@ -21,7 +21,7 @@ fi
 echo "Python ${VERSION} at ${PYTHON}"
 
 REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
-if step_reads_documents; then
+if step_plans; then
   REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/snapshot/requirements.txt")
 fi
 

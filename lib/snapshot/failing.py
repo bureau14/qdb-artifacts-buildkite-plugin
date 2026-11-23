@@ -1,27 +1,21 @@
-"""How a gate step fails.
+"""How the plan step and the last step fail.
 
-Fail is: log why; write the failure record the decision names, when the build
-has a key; show why on the build page; set the mode ``failed``; end with
-``ArtifactsError``, which the command line turns into exit status 1. The cause
-is in the log before any of these effects runs, so a further failure of one of
-them, which then ends the step, never hides it.
-
-A decision fails the step by raising a ``Refusal``. Any other exception fails
-it the same way and writes no record: a record saves a waiting build from
-compiling in vain, and an error of the store, of git or of an API says nothing
-of the build of a key.
+A decision fails its step by raising a ``Refusal``. Failing is: log why; write the failure
+record the refusal names; show why on the build page; end with ``ArtifactsError``. The cause
+is in the log before any of these effects runs, so a failure of one of them never hides it.
+Any other exception fails the step the same way and writes no record: an error of the store,
+of git or of an API says nothing of the build of a key.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import NoReturn, TypeVar
 
 from ..errors import ArtifactsError
+from ..job import Job
 from .annotation import STEP_ERROR, refusal_annotation
-from .edge import FAILED, MODE, Edge, create_record
-from .job import Job
-from .records import Record
+from .edge import Edge, create_record
+from .records import Origin, Record, record
 
 
 class Refusal(Exception):
@@ -29,45 +23,32 @@ class Refusal(Exception):
 
     def __init__(self, message: str, annotation: str, record: Record | None = None) -> None:
         super().__init__(message)
-        self.message = message
         self.annotation = annotation
         self.record = record
 
 
-def error_refusal(job: Job, exc: Exception) -> Refusal:
-    """The refusal of a step that an error ended: its type and text on the build page, no
-    record."""
-    message = f"{type(exc).__name__}: {exc}"
-    return Refusal(message, refusal_annotation(STEP_ERROR, job.project, job.build, message))
+def refusal(
+    job: Job, edge: Edge, kind: str, message: str, origin: Origin | None = None, **said
+) -> Refusal:
+    """A refusal of ``kind`` (``annotation.REFUSAL_HEADINGS``) before anything is built. With
+    the ``origin`` of the build's records it carries the record of that reason and of what
+    else is ``said``."""
+    written = None if origin is None else record(origin, edge.clock(), reason=kind, **said)
+    return Refusal(message, refusal_annotation(kind, job.project, job.build, message), written)
 
 
-def fail(edge: Edge, refusal: Refusal, context: str, mark: bool) -> NoReturn:
-    """Log the refusal, write its record, annotate, set the mode when ``mark``, end the step."""
-    edge.log(refusal.message)
-    if refusal.record is not None:
-        create_record(edge, refusal.record)
-    edge.agent.annotate(refusal.annotation, "error", context)
-    if mark:
-        edge.agent.meta_data_set(MODE, FAILED)
-    raise ArtifactsError(refusal.message)
-
-
-# The edge a step's decisions take: ``Edge``, or the plan step's, which reaches further.
-AnyEdge = TypeVar("AnyEdge", bound=Edge)
-
-
-def gated(
-    job: Job,
-    edge: AnyEdge,
-    decisions: Callable[[Job, AnyEdge], None],
-    context: str,
-    mark: bool,
-) -> int:
-    """Run a step's decisions; a refusal or any exception fails the step."""
+def run_step(job: Job, edge: Edge, decisions: Callable[[Job, Edge], None], context: str) -> int:
+    """Run a step's decisions; a refusal or any exception fails the step, under the
+    annotation context ``context``."""
     try:
         decisions(job, edge)
-    except Refusal as refusal:
-        fail(edge, refusal, context, mark)
-    except Exception as exc:  # noqa: BLE001 -- whatever ends a gate step, it ends as failed
-        fail(edge, error_refusal(job, exc), context, mark)
-    return 0
+        return 0
+    except Refusal as exc:
+        failed = exc
+    except Exception as exc:  # noqa: BLE001 -- whatever ends the step, it ends as failed
+        failed = refusal(job, edge, STEP_ERROR, f"{type(exc).__name__}: {exc}")
+    edge.log(str(failed))
+    if failed.record is not None:
+        create_record(edge, failed.record)
+    edge.agent.annotate(failed.annotation, "error", context)
+    raise ArtifactsError(str(failed))

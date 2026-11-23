@@ -9,8 +9,8 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
 fi
 
 # Leave without starting Python when the step asks for nothing after its
-# command. PLAN, RESUME and LEAVE are set only on the gate steps of a build
-# with snapshot dependencies.
+# command. PLAN, RESUME and LEAVE are set only on the plan step, its second
+# run and the last step.
 if ! plugin_has_any UPLOAD_FILES_0 UPLOAD_FILES PROMOTE_VARIANT PLAN RESUME LEAVE; then
   echo "No upload or promote configuration found, skipping artifact upload/promote steps"
   exit 0

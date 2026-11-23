@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from botocore.exceptions import ClientError
 
 from . import layout
-from .clients import s3_client
+from .clients import s3_client, ssm_client
+from .config import StoreConfig, load_store_config
 
 ABSENT = ("NoSuchKey", "404")
 TAKEN = ("PreconditionFailed",)
@@ -40,10 +41,12 @@ def error_code(error: ClientError) -> str | None:
 
 @dataclass(frozen=True)
 class Store:
-    """A bucket and the client that reaches it."""
+    """A bucket, the client that reaches it, and the key prefix the destination names, which
+    ``layout`` puts before every key."""
 
     client: object
     bucket: str
+    prefix: str = ""
 
     def get(self, key: str) -> bytes | None:
         """The body of the object at key, or None when the bucket has none there."""
@@ -92,8 +95,23 @@ class Store:
         ]
 
 
-def destination_store(cfg, auth) -> tuple[Store, str]:
-    """The store of cfg's destination, reached with auth, and the key prefix the
-    destination names."""
-    bucket, prefix = layout.parse_destination(cfg.destination)
-    return Store(s3_client(cfg, auth), bucket), prefix
+def destination_store(cfg: StoreConfig) -> Store:
+    """The store of the destination ``cfg`` names."""
+    return Store(s3_client(cfg), *layout.parse_destination(cfg.destination))
+
+
+@dataclass(frozen=True)
+class Opened:
+    """The destination as a job opens it: its configuration, its store, and the SSM client the
+    configuration was read with."""
+
+    cfg: StoreConfig
+    store: Store
+    ssm: object
+
+
+def open_destination() -> Opened:
+    """Open the destination a job's configuration names."""
+    ssm = ssm_client()
+    cfg = load_store_config(ssm)
+    return Opened(cfg, destination_store(cfg), ssm)

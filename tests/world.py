@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import json
 import os
 import shutil
 import signal
@@ -197,9 +198,12 @@ def main(args):
         return 0 if (here / "meta-data" / args[2]).exists() else 100
     if args[:2] == ["meta-data", "get"]:
         found = here / "meta-data" / args[2]
-        if not found.exists():
+        if found.exists():
+            sys.stdout.buffer.write(found.read_bytes() + b"\\n")
+        elif "--default" in args:
+            sys.stdout.write(option(args, "--default") + "\\n")
+        else:
             return 1
-        sys.stdout.buffer.write(found.read_bytes() + b"\\n")
         return 0
     if args[:2] == ["meta-data", "set"]:
         (here / "meta-data").mkdir(parents=True, exist_ok=True)
@@ -309,23 +313,27 @@ def host_variables(home: Path, *path_dirs: Path) -> dict:
     }
 
 
-def plugin_variables(options: dict, path=()) -> dict:
-    """Plugin options as the agent hands them over: a list as KEY_<i>, a map as
+def flattened(options: dict, path=()) -> dict:
+    """One variable per option, as the agent names them: a list as KEY_<i>, a map as
     KEY_<NAME>, a boolean as true or false, every key upper case with - as _."""
     if isinstance(options, dict):
         return {
             k: v
             for name, value in options.items()
-            for k, v in plugin_variables(value, (*path, name)).items()
+            for k, v in flattened(value, (*path, name)).items()
         }
     if isinstance(options, list):
         return {
-            k: v
-            for i, value in enumerate(options)
-            for k, v in plugin_variables(value, (*path, i)).items()
+            k: v for i, value in enumerate(options) for k, v in flattened(value, (*path, i)).items()
         }
     name = OPTION_PREFIX + "_".join(str(p).upper().replace("-", "_") for p in path)
     return {name: str(options).lower() if isinstance(options, bool) else str(options)}
+
+
+def plugin_variables(options: dict) -> dict:
+    """Plugin options as the agent hands them over: the configuration as JSON, which the
+    plugin's Python reads, and one variable per option, which its shell hooks read."""
+    return {"BUILDKITE_PLUGIN_CONFIGURATION": json.dumps(options), **flattened(options)}
 
 
 # ---------------------------------------------------------------------------

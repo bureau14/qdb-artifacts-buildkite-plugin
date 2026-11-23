@@ -14,15 +14,14 @@ from pathlib import Path
 
 import pytest
 import zstandard
-from chain import GRAPHS
+from builds import GRAPHS
 from fakes import url
 from world import TOKEN
 
 from lib import retry
 from lib.extract import extract_local_archive
 from lib.snapshot import buildkite
-from lib.snapshot.buildkite import Response
-from lib.snapshot.enter import buildkite_pipelines
+from lib.snapshot.edge import buildkite_pipelines
 
 # ---------------------------------------------------------------------------
 # Archive members that would leave the output directory
@@ -108,7 +107,8 @@ def test_no_archive_member_is_written_outside_the_output_directory(
     out.mkdir()
     outside.mkdir()
     (outside / "secret").write_bytes(b"secret")
-    prefix, rules = ("pkg/", [("pkg/*", "pkg/")]) if rule == "prefix stripped" else ("", None)
+    stripped = rule == "prefix stripped"
+    prefix, rules = ("pkg/", [("pkg/*", "pkg/")]) if stripped else ("", [(None, None)])
     archive = tmp_path / f"w{suffix}"
     archive.write_bytes(archived(escaping(escape, outside, prefix), suffix))
     before = everything_but(tmp_path, out)
@@ -116,7 +116,7 @@ def test_no_archive_member_is_written_outside_the_output_directory(
 
     def extracted() -> None:
         attempts.append(archive.name)
-        extract_local_archive(str(archive), archive.name, out, entry_rules=rules)
+        extract_local_archive(str(archive), archive.name, out, rules)
 
     with contextlib.suppress(Exception):
         retry.with_retry(extracted, archive.name)
@@ -147,7 +147,7 @@ def api(answers: tuple, received: list):
     sent goes into ``received``."""
     core = iter(answers)
 
-    def http_get(address: str, token: str, timeout: float = 30.0) -> Response:
+    def http_get(address: str, token: str) -> tuple[int, bytes]:
         received.append(token)
         slug = address.rsplit("/", 1)[-1]
         status = 200 if slug != "core" else next(core, answers[-1])
@@ -156,7 +156,7 @@ def api(answers: tuple, received: list):
             if status == 200
             else {"message": "no"}
         )
-        return Response(status, {}, json.dumps(body).encode())
+        return status, json.dumps(body).encode()
 
     return http_get
 
@@ -169,10 +169,11 @@ ANSWERS = {"200": (200,), "404": (404,), "401": (401,), "503-then-200": (503, 20
 @pytest.mark.parametrize("token_source", ["variable", "ssm"])
 @pytest.mark.parametrize("answers", sorted(ANSWERS))
 def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_source, answers):
-    """The plan step of a root sends the Buildkite API token to the API, again after an answer
-    that a retry may repair, and puts it in nothing the chain prints, logs, annotates, raises,
-    sets as meta-data, uploads or stores, whatever the API answers and wherever the token was
-    read; the root passes when the API gives the pipelines in the end. (Every job of
+    """The plan step of a first build sends the Buildkite API token to the API, again after an
+    answer that a retry may repair, and puts it in nothing the builds of its tree print, log,
+    annotate, raise, set as meta-data, upload or store, whatever the API answers and wherever
+    the token was read; the first build passes when the API gives the pipelines in the end.
+    (Every job of
     ``world.py`` holds the token too, and its ``Job.run`` fails a hook that prints it.)"""
     received: list[str] = []
     monkeypatch.setenv("BUILDKITE_ORGANIZATION_SLUG", "example")
@@ -185,7 +186,7 @@ def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_sour
     world = worlds(GRAPHS["diamond"])
     world.pipelines = buildkite_pipelines(TokenParameter())
 
-    top = world.build("app")
+    first_build = world.build("app")
 
     printed = capsys.readouterr()
     kept = (world.agents.meta_data, world.agents.annotations, world.agents.uploads)
@@ -195,7 +196,7 @@ def test_the_buildkite_token_never_shows(worlds, monkeypatch, capsys, token_sour
         *(line for b in world.builds for line in b.outputs),
         *map(json.dumps, kept),
     ]
-    assert top.state == ("passed" if ANSWERS[answers][-1] == 200 else "failed")
+    assert first_build.state == ("passed" if ANSWERS[answers][-1] == 200 else "failed")
     assert received and set(received) == {TOKEN}
     assert [text for text in shown if TOKEN in text] == []
     assert [key for key, body in world.store.objects.items() if TOKEN.encode() in body] == []

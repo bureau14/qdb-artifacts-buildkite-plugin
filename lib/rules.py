@@ -11,31 +11,25 @@ file is neither transferred nor listed in the manifest or the annotation.
 """
 
 import fnmatch
+import re
+
+
+def parse_rule(pattern):
+    """(archive_glob, entry_filter, strip_prefix) of ``archive_glob[!entry_filter]``.
+
+    archive_glob  -- fnmatch against the artifact's path (e.g. '*-server.tar.zst')
+    entry_filter  -- optional fnmatch against archive entries (e.g. 'bin/*')
+    strip_prefix  -- the filter's fixed prefix before its first glob character, stripped from
+                     output paths, so 'bin/qdb' extracts to output_dir/qdb
+    """
+    archive_glob, bang, entry_filter = pattern.partition("!")
+    if not bang:
+        return pattern, None, None
+    return archive_glob, entry_filter, re.match(r"[^*?[]*", entry_filter)[0]
 
 
 def parse_rules(patterns):
-    """Parse pattern strings into (archive_glob, entry_filter, strip_prefix) tuples.
-
-    Format: ``archive_glob[!entry_filter]``
-      archive_glob  -- fnmatch against S3 key filename (e.g. '*-server.tar.zst')
-      entry_filter  -- optional fnmatch against archive entries (e.g. 'bin/*')
-      strip_prefix  -- fixed prefix before first glob char, stripped from output paths
-                      so 'bin/qdb' extracts to output_dir/qdb, not output_dir/bin/qdb
-    """
-    rules = []
-    for pat in patterns:
-        if "!" in pat:
-            archive_glob, entry_filter = pat.split("!", 1)
-            prefix_end = len(entry_filter)
-            for i, ch in enumerate(entry_filter):
-                if ch in ("*", "?", "["):
-                    prefix_end = i
-                    break
-            strip_prefix = entry_filter[:prefix_end]
-            rules.append((archive_glob, entry_filter, strip_prefix))
-        else:
-            rules.append((pat, None, None))
-    return rules
+    return [parse_rule(p) for p in patterns]
 
 
 def match_rules(rel, rules):

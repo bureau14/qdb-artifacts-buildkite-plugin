@@ -26,19 +26,15 @@ def download(tree, request, output_dir):
         download_artifacts,
         load_store_config,
         read_manifest,
-        resolve_object_auth,
     )
 
     ssm = boto3.client("ssm")
     cfg = load_store_config(ssm)
-    auth = resolve_object_auth(ssm, cfg, permission="object-read-only")
     asked = dict(request)
     key, git_ref = asked.pop("key", None), asked.pop("git_ref", None)
     build = Key(key) if key is not None else Branch(git_ref, strict=True)
-    bucket, resolved, _ = download_artifacts(
-        cfg=cfg, auth=auth, build=build, output_dir=output_dir, **asked
-    )
-    manifest = read_manifest(cfg, auth, bucket, resolved)
+    _, resolved, _ = download_artifacts(cfg=cfg, build=build, output_dir=output_dir, **asked)
+    manifest = read_manifest(resolved)
     return {"key": resolved.key, "file_count": len(manifest["files"])}
 
 

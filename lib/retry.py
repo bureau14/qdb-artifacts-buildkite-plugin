@@ -12,13 +12,7 @@ BACKOFF_CAP = 60  # 1 minute max sleep between retries
 
 
 def with_retry(fn, description, attempts=MAX_RETRIES):
-    """Execute fn() with exponential backoff on transient errors.
-
-    Tries up to attempts times. Sleep between attempts starts at BACKOFF_BASE
-    seconds and doubles each time, capped at BACKOFF_CAP.
-
-    Backoff schedule (defaults): 5 -> 10 -> 20 -> 40 -> 60 -> 60 -> ... seconds.
-    """
+    """What fn() returns, tried up to ``attempts`` times with a pause that doubles."""
     for attempt in range(1, attempts + 1):
         try:
             return fn()

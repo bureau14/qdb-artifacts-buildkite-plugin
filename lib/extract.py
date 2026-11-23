@@ -24,22 +24,15 @@ from .errors import ArtifactsError
 from .rules import select_entry_path
 
 
-def _filter_tar_member(member, entry_rules):
-    """Apply matching entry rules to a tar member, or return None to skip.
-    member.name is mutated in-place (tarfile's path remapping convention)."""
-    member.name = select_entry_path(member.name, entry_rules)
-    return member if member.name else None
-
-
-def _extract_tar(tar, out, rel, entry_filter=None, strip_prefix=None, entry_rules=None):
-    """Extract the tar members of the archive ``rel`` with optional filtering, through
+def extract_tar(tar, out, rel, entry_rules):
+    """Extract the members of the archive ``rel`` that ``entry_rules`` select, through
     tarfile's data filter: it roots absolute paths in the output dir, and refuses special
-    files and the members and links that would land outside it. Streaming mode means
-    sequential-only access -- skipped members still consume I/O from the stream."""
-    entry_rules = entry_rules or [(entry_filter, strip_prefix)]
+    files and the members and links that would land outside it. In stream mode a skipped
+    member is still read."""
     for member in tar:
-        member = _filter_tar_member(member, entry_rules)
-        if member is None:
+        # tarfile writes a member where its name says.
+        member.name = select_entry_path(member.name, entry_rules)
+        if not member.name:
             continue
         try:
             tar.extract(member, path=out, filter="data")
@@ -47,7 +40,7 @@ def _extract_tar(tar, out, rel, entry_filter=None, strip_prefix=None, entry_rule
             raise ArtifactsError(f"{rel}: {exc}") from exc
 
 
-def _zip_destination(out, rel, name):
+def zip_destination(out, rel, name):
     """Where the zip or jar member ``name`` of the archive ``rel`` lands in ``out``. A member
     whose path leaves ``out``, through a parent path or as an absolute name, is refused."""
     dest = (out / name).resolve()
@@ -58,44 +51,34 @@ def _zip_destination(out, rel, name):
     return dest
 
 
-def extract_local_archive(
-    path, rel, output_dir, entry_filter=None, strip_prefix=None, entry_rules=None
-):
-    """Extract a locally downloaded archive file.
+def extract_zip(zf, out, rel, entry_rules):
+    for info in zf.infolist():
+        is_folder = info.filename.endswith("/")
+        name = None if is_folder else select_entry_path(info.filename, entry_rules)
+        if not name:
+            continue
+        dest = zip_destination(out, rel, name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(dest, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
-    .tar.gz  -- tarfile 'r:gz' (seekable, more efficient than streaming mode)
-    .tar.zst -- zstandard.stream_reader -> tarfile 'r|'
-    .zip     -- zipfile.ZipFile (seekable local file)
-    """
+
+def extract_local_archive(path, rel, output_dir, entry_rules):
+    """Extract the archive at ``path``, which the store names ``rel``, into ``output_dir``:
+    the entries that ``entry_rules`` select, at the paths they give."""
     out = Path(output_dir)
-    entry_rules = entry_rules or [(entry_filter, strip_prefix)]
-
     if rel.endswith(".tar.gz"):
         with tarfile.open(path, mode="r:gz") as tar:
-            _extract_tar(tar, out, rel, entry_rules=entry_rules)
-
+            extract_tar(tar, out, rel, entry_rules)
     elif rel.endswith((".tar.zst", ".tar.zstd")):
-        dctx = zstandard.ZstdDecompressor()
         with (
             open(path, "rb") as fh,
-            dctx.stream_reader(fh) as reader,
+            zstandard.ZstdDecompressor().stream_reader(fh) as reader,
             tarfile.open(fileobj=reader, mode="r|") as tar,
         ):
-            _extract_tar(tar, out, rel, entry_rules=entry_rules)
-
+            extract_tar(tar, out, rel, entry_rules)
     elif rel.endswith((".zip", ".jar")):
         with zipfile.ZipFile(path, "r") as zf:
-            for info in zf.infolist():
-                name = info.filename
-                if name.endswith("/"):
-                    continue
-                name = select_entry_path(name, entry_rules)
-                if not name:
-                    continue
-                dest = _zip_destination(out, rel, name)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(dest, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-
+            extract_zip(zf, out, rel, entry_rules)
     else:
         raise ArtifactsError(f"unsupported archive format: {rel}")

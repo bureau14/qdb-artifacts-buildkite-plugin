@@ -7,63 +7,38 @@
     <prefix>/<project>/<key>/failures/<build id>.json           a build of this key failed, and why
     <prefix>/<project>/<ref>/<platform>/<step id>               the branch's latest file: a key
 
-The destination names the bucket and the prefix. The key says what a build
-was built from; the platform (the option ``variant``) and the step id keep
-apart what the steps of one build make. A file keeps its path relative to the
-checkout, or to ``base_dir``. The latest file of a branch lies under its full
+The destination names the bucket and the prefix. A branch's latest file lies under its full
 ref, ``refs/heads/<branch>``, which no key starts with.
-
-Each kind of key has its own function, so the kind of a key follows from the
-function a caller names.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from typing import Any, NamedTuple
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 KEY_JSON = "key.json"
 MANIFEST = "manifest.json"
 FAILURES = "failures"
 
-# One path segment of one spelling. It starts with a letter because the agent
-# reads YAML 1.2, in which a plain 1e3 or 0889 is a number.
-STEP_ID_FORM = re.compile(r"[a-z][a-z0-9_]*")
+# It starts with a letter because the agent reads YAML 1.2, in which a plain 1e3 or 0889 is a
+# number.
+STEP_ID = re.compile(r"[a-z][a-z0-9_]*")
 
 
 def is_step_id(value: object) -> bool:
-    return isinstance(value, str) and STEP_ID_FORM.fullmatch(value) is not None
+    return isinstance(value, str) and STEP_ID.fullmatch(value) is not None
 
 
-def not_a_step_id(value: object) -> str:
-    """Why ``value`` names no folder, as a job and the plan step say it."""
-    return (
-        f'{value} is not a step id. A step id is lower-case letters, digits and "_", and '
-        "starts with a letter."
-    )
-
-
-class Folder(NamedTuple):
-    """One folder of a key: what one step made for one platform."""
+@dataclass(frozen=True, order=True)
+class Folder:
+    """One folder of a key: what the step ``step`` made for ``platform``."""
 
     platform: str
     step: str
 
     def __str__(self) -> str:
         return f"{self.platform}/{self.step}"
-
-
-def folder_document(f: Folder) -> dict[str, str]:
-    """A folder as JSON names it, in a failure record and in the steps that promote:
-    ``{"step", "variant"}``."""
-    return {"step": f.step, "variant": f.platform}
-
-
-def folder_of(d: Mapping[str, Any]) -> Folder:
-    """The folder ``folder_document`` wrote into ``d``."""
-    return Folder(d["variant"], d["step"])
 
 
 def parse_destination(destination: str) -> tuple[str, str]:

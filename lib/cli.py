@@ -1,105 +1,94 @@
 """What each hook phase does, decided from the step's options:
 
-    pre-command   check the step id of a step that uploads or promotes, so
-                  that a step without one fails before its command; download
-                  the step's download entries
-    post-command  a gate step runs its one gate command and nothing else; any
-                  other step uploads, when the step names files; then
-                  promotes, when the step names a platform to promote, its
-                  command passed and the upload was not empty
+    pre-command   fail a step that uploads or promotes without a step id, before its command;
+                  download the step's download entries
+    post-command  the plan step, its second run and the last step run their own command and
+                  nothing else; any other step uploads, then promotes when its command passed
+                  and the upload was not empty
 
-The hooks find Python and start this module with the name of their phase. The
-decisions are made here, in one process, so that whether to promote can depend
-on what the upload did. An ArtifactsError of the library ends the phase with
-"[artifacts] ERROR: <message>" and exit status 1.
+An ArtifactsError ends the phase with "[artifacts] ERROR: <message>" and exit status 1.
 """
 
+from __future__ import annotations
+
+import os
 import sys
+
+import dacite
 
 from .download import download
 from .errors import ArtifactsError
-from .options import (
-    check_step_id,
-    command_exit_status,
-    download_arguments,
-    download_requested,
-    gate_step,
-    promote_arguments,
-    promote_requested,
-    upload_arguments,
-    upload_requested,
-)
+from .job import Job, job_of
+from .options import Options, job_options, step_id_problems
 from .promote import promote
 from .upload import upload
 
 
-def section(title):
-    """Open a collapsible section of the job log. Flushed at once, because the
-    agent shows it among the progress lines that go to stderr."""
+def section(title: str) -> None:
+    """Open a collapsible section of the job log. Flushed at once, because the agent shows it
+    among the progress lines that go to stderr."""
     print(f"~~~ {title}", flush=True)
 
 
-def pre_command():
-    check_step_id()
-    if download_requested():
+def pre_command(job: Job, o: Options) -> int:
+    for problem in step_id_problems(o):
+        raise ArtifactsError(f"This step {problem}")
+    if o.download and o.download.projects:
         section(":arrow_down: Downloading artifacts")
-        download(**download_arguments())
+        download(job, o)
     return 0
 
 
-def run_gate_step(step):
-    """Run the gate command of a gate step: plan (enter), resume or leave.
+def run_plan_side(job: Job, o: Options) -> int:
+    """The command of the plan step, its second run or the last step. Imported here: the
+    planning side needs PyYAML, which only these steps install."""
+    from .snapshot.edge import real_edge
+    from .snapshot.last_step import last_step
+    from .snapshot.plan_step import plan_step, plan_step_again
 
-    It runs also after a failed command, whose failure it records. The imports
-    are here and not at the top: the planning half needs PyYAML, which only the
-    steps of plan and resume install, and no other job loads it. Leave imports
-    its own module only, which reads no document.
-    """
-    section(f":camera_with_flash: Snapshot {step.kind}")
-    if step.kind == "leave":
-        from .snapshot import leave
-
-        return leave.run()
-    from .snapshot import enter
-
-    return enter.run(step.kind, step.pipeline)
+    if o.leave:
+        section(":camera_with_flash: Snapshot: the last step")
+        return last_step(job, real_edge())
+    if o.plan:
+        section(":camera_with_flash: Snapshot: the plan step")
+        return plan_step(job, real_edge(), o.plan)
+    section(":camera_with_flash: Snapshot: the plan step's second run")
+    return plan_step_again(job, real_edge(), o.resume)
 
 
-def post_command():
-    """A gate step's gate command; for any other step upload, then promote, each when due.
-
-    An upload runs also after a failed command: the files of a failed build are
-    evidence. Promoting says "this build is good to use", so it needs a passed
-    command and an upload that was not empty.
-    """
-    step = gate_step()
-    if step is not None:
-        return run_gate_step(step)
-    if upload_requested():
+def post_command(job: Job, o: Options) -> int:
+    """An upload runs also after a failed command: the files of a failed build are evidence.
+    Promoting says "this build is good to use", so it needs a passed command and an upload
+    that was not empty."""
+    if o.plan or o.resume or o.leave:
+        return run_plan_side(job, o)
+    if o.upload and o.upload.files:
         section(":arrow_up: Uploading artifacts")
-        if not upload(**upload_arguments()):
+        if not upload(job, o):
             section("Skipping artifact promotion (empty upload)")
             return 0
-    if not promote_requested():
+    if not o.promote:
         return 0
-    status = command_exit_status()
-    if status != 0:
-        section(f":warning: Skipping artifact promotion (command exited {status})")
+    if job.exit_status != 0:
+        section(f":warning: Skipping artifact promotion (command exited {job.exit_status})")
         return 0
     section(":pushpin: Promoting artifacts")
-    promote(**promote_arguments())
+    promote(job, o)
     return 0
 
 
 PHASES = {"pre-command": pre_command, "post-command": post_command}
 
 
-def main():
+def main() -> int:
     argv = sys.argv[1:]
     try:
         if len(argv) != 1 or argv[0] not in PHASES:
             raise ArtifactsError(f"expected one of {sorted(PHASES)}, got {argv}")
-        return PHASES[argv[0]]()
+        return PHASES[argv[0]](job_of(os.environ), job_options(os.environ))
+    except dacite.DaciteError as error:
+        print(f"[artifacts] ERROR: the plugin's options: {error}", file=sys.stderr)
+        return 1
     except ArtifactsError as error:
         print(f"[artifacts] ERROR: {error}", file=sys.stderr)
         return 1
