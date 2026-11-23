@@ -337,19 +337,13 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 ## How it works
 
-| Hook            | Trigger                 | Action                                                                                                                                                                                                                                                                                                     |
-| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `post-checkout` | After repo checkout     | Prints the path and version of the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, fails when that is not set or names nothing that runs, and makes the step's venv anew with it: `<plugin-dir>/.venv` with the dependencies from `lib/requirements.txt`, or the venv of the plan step, described below. |
-| `pre-command`   | Before the step command | If `download`, `upload` files or a `promote` platform are configured, runs `artifacts.py pre-command`, which fails a step that uploads or promotes without a step id, then downloads (and optionally extracts) the files of the steps each entry takes.                                                    |
-| `post-command`  | After the step command  | If `upload` files or a `promote` platform are configured, runs `artifacts.py post-command`. It uploads matched files to S3/R2, including after a failed command, then promotes only after a successful command and an upload that was not empty.                                                           |
+| Hook            | Action                                                                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `post-checkout` | Makes the step's virtual environment with the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, and fails when that names nothing that runs.                                         |
+| `pre-command`   | Fails a step that uploads or promotes without a step id, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched.                   |
+| `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty. |
 
-`pre-command` and `post-command` start `artifacts.py` with the Python of the venv that `post-checkout` made, and the name of their phase; `lib/cli.py` decides what the phase runs.
-
-On the plan step, its second run and the last step of a build (option `plan`, `resume` or `leave`), `post-command` runs that step's command of the plugin, also after a failed command, and nothing else. `post-checkout` installs `lib/snapshot/requirements.txt` (PyYAML) besides `lib/requirements.txt` on the steps that carry `plan` or `resume`, and on no other step: no other job needs it, on any platform. Those steps make their venv in `<plugin-dir>/.venv-snapshot`: every job of one plugin commit on a host shares the plugin's checkout and makes its venv again, and no other job's venv then replaces theirs.
-
-### Failed builds
-
-If the build command exits with a non-zero status, `post-command` still uploads configured artifacts, making logs and other diagnostic outputs available. It never promotes those artifacts, so a step's manifest says promoted, and a branch's latest file names a key, only for a build whose command succeeded.
+The plan step, its second run and the last step of a build (options `plan`, `resume` and `leave`, see [Snapshot dependencies](#snapshot-dependencies)) run their own command in `post-command` and nothing else. They install `lib/snapshot/requirements.txt` besides `lib/requirements.txt`, into a virtual environment of their own.
 
 ### The bucket
 
@@ -361,55 +355,13 @@ If the build command exits with a non-zero status, `post-command` still uploads 
 <prefix>/<project>/refs/heads/<branch>/<platform>/<step id> the branch's latest file: its text is a key
 ```
 
-**The key** says what a build was built from: the 40 hex digits of the
-project's commit, a dash, and the first 32 hex digits of the SHA-256 of
-`key.json`, the canonical JSON (members sorted, no white space, UTF-8) of
-`{"commit": <40 hex>, "deps": [[<project>, <key>], ...], "project": <slug>}`.
-`deps` holds the key of the build taken of each snapshot dependency, and the
-key read for each step a latest successful download takes, each pair once,
-sorted. It holds no name of a branch or a tag, so builds of one commit that
-take the same keys share a key under any name. A key of one build's own also
-holds `"build": "<build id>"`, so that no other build has it. The plan step of
-the first build of a chain computes the key of every build of the chain; a
-build started for a dependency takes its key from the plan. Each build's plan
-step writes its key as the option `key` into every configuration of the
-plugin, and creates `key.json` once. A build without a plan step has no `key`
-option: each of its jobs computes the key of its own build (its project, the
-commit of its checkout, no dependency, its build id), and its first upload
-creates that `key.json`.
-
-**The manifest** of a step's folder, canonical JSON:
-`{"files": [{"path", "size"}, ...], "promoted": null or {"at", "branch", "id", "number", "url"}, "uploaded": {"branch", "id", "number", "url"}}`.
-An upload writes the files, reads the manifest again, and writes it with
-`promoted` null: the step is captured. An upload into a folder whose manifest
-says promoted writes nothing and counts as empty, so the promote of its step
-does not run. A promote writes the manifest back once, with this build, its
-branch and the time: the step is made at the key, and the first promote wins.
-A promote that finds the folder promoted already leaves it as it is.
-
-**The branch's latest file** names the key of the latest build of a branch
-that made a step for a platform. A promote writes it right after it promoted,
-under `refs/heads/<BUILDKITE_BRANCH>`, also when that name is a tag's; the
-last writer wins. The plan step writes it too, for each step it finds made at
-its key, when git names the build's commit as the newest of its branch, or as
-its tag's: so a branch cut at, or a tag put on, built commits gets its latest
-files at its first build. A build started for a dependency writes them only
-when its plan says so (see
-[Who writes a branch's latest files](#who-writes-a-branchs-latest-files)); its
-variable `SNAPSHOT_BRANCH_BUILD` carries that answer to its promotes and its
-plan step.
+- **The key** says what a build was built from: the project's commit, a dash, and 32 hex digits of the SHA-256 of `key.json`, the canonical JSON of `{"commit", "deps": [[<project>, <key>], ...], "project"}`. `deps` holds the key of every build it downloads from another project. It holds no branch or tag, so builds of the same commits share a key under any name. Reading `key.json` down from any key gives every commit of its tree. A build without a plan step computes a key of its own, with `"build": "<build id>"` in it.
+- **The manifest** names a step's files and the build that uploaded them (`files`, `uploaded`), and, once a promote made them official, the build that promoted them (`promoted`). The first promote wins and nothing changes a promoted manifest: an upload into a promoted folder writes nothing. A download takes the files the manifest names.
+- **The branch's latest file** names the key of the latest build of a branch that made a step for a platform. A promote writes it; the last writer wins.
 
 ### What a build shows of its downloads
 
-The job's log names, for each download entry and each step it takes, as soon
-as it finds the step and before its files: the branch and the latest file it
-read, when it read one, which a job does for an entry of its own project at
-another branch and for an entry of another project in a build without a plan
-step; the key; the commit, which is the key's first 40 hex digits; and the
-build that promoted the step, by number and URL. An entry none of whose steps
-gives a file fails after these lines. A step of the job's own build that a
-later step promotes is still captured when it is read, and its line names the
-build that uploaded it.
+For each step a download takes, the job's log names the key, its commit and the build that promoted the step, and the branch and latest file it read when it read one. The job annotates the build with the same facts.
 
 ```text
 [artifacts] Download entry 1 (quasardb, linux-amd64-release), step build:
@@ -419,57 +371,17 @@ build that uploaded it.
 [artifacts]   promoted = build 1234 https://buildkite.com/<organization>/quasardb/builds/1234
 ```
 
-After its last entry the job annotates the build, under the context
-`artifacts-downloads`, with the same facts, one line per entry and step; an
-upload of the same job annotates under the context `artifacts`, so neither
-replaces the other. A failed annotation is logged and fails nothing.
-
 ## Snapshot dependencies
 
-A build that downloads the artifacts of another pipeline gets them from the
-build of exactly the commits the first build of its chain planned, and every
-job of a chain of builds downloads them at the same keys. A repository
-configures nothing for this beyond what its step templates already say: which
-project each step downloads, and the step id of each step that uploads.
+A build that downloads the artifacts of another pipeline gets them from a build of exactly the commits it planned, and every job of the build and of the builds it starts downloads them at the same keys. What is already built at those keys is not built again. A repository configures nothing beyond what its step templates say: which project each step downloads, and the step id of each step that uploads.
 
-### Words
+A **project** is a Buildkite pipeline, named by its slug; a **platform** is what `variant` names. The **plan step** is the first step of a build whose `pipeline.py` hands its pipeline to the runner (`qdb_pipeline.run`, qdb-cicd-tools); the **last step** runs after every other step. The **first build** is one a person, a push or a schedule started; its plan step makes the **plan**: the commit and key of its project and, recursively, of every snapshot dependency. A build the plan step starts for a dependency reads that plan.
 
-- A **project** is a Buildkite pipeline, named by its slug. A **platform** is
-  what the option `variant` names, such as `linux-amd64-release`; a **step
-  id** names what one step uploads for one platform.
-- The **key** of a build says what it was built from (see
-  [The bucket](#the-bucket)). A step is **made** at a key when its manifest
-  there says promoted; nothing changes a promoted manifest.
-- The **plan step** is the first step of a build of a `pipeline.py` that
-  hands its pipeline to the runner; its **second run** goes on once the builds
-  it started have ended, and the **last step** runs after every other step.
-  The name of a build is Buildkite's branch field, `BUILDKITE_BRANCH`.
-- The **first build of a chain** is a build with a plan step that no plan
-  step started: one a person, a push or a schedule started, without
-  `SNAPSHOT_PLAN` in its environment. Its plan step makes the **plan**: the
-  commit, the key and the step ids of every project of its snapshot tree,
-  whether a build of it writes its branch's latest files, and the keys it
-  read for its own latest successful downloads. A **build started for a
-  dependency** is one a plan step started, with `SNAPSHOT_PLAN`, the first
-  build's id, in its environment; a **chain** is a first build and the builds
-  started for it.
-- Every build runs under the name of its git ref: a build started for a
-  dependency under the name of the ref the plan took it from, a branch's or
-  a tag's, so a build taken from `refs/heads/master` runs as `master`.
-- The first build writes its branch's latest files. A build started for a
-  dependency writes them when its **own build**, the one a person would start
-  on its branch at its commit, would take every project below it at the
-  commit the plan takes it at (see
-  [Who writes a branch's latest files](#who-writes-a-branchs-latest-files)).
+### Two kinds of dependency
 
-### Two types of dependency
+A download entry of another project, in a committed `.yml` or `.yaml` file under `.buildkite/`, declares a dependency.
 
-A download entry of another project declares a dependency when it is in a
-committed `.yml` or `.yaml` file under `.buildkite/`, under a key that names
-the plugin exactly: `bureau14/qdb-artifacts` or `bureau14/qdb-artifacts#<ref>`.
-Whether the entry says `latest: true` gives its type.
-
-A **snapshot** dependency does not:
+A **snapshot** dependency is planned, and built when its key has no build yet:
 
 ```yaml
 download:
@@ -480,268 +392,73 @@ download:
       files: ["*-c-api.tar.zst"]
 ```
 
-Before any job runs, the plan step writes into the entry the key of the
-planned build for each step it takes, as `keys`, in place of its `step`,
-`git_ref` and `require_strict_ref_match`. An entry without `step` takes every
-step id the dependency's templates promote at the planned commit, which the
-plan carries. A `git_ref` that is literal text in the template, such as
-`refs/heads/3.14.x`, is a pin: the project is planned at that ref for the
-whole chain. A ref that only `pipeline.py` gives, through `by_project` for
-example, is no pin: the plan step reads templates and never runs another
-repository's `pipeline.py`.
+Before any job runs, the plan step writes the planned key of each step the entry takes into it, as `keys`, in place of `step`, `git_ref` and `require_strict_ref_match`. An entry without `step` takes every step id the dependency's templates promote. A `git_ref` that is literal text, such as `refs/heads/3.14.x`, is a pin: the project is planned at that ref in the whole plan.
 
-A **latest successful** dependency says `latest: true`:
+A **latest successful** dependency says `latest: true`. It is not planned and never built: the plan step reads the key of each step it takes from the latest files of its `git_ref`, then of master and main (in a build at a tag, of its `git_ref` alone), once, and every job takes those keys. A download that finds no latest file fails the plan step. A project with a latest successful dependency cannot itself be a snapshot dependency of another.
 
-```yaml
-download:
-  projects:
-    - project_id: "quasardb"
-      latest: true
-      variant: "linux-amd64-release"
-      git_ref: "{git_ref}"
-      files: ["*-c-api.tar.zst"]
-```
+### Where a dependency is taken from
 
-It is not planned and not triggered. The plan step of the first build reads
-it once, before it plans: the key of each step it takes, through the latest
-files of the ref, then of master and main, as a job would (see
-[Download](#download-cross-project-with-extraction-and-entry-filtering)), or
-of the ref alone in a build at a tag. It writes those keys into the entry as
-`keys`, into the first build's `key.json` and into the plan, so that every
-job of the first build and its second run take the same keys, and the first
-build is reused while the latest files name the same keys. A download that
-finds no latest file fails the plan step before anything runs, and names the
-latest files, or for an entry without `step` the folders, it read. No project
-can take a project that holds a latest successful dependency as a snapshot
-dependency: such a project is planned only as the first build of a chain.
+The first build is taken at the commit its checkout holds. A dependency is taken from its pin; else:
 
-### Where each dependency is taken from
+- **in a build on a branch**, from the first of these its repository has: that branch, the release line of the first build's commit (a branch named `master`, `main` or `<digits>.<digits>.x`), `master`, `main`;
+- **in a build at a tag** (started with the tag's name in Buildkite's branch field), from the same tag and nothing else.
 
-The plan step of a first build asks git once whether its name is a branch or
-a tag of its repository, with the commit of each, an annotated tag peeled. A
-name that is both is the branch.
-
-- **On a branch**, a dependency without a pin is taken from the first of
-  these that its repository has: the branch of that name, the release line
-  of the first build's commit (a branch named `master`, `main` or
-  `<digits>.<digits>.x`), `master`, `main`.
-- **At a tag** (a build at a tag: start it with the tag's name in Buildkite's
-  branch field, and its tag field empty), every dependency without a pin is
-  taken from the same tag and from nothing else. A repository without the tag
-  fails the plan step before anything runs, and the message names it. A
-  latest successful download reads the latest files of its own `git_ref`
-  alone, which is the tag's name when the template writes `{git_ref}`.
-- **Under a name that is neither** (a Rebuild of a build of a deleted
-  branch), the build is planned as on the branch it names; git names no
-  commit for it, so its plan step writes no latest file of a step it finds
-  made.
-
-A pin wins over each of these. The first build itself is taken at the commit
-its checkout holds. A build at a tag reuses what any build made of the same
-commits, and its promotes write the latest files of the tag's name,
-`refs/heads/<tag>`.
+Every build runs under the name of its git ref, so a build started for a dependency taken from `refs/heads/master` runs as `master`.
 
 ### Who writes a branch's latest files
 
-The first build writes its branch's latest files. For each build started for a
-dependency, the first build's plan step places the projects below that build
-as its own build would place them: by the rules above, from its ref, with the
-pins of its templates and of the projects below it, and without a pin that a
-project above it writes. For this it asks git nothing more than it asked to
-make the plan. The build writes its branch's latest files when every project
-below it is placed at the commit the plan takes it at. It writes none when one
-is placed at another commit, when its own build could not be planned, or when
-placing it would need an answer that git did not give the plan step.
+The first build does. A build started for a dependency does when the build a person would start on its branch at its commit would take every project below it at the commit the plan takes it at: from that branch, from its release line, `master` or `main` where a repository lacks the branch, or from a pin its own templates or those below it write. The plan step hands the answer to the started build as `SNAPSHOT_BRANCH_BUILD`.
 
-The own build's release line is its branch when that branch is a release line.
-On the first build's branch it is the first build's line, in the first build's
-repository and in each repository that has a branch of that line's name. In
-another repository, or on another branch, it has none, and a dependency
-without a pin is taken from its branch alone, never from `master` or `main`.
+A plan step that finds steps already made at its key also points its branch's latest files at that key, when git names the build's commit as its branch's newest: so a branch cut at built commits gets its latest files at its first build, and an older build that runs again does not move them back.
 
 ### What a repository changes to adopt
 
-- Its `.buildkite/pipeline.py` hands its pipeline to the runner of
-  `qdb_pipeline` (qdb-cicd-tools). The runner, on its own caller, and the plan
-  step, on every dependency, apply one rule: a pipeline.py has the shape when
-  its bytes contain qdb_pipeline and run(generate_pipeline). The file ends as
-  the runner's README shows:
+- Its `.buildkite/pipeline.py` ends with the runner, and its configuration in Buildkite runs `.buildkite/pipeline.py | buildkite-agent pipeline upload`:
 
   ```python
   from qdb_pipeline import run
-
-  ...
 
   if __name__ == "__main__":
       run(generate_pipeline)
   ```
 
-- Its configuration in Buildkite runs
-  `.buildkite/pipeline.py | buildkite-agent pipeline upload`: the plan step
-  looks for that text in it.
-- Every template of a step that uploads writes `step_id: <id>` in place of
-  its key. The step ids of a commit are those its templates' steps promote
-  (a promote block's `step`, else the step's own `step_id`) that some
-  template writes as `step_id`; a `step_id` that is not a step id fails the
-  plan step like a template that does not parse.
-- Every download of another project that its generated pipeline makes is in a
-  committed template, with the same type; the `git_ref` of a snapshot download
-  is the build's own ref, `refs/heads/<BUILDKITE_BRANCH>`, or a pin written in
-  a committed template; a latest successful download names a `git_ref`, as a
-  job without a plan step needs; every upload and promote names a step id;
-  and no key names the plugin another way (`Bureau14/qdb-artifacts`, say). The
-  plan step fails a build whose pipeline breaks this rule, and names the step
-  and why; a download at `refs/tags/<tag>` comes from Buildkite's tag field,
-  and the message says to start the build with the tag's name in the branch
-  field.
-- Every step id its pipeline promotes is one its templates write as
-  `step_id`, since the builds that depend on it read its steps from them; one
-  step promotes each step id of a platform.
-- A snapshot download without `step` takes a dependency whose templates
-  promote step ids; of one that promotes none, it names the steps or goes.
-- A project that others take as a snapshot dependency holds no latest
-  successful dependency itself.
+- Every template of a step that uploads writes `step_id: <id>` in place of its key.
+- Every download of another project that its pipeline generates is in a committed template, of the same kind. A snapshot download writes the build's own ref (`"{git_ref}"`) or a pin; a latest successful download names a `git_ref`.
+- One step promotes each step id of a platform.
 
-A build that breaks one of these fails before anything is built. A build
-started for a dependency also writes a failure record of reason `rule` under
-its key; a first build writes one only for what its plan step checks once the
-plan has given it its key: the step ids its pipeline promotes and its
-downloads without `step`.
-
-A dependency that cannot give a snapshot fails the plan of the first build
-before anything is triggered. The message names who needs it, which condition
-failed and the way out, which includes this one: the dependent takes it as a
-latest successful dependency. A dependency whose ref its repository does not
-have fails the plan the same way. A template of a dependency that does not
-parse fails the plan step with an error that names the project and the file.
-
-A build started for a dependency that is asked for a step one of its platforms
-does not make refuses it before anything is built, and its failure record
-names the steps refused and what it makes on that platform. The build that
-asked fails and names the template of its entry and the steps the entry takes:
-the list to write in it, as `step: [build]`, of the steps made on every
-refused platform that makes any, else one list per platform; or, on a platform
-for which the dependency makes nothing, the download to remove. So does the
-first build.
+The plan step fails a build whose generated pipeline breaks one of these, before anything is built, and names the step and the reason. It also fails, and names the way out, when a dependency cannot be part of a snapshot: its repository lacks the ref, its `pipeline.py` does not end with the runner, or it holds a latest successful dependency.
 
 ### How a build runs
 
-1. The runner prints, in place of the pipeline, the plan step, which carries
-   `plan`, and the last step, which carries `leave`. Both are in one
-   concurrency group per pipeline and commit, so the builds of one commit
-   pass the plan step one after the other.
-2. The plan step: its command generates the pipeline, then the plugin plans. A
-   first build asks git where its name is, reads the keys of its latest
-   successful downloads, makes the plan and keeps it as meta-data of its own
-   build; a build started for a dependency reads the first build's. Then the
-   build creates its `key.json`, from the plan alone. When git names its
-   commit as the newest of its branch, or as its tag's, and the build writes
-   its branch's latest files, it points the latest files of its name at its
-   key for every step made there (see [The bucket](#the-bucket)). A build
-   whose pipeline promotes at least one step, and whose every step and
-   platform asked for is made at its key, is reused and builds nothing. Else
-   the dependencies that lack a step are triggered, with the plan step's
-   second run, which carries `resume`. Else the pipeline is uploaded with the
-   key of every step a download of another project takes, and its own key,
-   written into it.
-3. The second run: once the triggered builds have ended, it uploads the
-   pipeline, or fails and names the dependency that failed.
-4. The jobs download, upload and promote at those keys. A step that promotes
-   makes its folder at the key after its command passed and its upload, if it
-   names files, was not empty.
-5. The last step runs after every other step and records the steps whose job
-   did not pass.
+1. The runner prints, in place of the pipeline, the plan step and the last step. Both are in one concurrency group per pipeline and commit.
+2. The plan step's command generates the pipeline; then the plugin plans. A build whose every step is made at its key builds nothing. Else the dependencies that lack a step are started, each as a build of its own pipeline, and the plan step runs a second time when they have ended. Else the pipeline is uploaded, with the key of every step a download takes and the build's own key written into it; a step whose folders are all made is replaced by one that names the build that made them.
+3. The jobs download, upload and promote at those keys.
+4. The last step records the steps that did not pass.
 
-A key some of whose steps are made builds only what is missing: a job all of
-whose folders are made is replaced by one that names the build that made them.
+The plan step's page lists the build's project and every project below it with its commit, ref and key, and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs.
 
-The page of a plan step, of a first build or of a build started for a
-dependency alike, lists the build's project and each project below it in the
-plan, with its commit, ref, key and whether its build writes the latest files
-of its branch, and each download of the pipeline's own project at another
-branch, which its job reads when it runs: the key leaves such a download out,
-so a reused build does not take it again.
+### Variables
 
-### Variables a person can set
+| Variable                | Set by                              | Meaning                                                                                              |
+| ----------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `SNAPSHOT_REBUILD`      | a person                            | `1`: the first build builds again, under a key of its own. `all`: so does every project of its plan. |
+| `SNAPSHOT_PLAN`         | the plan step, on a build it starts | The first build's id, whose meta-data holds the plan.                                                |
+| `SNAPSHOT_NEEDS`        | the same                            | The platforms and step ids the dependent downloads.                                                  |
+| `SNAPSHOT_BRANCH_BUILD` | the same                            | `false`: the build writes no latest file of its branch.                                              |
 
-| Variable               | Effect                                                                                                                                   |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT_REBUILD=1`   | The first build builds again, under a key of its own; its dependencies are reused.                                                       |
-| `SNAPSHOT_REBUILD=all` | Every project of the tree builds again, each under a key of the first build's own. Any other value of `SNAPSHOT_REBUILD` fails the plan. |
+The plan step of a first build asks Buildkite's API (scope `read_pipelines`) for the repository and configuration of every pipeline of its plan, with the token in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter `/services/buildkite/credentials/artifacts/buildkite-api-token`.
 
-A forced build serves its own chain: later builds of the same commits take the
-earlier keys. In a build that writes its branch's latest files, its promotes
-move them to the forced key, until the next build of that project at the
-branch's newest commit points them back at the earlier one.
+### When a build fails
 
-The plan step of a first build asks Buildkite's API (`read_pipelines`) for the
-repository and the configuration of every pipeline of its tree, with the token
-in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter
-`/services/buildkite/credentials/artifacts/buildkite-api-token`, and tries a
-call again on no answer, 429 and 5xx, five times in all. A build started for a
-dependency asks nothing of Buildkite's API.
+A build that failed says why on its page. Its own steps that did not pass are named; a dependency that failed is followed down its failure records to the builds that failed, and the page ends with how to retry. A build that failed before it built, for its generator or its pipeline, is no job to retry.
 
-### What is stored, and where
-
-| What                 | Where                                                      | Written                                                                                                                                                                         |
-| -------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| key.json             | `<project>/<key>/key.json` in the bucket                   | once, by the plan step; without one, by each job's first upload                                                                                                                 |
-| manifest             | `<project>/<key>/<platform>/<step id>/manifest.json`       | by each upload; once promoted, by the first promote                                                                                                                             |
-| branch's latest file | `<project>/refs/heads/<name>/<platform>/<step id>`         | by each promote, and by the plan step for the steps it finds made at the newest commit of its branch or at its tag's; never in a build whose `SNAPSHOT_BRANCH_BUILD` is `false` |
-| failure record       | `<project>/<key>/failures/<build uuid>.json` in the bucket | once, by the plan step, its second run or the last step of a build that has its plan                                                                                            |
-| plan                 | meta-data `snapshot-plan` of the first build               | by the first build's plan step; a retried plan step writes it again                                                                                                             |
-| state                | meta-data `snapshot-mode` and `snapshot-promotes`          | by the plan step and its second run, for the last step                                                                                                                          |
-| arrival              | meta-data `snapshot-arrived`                               | by the runner, when it prints the plan step                                                                                                                                     |
-
-The plan goes away with the first build; what lies under a key stays. A build
-has four variables of this plugin:
-
-| Variable                | Set by                                                                                                     | Read by                                                                                                                                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT_PLAN`         | the trigger step that starts a build for a dependency: the first build's uuid                              | the plan step, which reads the plan from that build's meta-data                                                                                                                                 |
-| `SNAPSHOT_NEEDS`        | the same trigger step: the platforms and step ids its dependent downloads                                  | the plan step                                                                                                                                                                                   |
-| `SNAPSHOT_BRANCH_BUILD` | the same trigger step: `true` or `false`, whether the plan says the build writes its branch's latest files | every promote, and the plan step for the steps it finds made; any text but `false`, and unset, as in a build a person or a push starts, or a build of only part of a pipeline, counts as `true` |
-| `SNAPSHOT_REBUILD`      | a person (see [Variables a person can set](#variables-a-person-can-set))                                   | the plan step of a first build                                                                                                                                                                  |
-
-`SNAPSHOT_BRANCH_BUILD` is the build's answer for both writers of its latest
-files, so they agree also when the first build's plan was written again after
-the build was started.
-
-### What a failed build shows
-
-A build that failed for its snapshot says why on its build page. A failure of
-its own names the steps that did not pass; a dependency that failed is
-followed down its failure records to the builds that failed. The annotation
-ends with how to retry. For one failed build: "To retry: retry the failed job
-in `<pipeline>` `<number>`. When it passes, start a new build of `<first
-build's pipeline>`. Everything that passed is reused." For several it names
-each; with none it says to start a new build of the first build's pipeline
-when the cause is fixed. A build that failed before it built, for its
-generator, its rule or a step it does not make, is no job to retry: a retry
-cures none of these.
-
-If a snapshot fails, it fails everywhere: a step whose job hard failed fails,
-without compiling it again, every build of that key in a chain whose first
-build arrived at the plan step more than 5 seconds before the failure was
-recorded, also one that waited at the plan step meanwhile and one that
-reaches the dependency later. A first build that arrived later, or 5 seconds
-or less before the failure, builds the key again. Within one chain a key is
-built at most once.
+A failed step is not built twice for nothing: a build that needs a key whose build failed under the same plan fails at once, and so does a build that waited while another build of the same key failed. A first build started after that failure builds the key again.
 
 ### Limits
 
-- The plan step, its second run and the last step name no agents, so they run
-  on the default queue.
-- A plan is one meta-data value; the plugin sets no limit on its size, and a
-  value that the agent refuses fails the first build with the agent's message.
-- A build of only part of its pipeline (picked by `QDB_PIPELINE_FILTER`, or by
-  its build message) runs without the plan step.
-- In a build without a plan step, what a download of another project takes is
-  decided when its job runs.
-- A branch of one name is taken to have left the same release line in every
-  repository that has that line. Where it did not, a build started for a
-  dependency on the first build's branch may write latest files that its
-  branch's own build would not, until that build runs.
+- The plan step, its second run and the last step name no agents, so they run on the default queue.
+- A build of only part of its pipeline (picked by `QDB_PIPELINE_FILTER`, or by its build message) runs without the plan step; what its downloads of another project take is decided when each job runs.
+- A branch of one name is taken to have left the same release line in every repository that has it. Where it did not, a build started for a dependency may write latest files that its branch's own build would not, until that build runs.
 
 ## Resolve and download artifacts outside the plugin
 
@@ -760,11 +477,10 @@ The following example uses S3 with the standard AWS credential chain. Replace
 environment variables or SSM configuration are required:
 
 ```python
-from vendor.qdb_artifacts.lib import Branch, ObjectAuth, StoreConfig, resolve_artifacts
+from vendor.qdb_artifacts.lib import Branch, StoreConfig, resolve_artifacts
 
 bucket, resolved, objects = resolve_artifacts(
     cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
-    auth=ObjectAuth(),
     project_id="quasardb",
     variant="linux-amd64-release",
     step="build",
@@ -803,11 +519,10 @@ Use `download_artifacts` to resolve and download one step's artifacts in a
 single call, without plugin configuration or a separate call to `resolve_artifacts`:
 
 ```python
-from vendor.qdb_artifacts.lib import Key, ObjectAuth, StoreConfig, download_artifacts
+from vendor.qdb_artifacts.lib import Key, StoreConfig, download_artifacts
 
 bucket, resolved, objects = download_artifacts(
     cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
-    auth=ObjectAuth(),
     project_id="quasardb",
     variant="linux-amd64-release",
     step="build",
@@ -828,10 +543,9 @@ resolver, after all transfers complete. It creates the output directory if neede
 but does not clean it; the plugin's `clean` option remains handled by its wrapper.
 
 To reuse the plugin's environment/SSM backend configuration, including R2,
-import `load_store_config` and `resolve_object_auth` from `vendor.qdb_artifacts.lib`, and use
-`load_store_config(ssm)` and
-`resolve_object_auth(ssm, cfg, permission="object-read-only")` to obtain `cfg` and
-`auth` instead of constructing them directly.
+import `ssm_client` and `load_store_config` from `vendor.qdb_artifacts.lib`,
+and use `load_store_config(ssm_client())` to obtain `cfg` instead of
+constructing it directly. For R2 the configuration holds the access key.
 
 ### Read the manifest of a step
 
@@ -843,10 +557,8 @@ the promote wrote: `files`, `uploaded` and `promoted` (see
 ```python
 from vendor.qdb_artifacts.lib import read_manifest
 
-manifest = read_manifest(cfg, auth, bucket, resolved)
+manifest = read_manifest(resolved)
 ```
-
-It returns `None` when the step's folder has no manifest.
 
 ### Errors
 
