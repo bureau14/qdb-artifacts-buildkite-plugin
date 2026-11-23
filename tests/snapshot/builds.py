@@ -282,8 +282,8 @@ def generated(template_text: str, ref: str) -> str:
 
 @dataclasses.dataclass
 class Project:
-    """What a project's repository says: its dependencies, platforms, step ids and how it
-    adopted."""
+    """What a project's repository says: its dependencies, platforms, step ids and its
+    ``pipeline.py``."""
 
     deps: tuple
     variants: tuple
@@ -539,7 +539,7 @@ class World:
             branch=build.branch,
             tag=None,
             build=build.info,
-            command="generate",
+            command="download",
             exit_status=0,
             root_build=build.env.get("SNAPSHOT_PLAN"),
             needs=build.env.get("SNAPSHOT_NEEDS"),
@@ -556,8 +556,8 @@ class World:
         return "passed"
 
     def plan_step_run(self, build: Build, step: dict, kind: str, decide) -> str:
-        """The plan step or its second run: the command generates the pipeline, the plugin
-        decides, and what it uploads joins the build after this step."""
+        """The plan step or its second run: the command puts the generated pipeline in the
+        checkout, the plugin decides, and what it uploads joins the build after this step."""
         path = self.directory / f"{build.project}-{build.number}-{kind}.yml"
         text = self.hosting.trees[build.commit][".buildkite/steps.yml"].decode()
         path.write_text(generated(text, branch_ref(build.branch)))

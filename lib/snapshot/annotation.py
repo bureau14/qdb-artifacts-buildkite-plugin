@@ -12,7 +12,7 @@ from ..forms import name_of
 from ..job import Build
 from ..layout import Folder
 from .plan import Plan, short_commit, trigger_label
-from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Cause, Record
+from .records import NOT_DECLARED, RULE, Cause, Record
 
 INDENT = "  "
 
@@ -89,7 +89,6 @@ PLAN_REFUSED = "plan"
 STEP_ERROR = "error"
 
 REFUSAL_HEADINGS = {
-    GENERATOR_FAILED: "The pipeline generator of `{project}` build {number} failed",
     RULE: "The generated pipeline of `{project}` build {number} breaks the rule of its templates",
     NOT_DECLARED: "`{project}` build {number} was asked for a step it does not make",
     PLAN_REFUSED: "The snapshot plan of `{project}` build {number} cannot be made",
@@ -109,7 +108,6 @@ def refusal_annotation(kind: str, project: str, build: Build, message: str) -> s
 # ---------------------------------------------------------------------------
 
 REASON_TEXTS = {
-    GENERATOR_FAILED: "its pipeline generator failed",
     RULE: "its generated pipeline breaks the rule of its templates",
     NOT_DECLARED: "it was asked for a step it does not make",
 }

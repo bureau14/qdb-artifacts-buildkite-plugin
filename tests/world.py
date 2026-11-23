@@ -47,7 +47,7 @@ R2 = {
     "ARTIFACTS_R2_SECRET_ACCESS_KEY": "test-r2-secret-access-key",
 }
 OPTION_PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
-GENERATED = ".buildkite/snapshot-pipeline.yml"
+GENERATED = "pipeline.yml"
 MASTER = "refs/heads/master"
 TOKEN = "bkua_" + "0f1e2d3c4b5a6978" * 2
 # A hook of a test takes about a second; one that retries a store it cannot reach is stopped.

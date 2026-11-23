@@ -16,9 +16,8 @@ from ..forms import iso_utc
 from ..job import Build
 from ..layout import Folder
 
-# Why a build failed before it built: its generator failed, its generated pipeline breaks the
-# rule, or it was asked for a step it does not make.
-GENERATOR_FAILED = "generator_failed"
+# Why a build failed before it built: its generated pipeline breaks the rule, or it was asked
+# for a step it does not make.
 RULE = "rule"
 NOT_DECLARED = "not_declared"
 

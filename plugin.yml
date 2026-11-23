@@ -130,7 +130,7 @@ configuration:
         - projects
     plan:
       type: string
-      description: "Written by the runner (qdb_pipeline.run), never by a person: the plan step, the first step of a build of a pipeline.py that hands its pipeline to the runner, and the path of the pipeline its command generated. After the command the plugin plans the build, then uploads that pipeline with the key of every step a download takes written into it, or the trigger steps of the dependencies that are built first."
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the plan step, the first step of a build of a pipeline.py that hands its pipeline to the runner, and the path at which its command puts the generated pipeline. After the command the plugin plans the build, then uploads that pipeline with the key of every step a download takes written into it, or the trigger steps of the dependencies that are built first."
     resume:
       type: string
       description: "Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. It uploads that pipeline, or fails and names the dependency that failed."

@@ -251,17 +251,17 @@ steps:
 
 ### Top-level keys
 
-| Key        | Type    | Description                                                                                                                                                                                                                                                                |
-| ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `step`     | string  | The step id of a step that uploads or promotes. Required for those steps. See [Usage](#usage).                                                                                                                                                                             |
-| `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                                                                    |
-| `upload`   | object  | Upload configuration block.                                                                                                                                                                                                                                                |
-| `download` | object  | Download configuration block.                                                                                                                                                                                                                                              |
-| `promote`  | object  | Makes an upload of its platform official, of this step's id or of the one its `step` names, and moves the branch's latest file.                                                                                                                                            |
-| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                                                         |
-| `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the plan step, the first step of a build of a `pipeline.py` that hands its pipeline to the runner, and the path of the pipeline its command generated. See [Snapshot dependencies](#snapshot-dependencies). |
-| `resume`   | string  | Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                                                          |
-| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the last step of a build with a plan step, which runs after every other step and records which steps did not pass. See [Snapshot dependencies](#snapshot-dependencies).                                     |
+| Key        | Type    | Description                                                                                                                                                                                                                                                                           |
+| ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`     | string  | The step id of a step that uploads or promotes. Required for those steps. See [Usage](#usage).                                                                                                                                                                                        |
+| `key`      | string  | Written by the plan step, never by a person: the key of the build. Without it, each job computes a key of its own build. See [The bucket](#the-bucket).                                                                                                                               |
+| `upload`   | object  | Upload configuration block.                                                                                                                                                                                                                                                           |
+| `download` | object  | Download configuration block.                                                                                                                                                                                                                                                         |
+| `promote`  | object  | Makes an upload of its platform official, of this step's id or of the one its `step` names, and moves the branch's latest file.                                                                                                                                                       |
+| `debug`    | boolean | Enable bash `set -x` debug tracing in all hooks. Default: `false`.                                                                                                                                                                                                                    |
+| `plan`     | string  | Written by the runner (`qdb_pipeline.run`), never by a person: the plan step, the first step of a build of a `pipeline.py` that hands its pipeline to the runner, and the path at which its command puts the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies). |
+| `resume`   | string  | Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. See [Snapshot dependencies](#snapshot-dependencies).                                                                     |
+| `leave`    | boolean | Written by the runner (`qdb_pipeline.run`), never by a person: the last step of a build with a plan step, which runs after every other step and records which steps did not pass. See [Snapshot dependencies](#snapshot-dependencies).                                                |
 
 ### `upload` object keys
 
@@ -411,7 +411,7 @@ The root build does. A build started for a dependency does when the build a pers
 
 A plan step that finds steps already made at its key also points its branch's latest files at that key, when git names the build's commit as its branch's newest: so a branch cut at built commits gets its latest files at the first build on it, and an older build that runs again does not move them back.
 
-### What a repository changes to adopt
+### What the plan step requires of a repository
 
 - Its `.buildkite/pipeline.py` ends with the runner, and its configuration in Buildkite runs `.buildkite/pipeline.py | buildkite-agent pipeline upload`:
 
@@ -430,8 +430,8 @@ The plan step fails a build whose generated pipeline breaks one of these, before
 
 ### How a build runs
 
-1. The runner prints, in place of the pipeline, the plan step and the last step. Both are in one concurrency group per pipeline and commit.
-2. The plan step's command generates the pipeline; then the plugin plans. A build whose every step is made at its key builds nothing. Else the dependencies that lack a step are started, each as a build of its own pipeline, and the plan step runs a second time when they have ended. Else the pipeline is uploaded, with the key of every step a download takes and the build's own key written into it; a step whose folders are all made is replaced by one that names the build that made them.
+1. The runner saves the generated pipeline as an artifact of the build and prints, in its place, the plan step and the last step. Both are in one concurrency group per pipeline and commit.
+2. The plan step's command downloads that pipeline; then the plugin plans. A build whose every step is made at its key builds nothing. Else the dependencies that lack a step are started, each as a build of its own pipeline, and the plan step runs a second time when they have ended. Else the pipeline is uploaded, with the key of every step a download takes and the build's own key written into it; a step whose folders are all made is replaced by one that names the build that made them.
 3. The jobs download, upload and promote at those keys.
 4. The last step records the steps that did not pass.
 
@@ -450,7 +450,7 @@ The plan step of a root build asks Buildkite's API (scope `read_pipelines`) for 
 
 ### When a build fails
 
-A build that failed says why on its page. Its own steps that did not pass are named; a dependency that failed is followed down its failure records to the builds that failed, and the page ends with how to retry. A build that failed before it built, for its generator or its pipeline, is no job to retry.
+A build that failed says why on its page. Its own steps that did not pass are named; a dependency that failed is followed down its failure records to the builds that failed, and the page ends with how to retry. A build that failed before it built because of its pipeline is no job to retry; one whose plan step could not download the pipeline is.
 
 A failed step is not built twice for nothing: a build that needs a key whose build failed under the same plan fails at once, and so does a build that waited while another build of the same key failed. A root build started after that failure builds the key again.
 

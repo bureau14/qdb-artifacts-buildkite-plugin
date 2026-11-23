@@ -1,8 +1,9 @@
 """What a build learns of itself before the plan step decides (``own_build``).
 
-The pipeline its command generated, held to the rule of its templates; its plan, which a root build makes; its key; what its pipeline promotes, what it was asked for, and what of that is
-made. Each fails the build when it cannot be had, with a failure record once the build has a
-key.
+The generated pipeline, which its command put in the checkout, held to the rule of its
+templates; its plan, which a root build makes; its key; what its pipeline promotes, what it
+was asked for, and what of that is made. Each fails the build when it cannot be had, with a
+failure record once the build has a key.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from ..forms import branch_ref, is_tag
 from ..job import Job, is_started_for_dependency
 from ..layout import Folder
 from ..manifest import Manifest
-from .annotation import PLAN_REFUSED, plan_annotation, shown_folders
+from .annotation import PLAN_REFUSED, STEP_ERROR, plan_annotation, shown_folders
 from .buildkite import https_repository
 from .edge import PLAN, Edge, create_own_key_json, made_only, manifests_at
 from .failing import refusal
@@ -26,7 +27,7 @@ from .latest import latest_download, read_latest
 from .pipeline import DocumentError, Step, dependencies, left_out, promotions, steps_of
 from .plan import Plan, PlanError, encode_plan
 from .planner import RootBuild, make_plan, name_refs, named_ref, rebuild_setting
-from .records import GENERATOR_FAILED, NOT_DECLARED, RULE, Origin, RefusedFolder
+from .records import NOT_DECLARED, RULE, Origin, RefusedFolder
 from .rule import rule_violations, stepless_downloads, unwritten_promotions
 from .templates import Declaration, TemplateError, is_template_path, read_declaration
 from .triggers import read_needs
@@ -61,13 +62,15 @@ class OwnBuild:
     named: Mapping[str, str] | None
 
 
-def check_command(job: Job, edge: Edge, path: str, origin: Origin | None) -> None:
+def check_command(job: Job, edge: Edge, path: str) -> None:
+    """Fail the step when its command failed, without a record: a pipeline that could not be
+    fetched says nothing of the build of a key."""
     if job.exit_status != 0:
         message = (
-            f"the command exited {job.exit_status}: it generates the pipeline into {path}, "
+            f"the command exited {job.exit_status}: it puts the generated pipeline at {path}, "
             "which this step plans"
         )
-        raise refusal(job, edge, GENERATOR_FAILED, message, origin)
+        raise refusal(job, edge, STEP_ERROR, message)
 
 
 def generated_pipeline(job: Job, edge: Edge, path: str, origin: Origin | None) -> Generated:
@@ -167,12 +170,12 @@ def promoted_and_needed(
 
 
 def own_build(job: Job, edge: Edge, path: str, stored: Plan | None) -> OwnBuild:
-    """What the build whose command generated the pipeline at ``path`` knows of itself.
+    """What the build whose command put the generated pipeline at ``path`` knows of itself.
     ``stored`` is its plan when it had one from the start, as a build started for a dependency
-    and every second run have: such a build has its key before its command is judged, so a
-    failed command and a broken rule are recorded too. The page shows the plan."""
+    and every second run have: such a build has its key before its pipeline is judged, so a
+    broken rule is recorded too. The page shows the plan."""
+    check_command(job, edge, path)
     origin = None if stored is None else create_own_key_json(job, edge, stored)
-    check_command(job, edge, path, origin)
     generated = generated_pipeline(job, edge, path, origin)
     named = named_refs(job, edge) if stored is None else None
     p = made_plan(job, edge, generated, named) if stored is None else stored

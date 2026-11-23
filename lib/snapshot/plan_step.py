@@ -1,9 +1,9 @@
 """The plan step and its second run: what a build does, decided in order.
 
-The plan step runs after its command generated the pipeline. First the build learns what it
-is (``own_build``):
+The plan step runs after its command put the generated pipeline in the checkout. First the
+build learns what it is (``own_build``):
 
-1. The command failed: fail.
+1. The command failed: fail, without a record.
 2. The generated pipeline breaks the rule of its templates: fail.
 3. A root build asks git whether its name is a branch or a tag, reads the keys of its latest
    successful downloads, makes the plan and stores it. A build started for a dependency has
@@ -290,7 +290,7 @@ def run(job: Job, edge: Edge, decisions: Callable[[Job, Edge, str], None], path:
 
 
 def plan_step(job: Job, edge: Edge, path: str) -> int:
-    """The plan step of a build whose command generated the pipeline at ``path``."""
+    """The plan step of a build whose command put the generated pipeline at ``path``."""
     return run(job, edge, first_run, path)
 
 
