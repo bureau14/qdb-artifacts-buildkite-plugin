@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
 from ..codec import decoded, encoded
+from ..forms import short_commit
 from ..key import KeyJson, key_of
 
 REBUILD_NONE, REBUILD_ONE, REBUILD_ALL = "none", "one", "all"
@@ -135,11 +136,6 @@ def planned_project(p: Plan, project: str, commit: str) -> Planned:
     if n.commit != commit:
         raise PlanError(f"plan {p.id} plans {project} at {n.commit}, this build is at {commit}")
     return n
-
-
-def short_commit(commit: str) -> str:
-    """A commit id as a label or a message shows it."""
-    return commit[:12]
 
 
 def trigger_label(p: Plan, project: str) -> str:

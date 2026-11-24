@@ -11,11 +11,11 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
-from ..forms import is_tag
+from ..forms import is_tag, short_commit
 from ..options import Entry, step_id_problems
 from ..resolve import no_git_ref
 from .pipeline import Step, dependencies, entries_of, other_project, promotions
-from .plan import Plan, short_commit
+from .plan import Plan
 from .templates import Declaration, declared_path, declared_pins, kind
 
 # A download at a tag's ref comes from Buildkite's tag field, and the plan step reads the

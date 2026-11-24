@@ -1,4 +1,4 @@
-"""The forms of a ref and of a time, as the jobs and the plan step write them.
+"""The forms of a ref, of a commit and of a time, as the jobs and the plan step write them.
 
 This is job code, as the manifest is: nothing here imports ``planning``.
 """
@@ -38,6 +38,11 @@ def name_of(ref: str) -> str:
         if ref.startswith(prefix):
             return ref[len(prefix) :]
     return ref
+
+
+def short_commit(commit: str) -> str:
+    """A commit id as a label, a message or the build page shows it."""
+    return commit[:12]
 
 
 def iso_utc(epoch: float) -> str:

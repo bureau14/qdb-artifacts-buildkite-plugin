@@ -1,17 +1,19 @@
 """What the plan step and the last step show on the build page. Text only.
 
-Everything that is not a heading or the closing sentence is in a fenced code block, because
-template paths and branch names hold Markdown characters.
+A plan is a table; a failure is a fenced code block between a heading and a closing sentence.
+A name that a repository chose, such as a branch or a template path, is in a code span or in
+the block, because it can hold Markdown characters.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
-from ..forms import name_of
+from ..forms import name_of, short_commit
 from ..job import Build
 from ..layout import Folder
-from .plan import Plan, short_commit, trigger_label
+from ..markdown import build_link, code, codes, collapsed, table
+from .plan import REBUILD_ALL, REBUILD_ONE, Plan, Planned, trigger_label
 from .records import NOT_DECLARED, RULE, Cause, Record
 
 INDENT = "  "
@@ -29,55 +31,95 @@ def shown_folders(folders: Iterable[Folder]) -> str:
 # The plan
 # ---------------------------------------------------------------------------
 
+REBUILDS = {REBUILD_ONE: "`{root}` is built again", REBUILD_ALL: "every project is built again"}
 
-def tree_lines(plan: Plan, project: str) -> list[str]:
-    """The tree of ``project``, depth first, each project with its commit, ref and key and
-    whether its build writes its branch's latest files; one shown before is only named."""
-    lines: list[str] = []
-    shown: set[str] = set()
+Column = tuple[str, Callable[[str, Planned], str]]
 
-    def visit(p: str, depth: int) -> None:
-        if p in shown:
-            lines.append(f"{INDENT * depth}{p} (above)")
-            return
-        shown.add(p)
-        n = plan.projects[p]
-        written = (
-            f"the latest files of {name_of(n.ref)}" if n.writes_latest_file else "no latest file"
-        )
-        lines.append(
-            f"{INDENT * depth}{p} @ {short_commit(n.commit)} {n.ref} {n.key} writes {written}"
-        )
-        for d in n.deps:
-            visit(d, depth + 1)
 
-    visit(project, 0)
-    return lines
+def tree_of(plan: Plan, project: str) -> list[str]:
+    """The projects of the tree of ``project``, depth first, each once."""
+    found: dict[str, None] = {}
+
+    def visit(p: str) -> None:
+        if p not in found:
+            found[p] = None
+            for d in plan.projects[p].deps:
+                visit(d)
+
+    visit(project)
+    return list(found)
+
+
+def plan_columns(plan: Plan, planned: Sequence[Planned]) -> list[Column]:
+    """A project, its commit and the projects it takes. Two columns are there only when a row
+    has something to say in them: the branch or tag of a project, when one is taken from
+    another than the build's; and the latest file, when the build of one does not write it."""
+    columns: list[Column] = [
+        ("Project", lambda p, n: code(p)),
+        ("Commit", lambda p, n: code(short_commit(n.commit))),
+    ]
+    if any(name_of(n.ref) != plan.context for n in planned):
+        columns.append(("Branch or tag", lambda p, n: code(name_of(n.ref))))
+    columns.append(("Takes", lambda p, n: codes(n.deps)))
+    if not all(n.writes_latest_file for n in planned):
+        written = {True: "written", False: "not written"}
+        columns.append(("Latest file", lambda p, n: written[n.writes_latest_file]))
+    return columns
+
+
+def plan_table(plan: Plan, projects: Sequence[str]) -> str:
+    columns = plan_columns(plan, [plan.projects[p] for p in projects])
+    rows = [[cell(p, plan.projects[p]) for _, cell in columns] for p in projects]
+    return table([heading for heading, _ in columns], rows)
+
+
+def keys_table(plan: Plan, projects: Sequence[str]) -> str:
+    return table(["Project", "Key"], [[code(p), code(plan.projects[p].key)] for p in projects])
 
 
 def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str, str]]) -> str:
-    """The plan as ``project`` builds it. ``left_out`` names each download of the project's
-    own at another ref, as step, platform and ref: its key leaves such a download out."""
+    """The plan as ``project`` builds it: one row per project of its tree, and every key behind
+    a line that opens. ``left_out`` names each download of the project's own at another ref, as
+    step, platform and ref: its key leaves such a download out."""
     root = plan.root
     heading = f"Snapshot plan of `{project}`" + (
         f" build {root.build_number}"
         if project == root.project
         else f", started for `{root.project}` build {root.build_number}"
     )
+    rebuilds = REBUILDS.get(plan.rebuild)
+    context = f"Branch {code(plan.context)}" + (
+        f"; {rebuilds.format(root=root.project)}" if rebuilds else ""
+    )
     outside = [
-        f"not in the key: step {step} takes {project} {platform} of branch {name_of(ref)}; its "
-        "job reads that branch's latest build when it runs"
+        f"- Not in the key: step {code(step)} takes {code(project)} {code(platform)} of branch "
+        f"{code(name_of(ref))}; its job reads that branch's latest build when it runs."
         for step, platform, ref in left_out
     ]
-    context = f"branch {plan.context}, rebuild {plan.rebuild}"
-    return f"{heading}\n\n{fenced([context, *tree_lines(plan, project), *outside])}"
+    projects = tree_of(plan, project)
+    parts = [
+        f"**{heading}**",
+        context,
+        plan_table(plan, projects),
+        "\n".join(outside),
+        collapsed("Keys", keys_table(plan, projects)),
+    ]
+    return "\n\n".join(filter(None, parts))
+
+
+def made_table(builds: Mapping[Folder, Build]) -> str:
+    """The build that made each folder: one row per platform and build, with its steps."""
+    steps: dict[tuple[str, Build], list[str]] = {}
+    for f, b in sorted(builds.items()):
+        steps.setdefault((f.platform, b), []).append(f.step)
+    rows = [[code(platform), codes(ids), build_link(b)] for (platform, b), ids in steps.items()]
+    return table(["Platform", "Steps", "Made by"], rows)
 
 
 def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) -> str:
     """A build that builds nothing: the build that made each folder it was asked for."""
-    made = [f"{f} made by build {b.number} {b.url}" for f, b in sorted(builds.items())]
     heading = f"`{project}` is reused: every step it was asked for is made, so nothing is built"
-    return f"{heading}\n\n{fenced(made)}\n\n{plan_annotation(plan, project, ())}"
+    return f"**{heading}**\n\n{made_table(builds)}\n\n{plan_annotation(plan, project, ())}"
 
 
 # ---------------------------------------------------------------------------
