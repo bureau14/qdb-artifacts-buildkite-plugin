@@ -40,7 +40,7 @@ from world import (
 
 from lib import layout
 from lib.codec import decoded, encoded
-from lib.forms import branch_ref, name_of
+from lib.forms import branch_ref, name_of, short_commit
 from lib.job import Build
 from lib.key import KeyJson, commit_of, encode_key_json, key_of
 from lib.layout import Folder
@@ -384,12 +384,15 @@ TRANSFERS = [
 KEY_SOURCES = ("its-plan-step", "each-job")
 
 
-def names_each(text: str, taken: set[tuple[str, str]]) -> bool:
+def names_each(
+    text: str, taken: set[tuple[str, str]], shown: Callable[[str], str] = lambda commit: commit
+) -> bool:
     """Whether ``text`` names each step of ``taken``, ``(key, URL of the build whose files it
-    holds)``: its key, the key's commit apart from it, and that build."""
+    holds)``: its key, the key's commit apart from it in the form ``shown`` gives it, and that
+    build."""
 
     def alone(commit: str) -> bool:
-        return re.search(rf"(?<![0-9a-f-]){commit}(?![0-9a-f-])", text) is not None
+        return re.search(rf"(?<![0-9a-f-]){shown(commit)}(?![0-9a-f-])", text) is not None
 
     return all(key in text and alone(commit_of(key)) and url in text for key, url in taken)
 
@@ -480,7 +483,7 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     assert downloader.files("in-macos") == macos
     assert names_each(fetched.stderr, taken)
     assert all(latest in fetched.stderr for _, latest in walked)
-    assert len(shown) == 1 and names_each(shown[0], taken)
+    assert len(shown) == 1 and names_each(shown[0], taken, short_commit)
     assert all(branch in shown[0] for branch, _ in walked)
     assert bool(annotations) == transfer.annotates
 

@@ -8,15 +8,20 @@ failure to create one is logged and never fails the job.
 
 import os
 import subprocess
+from collections import namedtuple
 
-from .forms import name_of
+from .forms import name_of, short_commit
 from .key import commit_of
 from .layout import key_join
 from .log import fmt_size, log
+from .markdown import build_link, code, codes, collapsed, table
 from .resolve import made_by
 
 UPLOAD_CONTEXT = "artifacts"
 DOWNLOAD_CONTEXT = "artifacts-downloads"
+
+# One row of the downloads table; ``build`` is the cell that names the build.
+Row = namedtuple("Row", "project platform ref key build steps")
 
 
 def annotate(body, context):
@@ -37,11 +42,6 @@ def annotate(body, context):
         log(f"  :warning Failed to create Buildkite annotation: {e}")
 
 
-def job_heading():
-    """The heading of a job's annotation: the job's label."""
-    return f"## {os.environ.get('BUILDKITE_LABEL', 'unknown job')}"
-
-
 def annotate_upload(artifacts_domain, prefix, files_with_sizes, title):
     """Annotate the job with ``title`` and a link to every file under ``prefix``."""
     if not artifacts_domain:
@@ -51,28 +51,58 @@ def annotate_upload(artifacts_domain, prefix, files_with_sizes, title):
     total_bytes = sum(size for _, size in files_with_sizes)
     log(f"  creating Buildkite annotation for {file_count} artifact(s)")
     uri = f"https://{artifacts_domain}"
-    body = (
-        f"{job_heading()}\n### {title} ({file_count} files, {fmt_size(total_bytes)} total):\n\n"
-    ) + "\n".join(
+    body = f"**{title}** ({file_count} files, {fmt_size(total_bytes)} total)\n\n" + "\n".join(
         f"- [{path}]({key_join(uri, prefix, path)}) ({fmt_size(size)})"
         for path, size in files_with_sizes
     )
     annotate(body, UPLOAD_CONTEXT)
 
 
-def download_line(step):
-    """One step a download took, as the build page shows it: its project and folder, the
-    branch whose latest file named it, its commit and key, and the build its manifest names."""
-    branch = "" if step.ref is None else f" of branch `{name_of(step.ref)}`"
+def taken_from(step):
+    """The build a download took ``step`` of. A step of the own build that a later step
+    promotes is only uploaded when the download runs."""
     by, build = made_by(step)
-    return (
-        f"- `{step.project}` `{step.folder}`{branch}: commit `{commit_of(step.key)}`, "
-        f"key `{step.key}`, {by} by [build {build.number}]({build.url})"
+    return build_link(build) + ("" if by == "promoted" else ", not promoted yet")
+
+
+def download_rows(steps):
+    """The steps taken at one key of one platform of a project, side by side: what they share,
+    then their step ids."""
+    ids = {}
+    for s in steps:
+        shared = (s.project, s.folder.platform, s.ref, s.key, taken_from(s))
+        ids.setdefault(shared, []).append(s.folder.step)
+    return [Row(*shared, step_ids) for shared, step_ids in ids.items()]
+
+
+def downloads_table(rows):
+    """One row per project and platform. The branch whose latest file named a step is a column
+    only when a download of the job named a branch."""
+    columns = [
+        ("Project", lambda r: code(r.project)),
+        ("Platform", lambda r: code(r.platform)),
+        ("Steps", lambda r: codes(r.steps)),
+        ("Commit", lambda r: code(short_commit(commit_of(r.key)))),
+        ("From", lambda r: r.build),
+    ]
+    if any(r.ref is not None for r in rows):
+        columns.insert(3, ("Branch", lambda r: code(name_of(r.ref)) if r.ref else ""))
+    return table(
+        [heading for heading, _ in columns], [[cell(r) for _, cell in columns] for r in rows]
     )
 
 
+def keys_table(rows):
+    cells = [[code(r.project), code(r.platform), code(r.key)] for r in rows]
+    return table(["Project", "Platform", "Key"], cells)
+
+
+def downloads_annotation(steps):
+    """Every step the job's downloads took, and each key behind a line that opens."""
+    rows = download_rows(steps)
+    keys = collapsed("Keys", keys_table(rows))
+    return f"**Downloaded artifacts**\n\n{downloads_table(rows)}\n\n{keys}"
+
+
 def annotate_downloads(steps):
-    """Annotate the job with every step its downloads took, one line each."""
-    count = f"{len(steps)} step" + ("" if len(steps) == 1 else "s")
-    lines = "\n".join(download_line(s) for s in steps)
-    annotate(f"{job_heading()}\n### Downloaded artifacts ({count}):\n\n{lines}", DOWNLOAD_CONTEXT)
+    annotate(downloads_annotation(steps), DOWNLOAD_CONTEXT)
