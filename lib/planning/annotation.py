@@ -74,7 +74,8 @@ def plan_table(plan: Plan, projects: Sequence[str]) -> str:
 
 
 def keys_table(plan: Plan, projects: Sequence[str]) -> str:
-    return table(["Project", "Key"], [[code(p), code(plan.projects[p].key)] for p in projects])
+    rows = [[code(p), code(plan.projects[p].key)] for p in projects]
+    return table(["Project", "Snapshot key"], rows)
 
 
 def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str, str]]) -> str:
@@ -102,7 +103,7 @@ def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str,
         context,
         plan_table(plan, projects),
         "\n".join(outside),
-        collapsed("Keys", keys_table(plan, projects)),
+        collapsed("Snapshot keys", keys_table(plan, projects)),
     ]
     return "\n\n".join(filter(None, parts))
 

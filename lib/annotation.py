@@ -94,13 +94,13 @@ def downloads_table(rows):
 
 def keys_table(rows):
     cells = [[code(r.project), code(r.platform), code(r.key)] for r in rows]
-    return table(["Project", "Platform", "Key"], cells)
+    return table(["Project", "Platform", "Snapshot key"], cells)
 
 
 def downloads_annotation(steps):
     """Every step the job's downloads took, and each key behind a line that opens."""
     rows = download_rows(steps)
-    keys = collapsed("Keys", keys_table(rows))
+    keys = collapsed("Snapshot keys", keys_table(rows))
     return f"**Downloaded artifacts**\n\n{downloads_table(rows)}\n\n{keys}"
 
 
