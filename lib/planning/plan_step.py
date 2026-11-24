@@ -120,7 +120,7 @@ def reuse(job: Job, edge: Edge, own: OwnBuild) -> None:
     """Nothing is built: the page names the build that made each folder asked for."""
     builds = {f: own.made[f].promoted.build for f in own.needs}
     edge.agent.meta_data_set(OUTCOME, REUSED)
-    edge.agent.annotate(reused_annotation(own.plan, job.project, builds), "success", STEP_CONTEXT)
+    edge.agent.annotate(reused_annotation(job.project, builds), "success", STEP_CONTEXT)
     edge.log(f"{job.project} is reused: every step asked for is made")
 
 

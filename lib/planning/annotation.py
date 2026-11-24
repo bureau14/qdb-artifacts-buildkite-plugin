@@ -166,10 +166,11 @@ def made_table(builds: Mapping[Folder, Build]) -> str:
     return table(["Platform", "Steps", "Made by"], rows)
 
 
-def reused_annotation(plan: Plan, project: str, builds: Mapping[Folder, Build]) -> str:
-    """A build that builds nothing: the build that made each folder it was asked for."""
+def reused_annotation(project: str, builds: Mapping[Folder, Build]) -> str:
+    """A build that builds nothing: the build that made each folder it was asked for. The plan
+    is on the page already, in the annotation of its own."""
     heading = f"`{project}` is reused: every step it was asked for is made, so nothing is built"
-    return f"**{heading}**\n\n{made_table(builds)}\n\n{plan_annotation(plan, project, ())}"
+    return f"**{heading}**\n\n{made_table(builds)}"
 
 
 # ---------------------------------------------------------------------------
