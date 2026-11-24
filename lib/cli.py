@@ -47,7 +47,7 @@ def run_plan_side(job: Job, o: Options) -> int:
     from .planning.plan_step import plan_step, plan_step_again
 
     if o.last_step:
-        section(":camera_with_flash: Snapshot: the last step")
+        section(":camera_with_flash: Snapshot: record failures")
         return last_step(job, real_edge())
     if o.plan:
         section(":camera_with_flash: Snapshot: the plan step")
