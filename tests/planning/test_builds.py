@@ -18,6 +18,7 @@ import collections
 import dataclasses
 import hashlib
 import json
+from xml.etree import ElementTree
 
 import pytest
 import yaml
@@ -587,6 +588,62 @@ def test_the_plan_steps_page_names_each_download_of_its_own_project_at_another_b
     assert root_build.state == "passed"
     assert len(naming) == len(expected)
     assert all(any(all(x in line for x in e) for line in naming) for e in expected)
+
+
+SVG = "{http://www.w3.org/2000/svg}"
+
+
+def boxes_of(picture: str) -> dict[str, tuple[float, float, float, float]]:
+    """The box of each project of a picture, by the name written in it, as left, top, right
+    and bottom: a box is a rectangle, and its name the text that follows it."""
+    parts = list(ElementTree.fromstring(picture))
+    found = {}
+    for part, after in zip(parts, parts[1:]):
+        if part.tag == SVG + "rect":
+            x, y, w, h = (float(part.get(k)) for k in ("x", "y", "width", "height"))
+            found[after.text] = (x, y, x + w, y + h)
+    return found
+
+
+def apart(a: tuple, b: tuple) -> bool:
+    return a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+
+
+def test_the_plan_steps_page_shows_the_tree_of_its_build_as_a_table_and_as_a_picture(
+    worlds, graph_root, shape
+):
+    """The page of the plan step of every build of a tree has a row for the build's project
+    and, under each project, a row for each project it takes. It shows a picture exactly when
+    the build's project takes another, and the build has then uploaded that picture. The
+    picture has one box for each project of the build's tree and one arrow for each project
+    that another takes; every box lies on the canvas, no two boxes overlap, and a project
+    stands left of every project that takes it."""
+    graph, root = graph_root.graph, graph_root.project
+    matrix, step_ids = shape
+    world = worlds(graph, matrix, step_ids)
+
+    root_build = world.build(root)
+
+    assert root_build.state == "passed"
+    for b in root_build.tree():
+        taken = {(p, d) for p in tree(graph, b.project) for d in graph[p]}
+        _, page = world.agents.annotations[b.id]["snapshot-plan"]
+        table, _, _ = page.partition("<details>")
+        pictures = world.agents.artifacts[b.id]
+        assert sum(line.startswith("| ") for line in table.splitlines()) == 2 + 1 + len(taken)
+        assert [name for name in pictures if f"artifact://{name}" in page] == list(pictures)
+        assert ("artifact://" in page) == bool(pictures) == bool(graph[b.project])
+        for picture in pictures.values():
+            document = ElementTree.fromstring(picture)
+            boxes = boxes_of(picture)
+            across, down = float(document.get("width")), float(document.get("height"))
+            assert set(boxes) == tree(graph, b.project)
+            assert len(document.findall(SVG + "path")) == len(taken)
+            assert all(
+                0 <= x and 0 <= y and r <= across and u <= down for x, y, r, u in boxes.values()
+            )
+            assert all(apart(boxes[p], boxes[q]) for p in boxes for q in boxes if p < q)
+            assert all(boxes[d][2] < boxes[p][0] for p, d in taken)
 
 
 def cannot_give_a_snapshot(world, at, condition: str) -> str:

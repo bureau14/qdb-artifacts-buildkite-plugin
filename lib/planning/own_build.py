@@ -24,6 +24,7 @@ from .buildkite import https_repository
 from .edge import PLAN, Edge, create_own_key_json, made_only, manifests_at
 from .failing import refusal
 from .latest import latest_download, read_latest
+from .picture import PICTURE, tree_picture
 from .pipeline import DocumentError, Step, dependencies, left_out, promotions, steps_of
 from .plan import Plan, PlanError, encode_plan
 from .planner import RootBuild, make_plan, name_refs, named_ref, rebuild_setting
@@ -169,6 +170,16 @@ def promoted_and_needed(
     return promotes, needs
 
 
+def show_plan(job: Job, edge: Edge, p: Plan, outside: tuple[tuple[str, str, str], ...]) -> None:
+    """The plan on the build's page. The picture of the tree is an artifact of the build,
+    which the page shows; it is uploaded first, so the page never names a picture that is
+    not there."""
+    picture = tree_picture(p, job.project)
+    if picture is not None:
+        edge.agent.artifact_upload(PICTURE, picture)
+    edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
+
+
 def own_build(job: Job, edge: Edge, path: str, stored: Plan | None) -> OwnBuild:
     """What the build whose command put the generated pipeline at ``path`` knows of itself.
     ``stored`` is its plan when it had one from the start, as a build started for a dependency
@@ -180,8 +191,7 @@ def own_build(job: Job, edge: Edge, path: str, stored: Plan | None) -> OwnBuild:
     named = named_refs(job, edge) if stored is None else None
     p = made_plan(job, edge, generated, named) if stored is None else stored
     origin = origin or create_own_key_json(job, edge, p)
-    outside = left_out(generated.steps, job.project, branch_ref(job.branch))
-    edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
+    show_plan(job, edge, p, left_out(generated.steps, job.project, branch_ref(job.branch)))
     promotes, needs = promoted_and_needed(job, edge, generated, p, origin)
     made = made_only(manifests_at(edge, job.project, origin.key, promotes))
     return OwnBuild(generated, p, origin, promotes, needs, made, named)

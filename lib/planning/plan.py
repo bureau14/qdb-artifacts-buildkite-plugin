@@ -101,6 +101,20 @@ def below(deps: Mapping[str, Iterable[str]], p: str) -> frozenset[str]:
     return frozenset(deps[p]).union(*(below(deps, d) for d in deps[p]))
 
 
+def tree_of(p: Plan, project: str) -> list[str]:
+    """The projects of the tree of ``project``, depth first, each once."""
+    found: dict[str, None] = {}
+
+    def visit(q: str) -> None:
+        if q not in found:
+            found[q] = None
+            for d in p.projects[q].deps:
+                visit(d)
+
+    visit(project)
+    return list(found)
+
+
 def dependencies_of(p: Plan) -> dict[str, tuple[str, ...]]:
     return {project: n.deps for project, n in p.projects.items()}
 

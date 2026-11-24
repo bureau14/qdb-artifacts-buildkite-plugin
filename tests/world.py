@@ -3,7 +3,7 @@
 - An S3 and SSM server (moto, over real HTTP on 127.0.0.1), emptied for every
   test, and the bucket as an administrator sees it.
 - A ``buildkite-agent`` first on ``PATH`` that keeps every build's meta-data,
-  step outcomes, uploads and annotations as files, as Buildkite would.
+  step outcomes, uploads, annotations and artifacts as files, as Buildkite would.
 - The plugin as an agent checks it out: a copy of its hooks, library and
   command line, committed, whose ``.venv`` and ``.venv-planning`` the real
   ``post-checkout`` makes once per session, with the Python the agent names
@@ -166,7 +166,7 @@ def store(store_endpoint):
 
 AGENT_SCRIPT = '''#!{python}
 """buildkite-agent of the tests: every build's meta-data, step outcomes,
-uploads and annotations, as files under $FAKE_BUILDKITE_STATE."""
+uploads, annotations and artifacts, as files under $FAKE_BUILDKITE_STATE."""
 import os
 import sys
 from pathlib import Path
@@ -219,6 +219,10 @@ def main(args):
     if args[:1] == ["annotate"]:
         body = args[1] if not args[1].startswith("--") else stdin()
         numbered(here / "annotations" / option(args, "--context")).write_text(body)
+        return 0
+    if args[:2] == ["artifact", "upload"]:
+        (here / "artifacts").mkdir(parents=True, exist_ok=True)
+        (here / "artifacts" / args[2]).write_bytes(Path(args[2]).read_bytes())
         return 0
     return 1
 

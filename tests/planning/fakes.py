@@ -7,7 +7,7 @@
   branches and tags. ``FakeGit`` asks it what ``git.Git`` asks git; ``FakeCheckout``
   is one commit of it, as ``git.Checkout``.
 - ``BuildAgent``: ``agent.Agent`` of one build, over ``AgentState``, the
-  meta-data, step outcomes, uploads and annotations of every build.
+  meta-data, step outcomes, uploads, annotations and artifacts of every build.
 - ``FakePipelines``: ``planner.Pipelines``, Buildkite's facts by slug.
 """
 
@@ -186,6 +186,7 @@ class AgentState:
     outcomes: dict = dataclasses.field(default_factory=lambda: collections.defaultdict(dict))
     uploads: dict = dataclasses.field(default_factory=lambda: collections.defaultdict(list))
     annotations: dict = dataclasses.field(default_factory=lambda: collections.defaultdict(dict))
+    artifacts: dict = dataclasses.field(default_factory=lambda: collections.defaultdict(dict))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -212,6 +213,9 @@ class BuildAgent:
 
     def annotate(self, body: str, style: str, context: str) -> None:
         self.state.annotations[self.build][context] = (style, body)
+
+    def artifact_upload(self, name: str, text: str) -> None:
+        self.state.artifacts[self.build][name] = text
 
 
 @dataclasses.dataclass(frozen=True)

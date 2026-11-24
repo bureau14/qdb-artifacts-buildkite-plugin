@@ -435,7 +435,7 @@ The plan step fails a build whose generated pipeline breaks one of these, before
 3. The jobs download, upload and promote at those keys.
 4. The last step records the steps that did not pass.
 
-The plan step's page lists the build's project and every project below it with its commit, ref and key, and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs.
+The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and, when it is taken from another branch or tag than the build's, that name; a project that several take is written out once. Below the table the page names each project whose build does not become the latest successful build of its branch (see "Who writes a branch's latest files"), and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
 
 ### Variables
 

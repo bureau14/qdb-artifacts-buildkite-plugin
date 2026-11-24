@@ -8,15 +8,19 @@ the block, because it can hold Markdown characters.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import NamedTuple
 
 from ..forms import name_of, short_commit
 from ..job import Build
 from ..layout import Folder
 from ..markdown import build_link, code, codes, collapsed, table
-from .plan import REBUILD_ALL, REBUILD_ONE, Plan, Planned, trigger_label
+from .picture import PICTURE
+from .plan import REBUILD_ALL, REBUILD_ONE, Plan, Planned, tree_of, trigger_label
 from .records import NOT_DECLARED, RULE, Cause, Record
 
 INDENT = "  "
+
+Column = tuple[str, Callable[[Planned], str]]
 
 
 def fenced(lines: Sequence[str]) -> str:
@@ -33,44 +37,87 @@ def shown_folders(folders: Iterable[Folder]) -> str:
 
 REBUILDS = {REBUILD_ONE: "`{root}` is built again", REBUILD_ALL: "every project is built again"}
 
-Column = tuple[str, Callable[[str, Planned], str]]
+# The picture of the tree, which the plan step uploads as an artifact of the build.
+TREE_PICTURE = (
+    f'<img src="artifact://{PICTURE}" alt="The tree of the plan: what is built first on the '
+    'left, this build on the right">'
+)
+
+# A table cell drops leading spaces; these it keeps.
+STEP_IN = "&nbsp;" * 5
 
 
-def tree_of(plan: Plan, project: str) -> list[str]:
-    """The projects of the tree of ``project``, depth first, each once."""
-    found: dict[str, None] = {}
+class Place(NamedTuple):
+    """A row of the tree: a project, how deep it stands there, and whether a row above
+    shows it already."""
 
-    def visit(p: str) -> None:
-        if p not in found:
-            found[p] = None
+    project: str
+    depth: int
+    again: bool
+
+
+def places(plan: Plan, project: str) -> list[Place]:
+    """The tree of ``project``, depth first, a project under each project that takes it.
+    What a project takes is under its first row only."""
+    found: list[Place] = []
+    shown: set[str] = set()
+
+    def visit(p: str, depth: int) -> None:
+        found.append(Place(p, depth, p in shown))
+        if p not in shown:
+            shown.add(p)
             for d in plan.projects[p].deps:
-                visit(d)
+                visit(d, depth + 1)
 
-    visit(project)
-    return list(found)
+    visit(project, 0)
+    return found
 
 
-def plan_columns(plan: Plan, planned: Sequence[Planned]) -> list[Column]:
-    """A project, its commit and the projects it takes. Two columns are there only when a row
-    has something to say in them: the branch or tag of a project, when one is taken from
-    another than the build's; and the latest file, when the build of one does not write it."""
-    columns: list[Column] = [
-        ("Project", lambda p, n: code(p)),
-        ("Commit", lambda p, n: code(short_commit(n.commit))),
-    ]
-    if any(name_of(n.ref) != plan.context for n in planned):
-        columns.append(("Branch or tag", lambda p, n: code(name_of(n.ref))))
-    columns.append(("Takes", lambda p, n: codes(n.deps)))
-    if not all(n.writes_latest_file for n in planned):
-        written = {True: "written", False: "not written"}
-        columns.append(("Latest file", lambda p, n: written[n.writes_latest_file]))
+def project_cell(at: Place) -> str:
+    """The tree in one column: a project stepped in by its depth, and one shown above in grey
+    (``gray`` is a class of Buildkite's page; a pipeline's slug holds no Markdown)."""
+    name = f'<span class="gray">{at.project} (above)</span>' if at.again else code(at.project)
+    return STEP_IN * at.depth + name
+
+
+def plan_columns(plan: Plan, planned: Iterable[Planned]) -> list[Column]:
+    """A project's commit; and its branch or tag, a column that is there only when a project
+    is taken from another than the build's, and says something only for such a project."""
+
+    def elsewhere(n: Planned) -> str:
+        return "" if name_of(n.ref) == plan.context else code(name_of(n.ref))
+
+    columns: list[Column] = [("Commit", lambda n: code(short_commit(n.commit)))]
+    if any(map(elsewhere, planned)):
+        columns.append(("Branch or tag", elsewhere))
     return columns
 
 
-def plan_table(plan: Plan, projects: Sequence[str]) -> str:
-    columns = plan_columns(plan, [plan.projects[p] for p in projects])
-    rows = [[cell(p, plan.projects[p]) for _, cell in columns] for p in projects]
-    return table([heading for heading, _ in columns], rows)
+def plan_table(plan: Plan, project: str) -> str:
+    """One row per place of the tree; a project's facts are in its first row."""
+    rows = places(plan, project)
+    columns = plan_columns(plan, (plan.projects[at.project] for at in rows))
+
+    def row(at: Place) -> list[str]:
+        facts = ["" if at.again else cell(plan.projects[at.project]) for _, cell in columns]
+        return [project_cell(at), *facts]
+
+    return table(["Project", *(heading for heading, _ in columns)], map(row, rows))
+
+
+def not_the_latest(plan: Plan, projects: Iterable[str]) -> list[str]:
+    """A line for each project whose build does not write its branch's latest files: what
+    that means for a person, and why."""
+
+    def line(p: str, branch: str) -> str:
+        return (
+            f"- {code(p)} is built here against other commits of the projects below it than a "
+            f"build of its branch {branch} would take. This build uses the result; it does not "
+            f"become the latest successful build of {branch}."
+        )
+
+    planned = ((p, plan.projects[p]) for p in projects)
+    return [line(p, code(name_of(n.ref))) for p, n in planned if not n.writes_latest_file]
 
 
 def keys_table(plan: Plan, projects: Sequence[str]) -> str:
@@ -79,8 +126,9 @@ def keys_table(plan: Plan, projects: Sequence[str]) -> str:
 
 
 def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str, str]]) -> str:
-    """The plan as ``project`` builds it: one row per project of its tree, and every key behind
-    a line that opens. ``left_out`` names each download of the project's own at another ref, as
+    """The plan as ``project`` builds it: the picture of its tree, when it takes any project;
+    the tree as a table; a line for each project that needs a word; and every key behind a
+    line that opens. ``left_out`` names each download of the project's own at another ref, as
     step, platform and ref: its key leaves such a download out."""
     root = plan.root
     heading = f"Snapshot plan of `{project}`" + (
@@ -101,8 +149,9 @@ def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str,
     parts = [
         f"**{heading}**",
         context,
-        plan_table(plan, projects),
-        "\n".join(outside),
+        TREE_PICTURE if len(projects) > 1 else "",
+        plan_table(plan, project),
+        "\n".join([*outside, *not_the_latest(plan, projects)]),
         collapsed("Snapshot keys", keys_table(plan, projects)),
     ]
     return "\n\n".join(filter(None, parts))
