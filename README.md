@@ -15,7 +15,7 @@ Artifacts are scoped by project, key, platform and step id: the key says what a 
 ## Requirements
 
 - **Python 3.13** on the host agent, named by the agent in `QDB_CICD_AGENT_PLUGIN_PYTHON`, which every agent image sets for its plugins. The plugin runs that Python and no other, none from `PATH`, and does not check its version; the plugin's pipeline tests on 3.13.
-- The agent must have IAM permissions (S3) or SSM-stored R2 credentials configured. See [Backend configuration](#backend-configuration).
+- The agent must have IAM permissions (S3) or SSM-stored R2 credentials, a read-write pair and a read-only pair, configured. See [Backend configuration](#backend-configuration).
 
 ## Usage
 
@@ -551,7 +551,7 @@ but does not clean it; the plugin's `clean` option remains handled by its wrappe
 To reuse the plugin's environment/SSM backend configuration, including R2,
 import `ssm_client` and `load_store_config` from `vendor.qdb_artifacts.lib`,
 and use `load_store_config(ssm_client())` to obtain `cfg` instead of
-constructing it directly. For R2 the configuration holds the access key.
+constructing it directly. For R2 the configuration holds the read-only access key, as the library only reads.
 
 ### Read the manifest of a step
 
@@ -587,19 +587,25 @@ blocks or exit handlers.
 
 Config is resolved in order: **environment variable -> SSM parameter -> default**.
 
-| Setting              | Env var                          | SSM parameter                                                           | Default      |
-| -------------------- | -------------------------------- | ----------------------------------------------------------------------- | ------------ |
-| Backend              | `ARTIFACTS_BACKEND`              | `/services/buildkite/config/artifacts/object-store/backend`             | `s3`         |
-| Destination          | `ARTIFACTS_DESTINATION`          | `/services/buildkite/config/artifacts/object-store/destination`         | _(required)_ |
-| Endpoint URL         | `ARTIFACTS_ENDPOINT_URL`         | `/services/buildkite/config/artifacts/object-store/endpoint-url`        | _(none)_     |
-| R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`       | _(R2 only)_  |
-| R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id`    | _(R2 only)_  |
-| R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`        | _(R2 only)_  |
-| Artifacts domain     | `ARTIFACTS_DOMAIN`               | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain` | _(optional)_ |
+| Setting                        | Env var                                    | SSM parameter                                                                  | Default                |
+| ------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------- |
+| Backend                        | `ARTIFACTS_BACKEND`                        | `/services/buildkite/config/artifacts/object-store/backend`                    | `s3`                   |
+| Destination                    | `ARTIFACTS_DESTINATION`                    | `/services/buildkite/config/artifacts/object-store/destination`                | _(required)_           |
+| Endpoint URL                   | `ARTIFACTS_ENDPOINT_URL`                   | `/services/buildkite/config/artifacts/object-store/endpoint-url`               | _(none)_               |
+| R2 Account ID                  | `ARTIFACTS_R2_ACCOUNT_ID`                  | `/services/buildkite/config/artifacts/object-store/r2/account-id`              | _(R2 only)_            |
+| R2 Access Key ID               | `ARTIFACTS_R2_ACCESS_KEY_ID`               | `/services/buildkite/config/artifacts/object-store/r2/access-key-id`           | _(R2 only)_            |
+| R2 Secret Access Key           | `ARTIFACTS_R2_SECRET_ACCESS_KEY`           | `/services/buildkite/credentials/artifacts/r2/secret-access-key`               | _(R2 only)_            |
+| R2 read-only Access Key ID     | `ARTIFACTS_R2_READ_ONLY_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/read-only-access-key-id` | _(R2 only, see below)_ |
+| R2 read-only Secret Access Key | `ARTIFACTS_R2_READ_ONLY_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/read-only-secret-access-key`     | _(R2 only, see below)_ |
+| Artifacts domain               | `ARTIFACTS_DOMAIN`                         | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain`        | _(optional)_           |
 
 For **AWS S3**, the agent's IAM role is used -- no explicit credentials needed.
 
 For **Cloudflare R2**, set `ARTIFACTS_BACKEND=r2` and provide the R2 credentials above.
+
+On R2 the plugin picks the key pair by what the caller does. A download, and the library's `load_store_config`, `resolve_artifacts` and `download_artifacts`, use the read-only key pair, which can only read. An upload, a promote, the plan step, its second run and the last step write to the bucket and use the read-write key pair. The read-only token needs no permission to write, so a job that only downloads cannot overwrite an artifact or move a latest file.
+
+A store that has no read-only key pair yet still works: a reader then uses the read-write key pair and the job log says `WARNING: no read-only R2 key pair is configured`. A store that has half a read-only pair, or a placeholder in it, fails the job. For a program outside Buildkite, `load_store_config(ssm)` takes the read-only pair, and `load_store_config(ssm, WRITE)`, with `WRITE` from `lib.config`, takes the read-write one. The S3 backend has no key pair of the plugin: it signs with the agent's IAM role for every caller, and a role that can only read the bucket makes a reader read-only.
 
 ## Debug mode
 
