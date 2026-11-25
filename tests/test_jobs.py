@@ -32,6 +32,7 @@ from world import (
     GENERATED,
     MASTER,
     STEP_KINDS,
+    Outcome,
     build_id,
     build_url,
     paired,
@@ -930,3 +931,39 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     assert made == set(matrix) - failing
     assert all(decode_manifest(manifests[v]).promoted.build.id == build_id(1) for v in made)
     assert {f.folder for r in records for f in r.failed} == {Folder(v, "build") for v in failing}
+
+
+# ---------------------------------------------------------------------------
+# An option that cannot work ends the job in a plugin error
+# ---------------------------------------------------------------------------
+
+
+def ends_in_plugin_error(o, *named: str) -> bool:
+    """Whether the outcome is exit 1 with an ``[artifacts] ERROR`` line that holds every
+    text of ``named``, and no traceback."""
+    return (
+        o.code == 1
+        and "[artifacts] ERROR:" in o.stderr
+        and "Traceback" not in o.stderr
+        and all(n in o.stderr for n in named)
+    )
+
+
+def test_a_file_outside_base_dir_is_a_plugin_error(jobs):
+    job = jobs().committed({"out/a.txt": "a", "other/b.txt": "b"})
+    options = upload_and_promote(files="other/*", base_dir="out", promotes=False)
+    assert ends_in_plugin_error(job.with_plugin(options).run("post-command"), "base_dir")
+
+
+def test_a_missing_phase_is_a_plugin_error(jobs):
+    job = jobs()
+    done = subprocess.run(
+        [sys.executable, "-B", job.plugin / "artifacts.py"],
+        cwd=job.workspace,
+        env=job.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outcome = Outcome(done.returncode, done.stdout, done.stderr)
+    assert ends_in_plugin_error(outcome, "pre-command", "post-command")
