@@ -874,31 +874,39 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
 
 
 @pytest.mark.parametrize(
-    "dependency_keys",
+    "dependencies, expected",
     [
-        pytest.param(None, id="missing-document"),
-        pytest.param((), id="missing-project"),
-        pytest.param(("first",), id="one-key"),
-        pytest.param(("first", "second"), id="multiple-keys"),
+        pytest.param(None, None, id="missing-document"),
+        pytest.param((), {}, id="no-dependencies"),
+        pytest.param((("core", "first"),), {"core": [Key("first")]}, id="one-key"),
+        pytest.param(
+            (("core", "second"), ("tools", "third"), ("core", "first")),
+            {"core": [Key("first"), Key("second")], "tools": [Key("third")]},
+            id="keys-grouped-by-project",
+        ),
     ],
 )
 def test_external_dependency_keys_come_from_the_selected_snapshot(
-    store, monkeypatch, dependency_keys
+    store, monkeypatch, dependencies, expected
 ):
+    # Publish a producer step in the test store with the dependencies for this case.
     for name, value in store_variables(store, "s3").items():
         monkeypatch.setenv(name, value)
     cfg = StoreConfig("s3", f"s3://{BUCKET}/objects", endpoint_url=store.endpoint)
-    deps = (("another-project", "another-key"),) + tuple(("core", k) for k in dependency_keys or ())
-    document = KeyJson("widget", "a" * 40, deps)
+    document = KeyJson("widget", "a" * 40, dependencies or ())
     key = key_of(document)
     store.put_all(
         step_wrote(key, MASTER, Folder("linux", "build"), {"wheel": b"x"}, 1, True, under="objects")
     )
-    if dependency_keys is not None:
+    if dependencies is not None:
         store.put(layout.key_json("objects", "widget", key), encode_key_json(document))
+
+    # Start the lookup from the named step an external caller would resolve.
     _, resolved, _ = resolve_artifacts(cfg, "widget", "linux", "build", Key(key), ["wheel"])
-    if dependency_keys is None:
+
+    # Missing metadata must be distinguishable from a snapshot with no dependencies.
+    if dependencies is None:
         with pytest.raises(ArtifactsError):
-            resolve_dependency_keys(cfg, resolved, "core")
+            resolve_dependency_keys(cfg, resolved)
     else:
-        assert resolve_dependency_keys(cfg, resolved, "core") == [Key(k) for k in dependency_keys]
+        assert resolve_dependency_keys(cfg, resolved) == expected

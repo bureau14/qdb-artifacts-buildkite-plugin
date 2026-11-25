@@ -284,16 +284,18 @@ class Key:
     key: str
 
 
-def resolve_dependency_keys(cfg: StoreConfig, resolved: ResolvedStep, project_id: str) -> list[Key]:
-    """Return all direct snapshot keys recorded for this project in the producer's key.json."""
+def resolve_dependency_keys(cfg: StoreConfig, resolved: ResolvedStep) -> dict[str, list[Key]]:
+    """Return the given producer snapshot's direct dependency keys grouped by project."""
     store = destination_store(cfg)
     key_path = layout.key_json(store.prefix, resolved.project, resolved.key)
     body = store.get(key_path)
     if body is None:
         raise ArtifactsError(f"Missing snapshot metadata at {key_path}")
     document = decoded(KeyJson, body)
-    keys = {key for project, key in document.deps if project == project_id}
-    return [Key(key) for key in sorted(keys)]
+    by_project: dict[str, list[Key]] = {}
+    for project, key in sorted(set(document.deps)):
+        by_project.setdefault(project, []).append(Key(key))
+    return by_project
 
 
 def resolve_artifacts(cfg, project_id, variant, step, build, patterns, exclude_patterns=None):
