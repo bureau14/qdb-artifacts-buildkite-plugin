@@ -124,11 +124,11 @@ def put_files(at: Opened, location: str, u: Upload, files: list[tuple[Path, str]
         f"Uploading {len(files)} artifact(s) ({fmt_size(total)}) to "
         f"s3://{at.store.bucket}/{location}/ via backend={at.cfg.backend}"
     )
-    transfer.log_settings(int(u.parallel), int(u.concurrency))
+    transfer.log_settings(u.parallel, u.concurrency)
     if u.exclude:
         log(f"  exclude={list(u.exclude)}")
-    tc = transfer.transfer_config(int(u.concurrency))
-    seconds = transfer.run(lambda x: put_file(at, location, tc, *x), files, int(u.parallel))
+    tc = transfer.transfer_config(u.concurrency)
+    seconds = transfer.run(lambda x: put_file(at, location, tc, *x), files, u.parallel)
     transfer.log_done("Uploaded", len(files), total, seconds)
 
 

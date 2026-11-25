@@ -949,6 +949,22 @@ def ends_in_plugin_error(o, *named: str) -> bool:
     )
 
 
+NOT_A_COUNT = ["many", "", "0", "-2", "1.5", "4 files"]
+BLOCKS = {
+    "download": ("pre-command", lambda o: {"download": {"projects": [{"variant": "linux"}], **o}}),
+    "upload": ("post-command", lambda o: upload_and_promote(files="out/*", promotes=False, **o)),
+}
+
+
+@pytest.mark.parametrize("value", NOT_A_COUNT, ids=case_id)
+@pytest.mark.parametrize("name", ["parallel", "concurrency"])
+@pytest.mark.parametrize("block", sorted(BLOCKS))
+def test_a_transfer_count_that_is_no_whole_number_names_its_option(jobs, block, name, value):
+    hook, options = BLOCKS[block]
+    job = jobs().with_plugin(options({name: value}))
+    assert ends_in_plugin_error(job.run(hook), f"{block}.{name}", repr(value))
+
+
 def test_a_file_outside_base_dir_is_a_plugin_error(jobs):
     job = jobs().committed({"out/a.txt": "a", "other/b.txt": "b"})
     options = upload_and_promote(files="other/*", base_dir="out", promotes=False)

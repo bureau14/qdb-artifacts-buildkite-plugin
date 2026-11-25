@@ -166,7 +166,7 @@ def download(job: Job, o: Options) -> None:
     at = open_destination()
     own = functools.cache(lambda: own_key(job, o.key).key)
     found = [taken(at.store, n, e, job, own) for n, e in enumerate(d.projects, start=1)]
-    parallel, concurrency = int(d.parallel), int(d.concurrency)
+    parallel, concurrency = d.parallel, d.concurrency
     for e, steps in zip(d.projects, found):
         for objects in (files for _, files in steps if files):
             bucket = at.store.bucket
