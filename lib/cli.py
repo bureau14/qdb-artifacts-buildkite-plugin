@@ -1,7 +1,7 @@
 """What each hook phase does, decided from the step's options:
 
-    pre-command   fail a step that uploads or promotes without a step id, before its command;
-                  download the step's download entries
+    pre-command   fail a step that uploads or promotes without a step id, or whose upload block
+                  names no files, before its command; download the step's download entries
     post-command  the plan step, its second run and the last step run their own command and
                   nothing else; any other step uploads, then promotes when its command passed
                   and the upload was not empty
@@ -19,7 +19,7 @@ import dacite
 from .download import download
 from .errors import ArtifactsError
 from .job import Job, job_of
-from .options import Options, job_options, step_id_problems
+from .options import Options, job_options, step_id_problems, upload_problems
 from .promote import promote
 from .upload import upload
 
@@ -30,9 +30,15 @@ def section(title: str) -> None:
     print(f"~~~ {title}", flush=True)
 
 
+def check_upload_names_files(o: Options) -> None:
+    for problem in upload_problems(o):
+        raise ArtifactsError(f"This step's upload block {problem}")
+
+
 def pre_command(job: Job, o: Options) -> int:
     for problem in step_id_problems(o):
         raise ArtifactsError(f"This step {problem}")
+    check_upload_names_files(o)
     if o.download and o.download.projects:
         section(":arrow_down: Downloading artifacts")
         download(job, o)
@@ -62,7 +68,8 @@ def post_command(job: Job, o: Options) -> int:
     that was not empty."""
     if o.plan or o.plan_again or o.last_step:
         return run_plan_side(job, o)
-    if o.upload and o.upload.files:
+    check_upload_names_files(o)
+    if o.upload:
         section(":arrow_up: Uploading artifacts")
         if not upload(job, o):
             section("Skipping artifact promotion (empty upload)")

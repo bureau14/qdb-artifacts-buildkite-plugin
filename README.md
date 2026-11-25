@@ -265,6 +265,8 @@ steps:
 
 ### `upload` object keys
 
+A step with an `upload` block that sets any key but names no `files` fails, in `pre-command` before its command and again in `post-command`; the plugin does not guess a pattern.
+
 | Key           | Type             | Required | Description                                                                                                               |
 | ------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `variant`     | string           | yes      | The platform the step uploads (e.g. `linux-amd64-release`).                                                               |
@@ -337,11 +339,11 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 ## How it works
 
-| Hook            | Action                                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `post-checkout` | Makes the step's virtual environment with the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, and fails when that names nothing that runs.                                         |
-| `pre-command`   | Fails a step that uploads or promotes without a step id, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched.                   |
-| `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty. |
+| Hook            | Action                                                                                                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post-checkout` | Makes the step's virtual environment with the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, and fails when that names nothing that runs.                                                                         |
+| `pre-command`   | Fails a step that uploads or promotes without a step id, and a step whose `upload` block names no `files`, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched. |
+| `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty.                                 |
 
 The plan step, its second run and the last step of a build (options `plan`, `plan_again` and `last_step`, see [Snapshot dependencies](#snapshot-dependencies)) run their own command in `post-command` and nothing else. They install `lib/planning/requirements.txt` besides `lib/requirements.txt`, into a virtual environment of their own.
 
