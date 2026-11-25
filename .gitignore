@@ -1,4 +1,5 @@
 .venv/
+.venv-planning/
 .venv.lock
 .ruff_cache/
 __pycache__/

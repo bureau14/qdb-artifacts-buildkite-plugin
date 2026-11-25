@@ -8,21 +8,28 @@ if [[ "$(plugin_read_config DEBUG false)" =~ ^(true|on|1)$ ]]; then
   set -x
 fi
 
-# Pre-flight: verify Python 3 is available on the host agent.
-if [[ -z "${PYTHON3_CMD}" ]]; then
-  echo "+++ :rotating_light: qdb-artifacts plugin requires python3 on the host agent"
-  echo "Install Python 3 on this agent or add it to the AMI via Packer."
+echo "~~~ :python: Setting up qdb-artifacts plugin"
+
+PYTHON="$(agent_python)"
+VERSION="$(python_version "${PYTHON}")"
+if [[ -z "${VERSION}" ]]; then
+  echo "+++ :rotating_light: qdb-artifacts plugin finds no Python that runs"
+  echo "It runs the Python the agent names in QDB_CICD_AGENT_PLUGIN_PYTHON:"
+  echo "QDB_CICD_AGENT_PLUGIN_PYTHON=${QDB_CICD_AGENT_PLUGIN_PYTHON:-}"
   exit 1
 fi
+echo "Python ${VERSION} at ${PYTHON}"
 
-REQUIREMENTS="${PLUGIN_DIR}/lib/requirements.txt"
+REQUIREMENTS=(-r "${PLUGIN_DIR}/lib/requirements.txt")
+if step_plans; then
+  REQUIREMENTS+=(-r "${PLUGIN_DIR}/lib/planning/requirements.txt")
+fi
 
 if [[ -d "${VENV_DIR}" ]]; then
   rm -rf "${VENV_DIR}"
 fi
 
-echo "~~~ :python: Setting up qdb-artifacts plugin"
-"${PYTHON3_CMD}" -m venv --upgrade-deps "${VENV_DIR}"
+"${PYTHON}" -m venv --upgrade-deps "${VENV_DIR}"
 "${VENV_BIN}/python" -m pip install --quiet \
   --retries 3 --resume-retries 3 \
-  -r "${REQUIREMENTS}"
+  "${REQUIREMENTS[@]}"

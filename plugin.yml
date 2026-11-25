@@ -2,21 +2,24 @@ name: QuasarDB Artifacts
 description: Upload and download build artifacts to S3-compatible stores (AWS S3, Cloudflare R2)
 author: https://github.com/bureau14
 requirements:
-  - python3
+  # Run from the path the agent names in QDB_CICD_AGENT_PLUGIN_PYTHON, never from PATH.
+  - python3.13
 configuration:
   properties:
+    step:
+      type: string
+      pattern: "^[a-z][a-z0-9_]*$"
+      description: "The step id of a step that uploads or promotes: what it makes for its platform, the same on every platform (e.g. 'build'). A pipeline.py writes step_id in its template, and the runner's load_template writes this option; a pipeline without pipeline.py writes it beside upload."
+    key:
+      type: string
+      pattern: "^[0-9a-f]{40}-[0-9a-f]{32}$"
+      description: "Written by the plan step, never by a person: the key of the build, under which its uploads, promotes and own downloads lie. Without it, each job computes a key of its own build."
     upload:
       type: object
       properties:
-        project_id:
-          type: string
-          description: "Unique project identifier for namespacing artifacts (defaults to BUILDKITE_PIPELINE_NAME)"
         variant:
           type: string
-          description: "Build variant key to upload to"
-        git_ref:
-          type: string
-          description: "Git ref to download from (e.g. 'refs/heads/main')"
+          description: "The platform the step uploads (e.g. 'linux-amd64-release')"
         files:
           type: string
           description: "Glob pattern for files to upload (e.g. 'artifacts/**/*.tar.zst')"
@@ -45,22 +48,18 @@ configuration:
       required:
         - variant
         - files
-        - git_ref
     promote:
       type: object
       properties:
-        project_id:
-          type: string
-          description: "Unique project identifier of the artifacts to mark as latest (defaults to BUILDKITE_PIPELINE_NAME)"
         variant:
           type: string
-          description: "Artifact path to mark as latest successful build of the current variant (e.g linux-amd64-haswell-release)"
-        git_ref:
+          description: "The platform whose upload the promote makes official: this step's, or that of the step id step names (e.g. 'linux-amd64-release')"
+        step:
           type: string
-          description: "Git ref to promote (e.g. 'refs/heads/main')"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "The step id to promote, when it is not this step's own: what another step of the same pipeline uploaded for the platform (e.g. 'build' from a step that checks it)"
       required:
         - variant
-        - git_ref
     download:
       type: object
       properties:
@@ -81,19 +80,32 @@ configuration:
             properties:
               project_id:
                 type: string
-                description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_NAME)"
-              build_id:
-                type: string
-                description: "Build identifier to download from. Defaults to BUILDKITE_BUILD_ID if project_id and git_ref match the current pipeline/ref, else LATEST_SUCCESSFUL."
+                description: "Unique project identifier of the artifacts to download (defaults to BUILDKITE_PIPELINE_SLUG)"
               variant:
                 type: string
-                description: "Build variant key to download from (cross-step)"
+                description: "The platform to download"
+              step:
+                description: "The step ids to download, one or a list. Without it: of a planned dependency, every step id its templates promote; of a latest successful build, every step whose latest file names the newest key of the platform; from the build's own key it must be written, and the runner writes it."
+                oneOf:
+                  - type: string
+                  - type: array
+                    minItems: 1
+                    items:
+                      type: string
+              keys:
+                type: object
+                additionalProperties:
+                  type: string
+                description: "Written by the plan step, never by a person: the key of each step the entry takes."
+              latest:
+                type: boolean
+                description: "The download takes the latest successful build of another project, which is not planned: the plan step reads its keys from the latest files of git_ref, then of master and main unless require_strict_ref_match is set; in a build at a tag, of git_ref alone"
               git_ref:
                 type: string
-                description: "Git ref to download from (e.g. 'refs/heads/main')"
+                description: "The ref of the download (e.g. 'refs/heads/main'): of a planned dependency the build's own ref, or a pin that places the project; else the branch whose latest successful build to take. Required in an entry of another project without keys"
               require_strict_ref_match:
                 type: boolean
-                description: "Disable branch fallback (default: false)"
+                description: "Take the latest successful build of git_ref alone, never of master or main (default: false)"
               output-dir:
                 type: string
                 description: "Download destination directory (default: '.')"
@@ -105,7 +117,7 @@ configuration:
                 minItems: 1
                 items:
                   type: string
-                description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*')"
+                description: "Archive globs with optional entry filters (e.g. '*-server.tar.zst!bin/*'; default: '*.tar.zst')"
               exclude:
                 type: array
                 minItems: 1
@@ -114,10 +126,17 @@ configuration:
                 description: "Archive globs to exclude from download after files have matched (e.g. '*-test-javadoc.jar')"
             required:
               - variant
-              - files
-              - git_ref
       required:
         - projects
+    plan:
+      type: string
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the plan step, the first step of a build of a pipeline.py that hands its pipeline to the runner, and the path at which its command puts the generated pipeline. After the command the plugin plans the build, then uploads that pipeline with the key of every step a download takes written into it, or the trigger steps of the dependencies that are built first."
+    plan_again:
+      type: string
+      description: "Written by the plan step, never by a person: its second run, once the builds it started for dependencies have ended, and the path of the generated pipeline. It uploads that pipeline, or fails and names the dependency that failed."
+    last_step:
+      type: boolean
+      description: "Written by the runner (qdb_pipeline.run), never by a person: the last step of a build with a plan step, which runs after every other step and records which steps did not pass."
     debug:
       type: boolean
       description: "Enable bash debug tracing"
@@ -125,4 +144,7 @@ configuration:
     - required: [upload]
     - required: [download]
     - required: [promote]
+    - required: [plan]
+    - required: [plan_again]
+    - required: [last_step]
   additionalProperties: false

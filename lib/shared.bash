@@ -3,51 +3,31 @@ set -euo pipefail
 
 PLUGIN_PREFIX="QDB_ARTIFACTS"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_DIR="${PLUGIN_DIR}/.venv"
-ARTIFACTS_PY="${PLUGIN_DIR}/lib/artifacts.py"
+ARTIFACTS_PY="${PLUGIN_DIR}/artifacts.py"
 
-# Detect Python 3.
-#   Linux/macOS: "python3" is on PATH.
-#   Windows:     Packer installs Python to C:\Python<ver>-<bits>\ which may not
-#                be on PATH. We search known locations as a fallback.
-_find_python3() {
-  # 1. Agent-provided path (set by packer via QDB_CICD_AGENT_PYTHON3)
-  if [[ -n "${QDB_CICD_AGENT_PYTHON3:-}" ]] && [[ -x "${QDB_CICD_AGENT_PYTHON3}" ]]; then
-    echo "${QDB_CICD_AGENT_PYTHON3}"
-    return
-  fi
+# Git Bash, the shell of the hooks on the Windows agents.
+on_windows() {
+  [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]
+}
 
-  # 2. Try standard commands on PATH
-  for cmd in python3 python; do
-    if command -v "$cmd" &>/dev/null \
-       && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
-      echo "$cmd"
-      return
-    fi
-  done
-
-  # 3. Windows fallback: scan well-known install directories (newest first)
-  if [[ -n "${SYSTEMROOT:-}" ]]; then
-    for dir in /c/Python3.*-64 /c/Python3.*-32 /c/Python3*; do
-      if [[ -x "${dir}/python.exe" ]] \
-         && "${dir}/python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,) else 1)" 2>/dev/null; then
-        echo "${dir}/python.exe"
-        return
-      fi
-    done
+# The Python the agent image names for its plugins, and no other:
+# QDB_CICD_AGENT_PLUGIN_PYTHON. The Windows image names a Windows path
+# (C:\Python3.13-64\python.exe), which cygpath turns into the form Git Bash runs.
+agent_python() {
+  local named="${QDB_CICD_AGENT_PLUGIN_PYTHON:-}"
+  if [[ -n "${named}" ]] && on_windows; then
+    cygpath -u "${named}"
+  else
+    printf '%s\n' "${named}"
   fi
 }
 
-PYTHON3_CMD="$(_find_python3)"
-
-# Venv layout differs between platforms:
-#   Linux/macOS: .venv/bin/python3, .venv/bin/pip
-#   Windows:     .venv/Scripts/python.exe, .venv/Scripts/pip.exe
-if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${SYSTEMROOT:-}" ]]; then
-  VENV_BIN="${VENV_DIR}/Scripts"
-else
-  VENV_BIN="${VENV_DIR}/bin"
-fi
+# The version of a Python, as "3.13.1", or nothing when it does not run. Written
+# without a newline: Python on Windows ends a line with CR LF, and the command
+# substitution that reads the version strips the LF only.
+python_version() {
+  "$1" -c 'import platform, sys; sys.stdout.write(platform.python_version())' 2>/dev/null || true
+}
 
 plugin_read_config() {
   local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
@@ -55,21 +35,46 @@ plugin_read_config() {
   echo "${!var:-$default}"
 }
 
-plugin_read_list() {
-  local prefix="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
-  local i=0
-  local parameter="${prefix}_${i}"
-  if [[ -n "${!parameter:-}" ]]; then
-    while [[ -n "${!parameter:-}" ]]; do
-      echo "${!parameter}"
-      i=$((i+1))
-      parameter="${prefix}_${i}"
-    done
-  elif [[ -n "${!prefix:-}" ]]; then
-    echo "${!prefix}"
-  fi
+# True when at least one of the named options is set for this step. Tests each
+# variable itself: through plugin_read_config, echo would take a value such as
+# "-n" for its own option and print nothing.
+plugin_has_any() {
+  local name var
+  for name in "$@"; do
+    var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${name}"
+    if [[ -n "${!var:-}" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
+# The plan step, its second run and the last step run the planning side, which
+# needs PyYAML. No other step does, so no other job on any platform installs it.
+step_plans() {
+  plugin_has_any PLAN PLAN_AGAIN LAST_STEP
+}
+
+# Every job of one plugin commit on a host shares this checkout, and the
+# post-checkout of each makes its venv again. The steps that plan keep a venv
+# of their own, so that no other job takes PyYAML from under them.
+if step_plans; then
+  VENV_DIR="${PLUGIN_DIR}/.venv-planning"
+else
+  VENV_DIR="${PLUGIN_DIR}/.venv"
+fi
+
+# Venv layout differs between platforms:
+#   Linux/macOS: .venv/bin/python3, .venv/bin/pip
+#   Windows:     .venv/Scripts/python.exe, .venv/Scripts/pip.exe
+if on_windows; then
+  VENV_BIN="${VENV_DIR}/Scripts"
+else
+  VENV_BIN="${VENV_DIR}/bin"
+fi
+
+# One call per hook phase: "pre-command" or "post-command". What a phase does is
+# decided in lib/cli.py from the step's options, not here.
 run_artifacts_py() {
   "${VENV_BIN}/python" "${ARTIFACTS_PY}" "$@"
 }
