@@ -606,6 +606,41 @@ def test_the_first_promote_wins(jobs, store, order):
     assert store.get(f"{folder}/out/a.bin") == f"attempt {holder} of build {number}".encode()
 
 
+# Upload blocks that set options and name no files to upload.
+UPLOADS_WITHOUT_FILES = (
+    {"variant": "linux"},
+    {"variant": "linux", "base_dir": "dist"},
+    {"variant": "linux", "allow_empty": True},
+    {"variant": "linux", "annotate": False, "parallel": 2},
+    {"variant": "linux", "exclude": ["*.log"]},
+    {"variant": "linux", "files": []},
+    {"base_dir": "dist"},
+    {"allow_empty": True},
+)
+
+
+@pytest.mark.parametrize("hook", ["pre-command", "post-command"])
+@pytest.mark.parametrize("block", UPLOADS_WITHOUT_FILES, ids=case_id)
+def test_an_upload_block_without_files_fails_the_step(jobs, store, hook, block):
+    """A step whose upload block sets any option and names no files fails in both hooks with
+    the plugin's error, and writes nothing, so that no step is skipped silently."""
+    job = jobs().with_plugin({"step": "build", "upload": block})
+    job.write({"out/a.bin": "payload"})
+    outcome = job.run(hook)
+    assert outcome.code != 0, outcome.output
+    assert "[artifacts] ERROR:" in outcome.stderr, outcome.output
+    assert store.stored() == set()
+
+
+@pytest.mark.parametrize("hook", ["pre-command", "post-command"])
+def test_a_step_without_upload_or_promote_options_leaves_at_once(jobs, store, hook):
+    """A step that sets no upload, promote or plan option exits 0 without starting Python."""
+    job = jobs().with_plugin({"step": "build"})
+    outcome = job.run(hook)
+    assert outcome.code == 0, outcome.output
+    assert store.stored() == set()
+
+
 # SNAPSHOT_BRANCH_BUILD of the build: unset, as in a build a person or a push starts, or as
 # the trigger step of a plan step writes it.
 BRANCH_BUILDS = (None, "true", "false")

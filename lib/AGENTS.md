@@ -51,7 +51,12 @@ only `cli.py` reaches it.
   manifest is written with a plain put, so the plugin does not decide between
   two writers that read it at the same moment: the last write stays.
 - A step that uploads or promotes without a step id fails in `pre-command`,
-  before its command runs.
+  before its command runs. So does a step whose upload block names no files,
+  and an upload has no default pattern: the library's only default pattern,
+  `*.tar.zst`, is a download entry's.
+- A hook starts Python for a step when any variable of the `upload` block is
+  set, not only `files`, so that a block without files reaches the check in
+  `cli.py` instead of being skipped.
 - An upload or a promote names no project and no branch. The project is the
   pipeline's and the branch is the build's.
 - A job reads its options with `options.options_of`, and the plan step reads a
@@ -131,7 +136,8 @@ only `cli.py` reaches it.
   `options.py`, document it in the README's "Configuration reference", and
   give it a case in the generated options of `tests/test_jobs.py`. When a hook
   must start Python for a step that sets only this option, add its variable to
-  the test in `hooks/pre-command` or `hooks/post-command`.
+  the test in `hooks/pre-command` or `hooks/post-command`; an option of the
+  `upload` block needs no addition.
 - Add a kind of object: give `layout.py` its key, write it through
   `objects.Store`, and add it to the layout in `layout.py` and in the README.
 - Test: see `tests/AGENTS.md`.

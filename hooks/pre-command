@@ -10,8 +10,8 @@ fi
 
 # Leave without starting Python when the step downloads, uploads and promotes
 # nothing. A step that uploads or promotes has its step id checked here, before
-# its command.
-if ! plugin_has_any DOWNLOAD_PROJECTS_0_VARIANT UPLOAD_FILES_0 UPLOAD_FILES PROMOTE_VARIANT; then
+# its command, and an upload block without files fails here too.
+if ! plugin_has_any DOWNLOAD_PROJECTS_0_VARIANT PROMOTE_VARIANT && ! plugin_has_block UPLOAD; then
   exit 0
 fi
 

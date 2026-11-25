@@ -10,8 +10,9 @@ fi
 
 # Leave without starting Python when the step asks for nothing after its
 # command. PLAN, PLAN_AGAIN and LAST_STEP are set only on the plan step, its
-# second run and the last step.
-if ! plugin_has_any UPLOAD_FILES_0 UPLOAD_FILES PROMOTE_VARIANT PLAN PLAN_AGAIN LAST_STEP; then
+# second run and the last step. Any option of the upload block starts Python,
+# which fails a block that names no files.
+if ! plugin_has_any PROMOTE_VARIANT PLAN PLAN_AGAIN LAST_STEP && ! plugin_has_block UPLOAD; then
   echo "No upload or promote configuration found, skipping artifact upload/promote steps"
   exit 0
 fi

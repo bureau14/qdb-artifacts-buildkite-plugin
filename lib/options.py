@@ -161,6 +161,13 @@ def step_id_problems(o: Options) -> list[str]:
     return [p for p in found if p is not None]
 
 
+def upload_problems(o: Options) -> list[str]:
+    """Why the upload block of ``o`` uploads nothing; empty when it names files or is absent."""
+    if o.upload and not o.upload.files:
+        return ["names no files to upload: set upload.files"]
+    return []
+
+
 def uploaded_folder(o: Options) -> Folder:
     """A step uploads its platform under the top-level ``step``."""
     return Folder(o.upload.variant, o.step)
