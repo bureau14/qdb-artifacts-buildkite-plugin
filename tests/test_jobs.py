@@ -488,6 +488,30 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     assert bool(annotations) == transfer.annotates
 
 
+# Output directories that are the job's checkout or hold it, spelled as a pipeline may spell
+# them; ``None`` writes no ``output-dir``, and ``{workspace}`` is the checkout's absolute path.
+CHECKOUT_SPELLINGS = [None, ".", "./", "..", "sub/..", "{workspace}", "{workspace}/.."]
+
+
+@pytest.mark.parametrize("spelling", CHECKOUT_SPELLINGS, ids=str)
+def test_clean_never_removes_the_checkout(jobs, spelling):
+    """A download with ``clean`` whose entry's output directory is the job's checkout, or a
+    directory that holds it, fails the job before any entry's output directory is removed:
+    the checkout and the other entry's directory keep their files."""
+    job = jobs("widget", SUBJECT)
+    job.write({"keep.txt": "the checkout", "in/stale.bin": "an earlier attempt"})
+    entry = {"variant": "linux"}
+    if spelling is not None:
+        entry["output-dir"] = spelling.format(workspace=job.workspace)
+    projects = [{"variant": "linux", "output-dir": "in"}, entry]
+    outcome = job.with_plugin({"download": {"projects": projects, "clean": True}}).run(
+        "pre-command"
+    )
+    assert outcome.code != 0, outcome.output
+    assert job.files("").get("keep.txt") == b"the checkout", outcome.output
+    assert job.files("in") == {"stale.bin": b"an earlier attempt"}, outcome.output
+
+
 OTHER_KEY = "6" * 40 + "-" + "6" * 32
 
 

@@ -65,7 +65,7 @@ configuration:
       properties:
         clean:
           type: boolean
-          description: "Remove output directory before downloading"
+          description: "Remove the output directory of every project before downloading; each project must set an output-dir that is not the checkout or above it"
         parallel:
           type: integer
           description: "Files downloaded simultaneously across all projects (default: 4)"
