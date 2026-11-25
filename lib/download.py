@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import transfer
 from .annotation import annotate_downloads
+from .errors import ArtifactsError
 from .extract import extract_local_archive
 from .job import Job
 from .key import own_key
@@ -134,9 +135,23 @@ def taken(
     return found
 
 
+def holds_checkout(out: Path) -> bool:
+    """Whether ``out`` is the job's checkout, the working directory, or a directory above it."""
+    checkout = Path.cwd().resolve()
+    return out == checkout or out in checkout.parents
+
+
 def clean_outputs(d: Download) -> None:
-    """Remove the output folder of every entry, each once."""
-    for out in {Path(e.output_dir).resolve() for e in d.projects}:
+    """Remove the output folder of every entry, each once. Fails before it removes anything
+    when an output folder is the checkout or holds it: a project without ``output-dir`` has
+    the default, ``.``, which is the checkout."""
+    outs = {Path(e.output_dir).resolve() for e in d.projects}
+    for out in sorted(o for o in outs if holds_checkout(o)):
+        raise ArtifactsError(
+            f"download.clean would remove {out}, which is the checkout or holds it. "
+            "Set output-dir on every project of a download that sets clean."
+        )
+    for out in outs:
         if out.exists():
             log(f"Cleaning {out}")
             shutil.rmtree(out)

@@ -290,12 +290,12 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 ### `download` object keys
 
-| Key           | Type    | Required | Description                                                                                                   |
-| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `projects`    | array   | yes      | List of entries to download, each of one project and platform.                                                |
-| `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
-| `parallel`    | integer |          | Files downloaded simultaneously. Default: `4`.                                                                |
-| `concurrency` | integer |          | Multipart threads per download. Default: `32`.                                                                |
+| Key           | Type    | Required | Description                                                                                                                                                                                                                                         |
+| ------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects`    | array   | yes      | List of entries to download, each of one project and platform.                                                                                                                                                                                      |
+| `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Every project must set an `output-dir` that is not the checkout or a directory above it, or the job fails before it removes anything. Default: `false`. |
+| `parallel`    | integer |          | Files downloaded simultaneously. Default: `4`.                                                                                                                                                                                                      |
+| `concurrency` | integer |          | Multipart threads per download. Default: `32`.                                                                                                                                                                                                      |
 
 #### `projects` item keys
 
