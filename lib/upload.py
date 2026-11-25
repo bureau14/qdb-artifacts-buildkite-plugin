@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import layout, transfer
 from .annotation import annotate_upload
+from .config import WRITE
 from .errors import ArtifactsError
 from .job import Job
 from .key import create_key_json, own_key
@@ -124,11 +125,11 @@ def put_files(at: Opened, location: str, u: Upload, files: list[tuple[Path, str]
         f"Uploading {len(files)} artifact(s) ({fmt_size(total)}) to "
         f"s3://{at.store.bucket}/{location}/ via backend={at.cfg.backend}"
     )
-    transfer.log_settings(int(u.parallel), int(u.concurrency))
+    transfer.log_settings(u.parallel, u.concurrency)
     if u.exclude:
         log(f"  exclude={list(u.exclude)}")
-    tc = transfer.transfer_config(int(u.concurrency))
-    seconds = transfer.run(lambda x: put_file(at, location, tc, *x), files, int(u.parallel))
+    tc = transfer.transfer_config(u.concurrency)
+    seconds = transfer.run(lambda x: put_file(at, location, tc, *x), files, u.parallel)
     transfer.log_done("Uploaded", len(files), total, seconds)
 
 
@@ -142,7 +143,7 @@ def upload(job: Job, o: Options) -> bool:
     # Asked only now: an upload that allow_empty skips asks git nothing.
     own = own_key(job, o.key)
     folder = uploaded_folder(o)
-    at = open_destination()
+    at = open_destination(WRITE)
     location = layout.step_folder(at.store.prefix, job.project, own.key, folder)
     relative = [(rel, f.stat().st_size) for f, rel in files]
 

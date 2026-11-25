@@ -49,6 +49,12 @@ plugin_has_any() {
   return 1
 }
 
+# True when at least one option of the named block is set for this step, whatever its
+# name: a block that sets only base_dir or allow_empty counts.
+plugin_has_block() {
+  [[ -n "$(compgen -v "BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}_")" ]]
+}
+
 # The plan step, its second run and the last step run the planning side, which
 # needs PyYAML. No other step does, so no other job on any platform installs it.
 step_plans() {

@@ -31,7 +31,10 @@ from world import (
     BUCKET,
     GENERATED,
     MASTER,
+    READ_ONLY_KEY,
+    READ_WRITE_KEY,
     STEP_KINDS,
+    Outcome,
     build_id,
     build_url,
     paired,
@@ -488,6 +491,30 @@ def test_a_download_gets_the_bytes_of_the_steps_it_names(
     assert bool(annotations) == transfer.annotates
 
 
+# Output directories that are the job's checkout or hold it, spelled as a pipeline may spell
+# them; ``None`` writes no ``output-dir``, and ``{workspace}`` is the checkout's absolute path.
+CHECKOUT_SPELLINGS = [None, ".", "./", "..", "sub/..", "{workspace}", "{workspace}/.."]
+
+
+@pytest.mark.parametrize("spelling", CHECKOUT_SPELLINGS, ids=str)
+def test_clean_never_removes_the_checkout(jobs, spelling):
+    """A download with ``clean`` whose entry's output directory is the job's checkout, or a
+    directory that holds it, fails the job before any entry's output directory is removed:
+    the checkout and the other entry's directory keep their files."""
+    job = jobs("widget", SUBJECT)
+    job.write({"keep.txt": "the checkout", "in/stale.bin": "an earlier attempt"})
+    entry = {"variant": "linux"}
+    if spelling is not None:
+        entry["output-dir"] = spelling.format(workspace=job.workspace)
+    projects = [{"variant": "linux", "output-dir": "in"}, entry]
+    outcome = job.with_plugin({"download": {"projects": projects, "clean": True}}).run(
+        "pre-command"
+    )
+    assert outcome.code != 0, outcome.output
+    assert job.files("").get("keep.txt") == b"the checkout", outcome.output
+    assert job.files("in") == {"stale.bin": b"an earlier attempt"}, outcome.output
+
+
 OTHER_KEY = "6" * 40 + "-" + "6" * 32
 
 
@@ -606,6 +633,41 @@ def test_the_first_promote_wins(jobs, store, order):
     assert store.get(f"{folder}/out/a.bin") == f"attempt {holder} of build {number}".encode()
 
 
+# Upload blocks that set options and name no files to upload.
+UPLOADS_WITHOUT_FILES = (
+    {"variant": "linux"},
+    {"variant": "linux", "base_dir": "dist"},
+    {"variant": "linux", "allow_empty": True},
+    {"variant": "linux", "annotate": False, "parallel": 2},
+    {"variant": "linux", "exclude": ["*.log"]},
+    {"variant": "linux", "files": []},
+    {"base_dir": "dist"},
+    {"allow_empty": True},
+)
+
+
+@pytest.mark.parametrize("hook", ["pre-command", "post-command"])
+@pytest.mark.parametrize("block", UPLOADS_WITHOUT_FILES, ids=case_id)
+def test_an_upload_block_without_files_fails_the_step(jobs, store, hook, block):
+    """A step whose upload block sets any option and names no files fails in both hooks with
+    the plugin's error, and writes nothing, so that no step is skipped silently."""
+    job = jobs().with_plugin({"step": "build", "upload": block})
+    job.write({"out/a.bin": "payload"})
+    outcome = job.run(hook)
+    assert outcome.code != 0, outcome.output
+    assert "[artifacts] ERROR:" in outcome.stderr, outcome.output
+    assert store.stored() == set()
+
+
+@pytest.mark.parametrize("hook", ["pre-command", "post-command"])
+def test_a_step_without_upload_or_promote_options_leaves_at_once(jobs, store, hook):
+    """A step that sets no upload, promote or plan option exits 0 without starting Python."""
+    job = jobs().with_plugin({"step": "build"})
+    outcome = job.run(hook)
+    assert outcome.code == 0, outcome.output
+    assert store.stored() == set()
+
+
 # SNAPSHOT_BRANCH_BUILD of the build: unset, as in a build a person or a push starts, or as
 # the trigger step of a plan step writes it.
 BRANCH_BUILDS = (None, "true", "false")
@@ -660,6 +722,33 @@ def test_storage_is_additive(jobs, store, prefix, ref, key_source, branch_build)
     assert (m.promoted.build.id, m.uploaded.build.id) == (build_id(1), build_id(1))
     assert objects.get(latest, key.encode()) == key.encode()
     assert planned or objects[layout.key_json(under, "widget", key)] == encode_key_json(own)
+
+
+@pytest.mark.parametrize("backend", ["r2"])
+def test_a_reader_signs_with_the_read_only_key_and_a_writer_with_the_read_write_key(jobs, store):
+    """On R2 an upload and a promote sign every request with the read-write key and a download
+    signs every request with the read-only key, which no request that writes ever uses."""
+    payload = PAYLOADS[0]
+    maker, reader = jobs("widget", SUBJECT), jobs("app", 9)
+    maker.write(payload.made(stamp(SUBJECT, MASTER, "linux", "build"), "build"))
+    options = {"key": PLANNED_KEY, **upload_and_promote(**payload.options("build"))}
+    project = {
+        "project_id": "widget",
+        "variant": "linux",
+        "step": "build",
+        "output-dir": "in",
+        "keys": {"build": PLANNED_KEY},
+        **payload.download,
+    }
+
+    made = maker.with_plugin(options).run("post-command")
+    written_by = store.signed.keys()
+    store.signed.clear()
+    fetched = reader.with_plugin({"download": {"projects": [project]}}).run("pre-command")
+
+    assert (made.code, fetched.code) == (0, 0), made.output + fetched.output
+    assert written_by == {READ_WRITE_KEY}
+    assert store.signed.keys() == {READ_ONLY_KEY}
 
 
 @pytest.mark.parametrize(
@@ -910,3 +999,55 @@ def test_external_dependency_keys_come_from_the_selected_snapshot(
             resolve_dependency_keys(cfg, resolved)
     else:
         assert resolve_dependency_keys(cfg, resolved) == expected
+
+
+# ---------------------------------------------------------------------------
+# An option that cannot work ends the job in a plugin error
+# ---------------------------------------------------------------------------
+
+
+def ends_in_plugin_error(o, *named: str) -> bool:
+    """Whether the outcome is exit 1 with an ``[artifacts] ERROR`` line that holds every
+    text of ``named``, and no traceback."""
+    return (
+        o.code == 1
+        and "[artifacts] ERROR:" in o.stderr
+        and "Traceback" not in o.stderr
+        and all(n in o.stderr for n in named)
+    )
+
+
+NOT_A_COUNT = ["many", "", "0", "-2", "1.5", "4 files"]
+BLOCKS = {
+    "download": ("pre-command", lambda o: {"download": {"projects": [{"variant": "linux"}], **o}}),
+    "upload": ("post-command", lambda o: upload_and_promote(files="out/*", promotes=False, **o)),
+}
+
+
+@pytest.mark.parametrize("value", NOT_A_COUNT, ids=case_id)
+@pytest.mark.parametrize("name", ["parallel", "concurrency"])
+@pytest.mark.parametrize("block", sorted(BLOCKS))
+def test_a_transfer_count_that_is_no_whole_number_names_its_option(jobs, block, name, value):
+    hook, options = BLOCKS[block]
+    job = jobs().with_plugin(options({name: value}))
+    assert ends_in_plugin_error(job.run(hook), f"{block}.{name}", repr(value))
+
+
+def test_a_file_outside_base_dir_is_a_plugin_error(jobs):
+    job = jobs().committed({"out/a.txt": "a", "other/b.txt": "b"})
+    options = upload_and_promote(files="other/*", base_dir="out", promotes=False)
+    assert ends_in_plugin_error(job.with_plugin(options).run("post-command"), "base_dir")
+
+
+def test_a_missing_phase_is_a_plugin_error(jobs):
+    job = jobs()
+    done = subprocess.run(
+        [sys.executable, "-B", job.plugin / "artifacts.py"],
+        cwd=job.workspace,
+        env=job.env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outcome = Outcome(done.returncode, done.stdout, done.stderr)
+    assert ends_in_plugin_error(outcome, "pre-command", "post-command")

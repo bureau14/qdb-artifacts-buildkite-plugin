@@ -7,8 +7,8 @@ its generator wrote the options it fills, so the plan step reads a template with
 into a shape of the options it needs there (``planning/templates.py``).
 
 A key is read as the agent names its variable: in lower case, with ``-`` and white space as
-``_``. An option the shape does not name is ignored. Values are not checked for their type: a
-template holds placeholders where a pipeline holds numbers.
+``_``. ``read`` does not check the type of a value, because a template holds placeholders where a
+pipeline holds numbers; ``options_of`` checks the numbers that a job uses.
 """
 
 from __future__ import annotations
@@ -16,11 +16,12 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
 import dacite
 
+from .errors import ArtifactsError
 from .layout import Folder, is_step_id
 
 T = TypeVar("T")
@@ -117,10 +118,39 @@ def read(shape: type[T], config: Mapping[str, Any] | None) -> T:
     return dacite.from_dict(shape, as_agent_names(config or {}), READ)
 
 
+def count_of(block: str, name: str, v: Any) -> int:
+    """The option ``block.name`` as a whole number of at least 1. Raises ``ArtifactsError``
+    naming the option and its value otherwise."""
+    try:
+        n = v if isinstance(v, int) and not isinstance(v, bool) else int(str(v).strip())
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise ArtifactsError(
+            f"the option {block}.{name} must be a whole number of at least 1, got {v!r}"
+        )
+    return n
+
+
+def with_counts(block: str, b: T | None) -> T | None:
+    """``b``, a download or an upload block, with ``parallel`` and ``concurrency`` as numbers."""
+    if b is None:
+        return None
+    return replace(
+        b,
+        parallel=count_of(block, "parallel", b.parallel),
+        concurrency=count_of(block, "concurrency", b.concurrency),
+    )
+
+
 def options_of(config: Mapping[str, Any] | None) -> Options:
     """The options of a configuration that a job runs. Raises ``dacite.DaciteError`` when a
-    block lacks its ``variant``."""
-    return read(Options, config)
+    block lacks its ``variant``, and ``ArtifactsError`` when ``parallel`` or ``concurrency``
+    is not a whole number of at least 1."""
+    o = read(Options, config)
+    return replace(
+        o, download=with_counts("download", o.download), upload=with_counts("upload", o.upload)
+    )
 
 
 def job_options(env: Mapping[str, str]) -> Options:
@@ -159,6 +189,13 @@ def step_id_problems(o: Options) -> list[str]:
         step_id_problem(promoted_step(o), o.promote.variant, "promotes") if o.promote else None,
     ]
     return [p for p in found if p is not None]
+
+
+def upload_problems(o: Options) -> list[str]:
+    """Why the upload block of ``o`` uploads nothing; empty when it names files or is absent."""
+    if o.upload and not o.upload.files:
+        return ["names no files to upload: set upload.files"]
+    return []
 
 
 def uploaded_folder(o: Options) -> Folder:

@@ -13,7 +13,9 @@ runs no real Buildkite build and reaches no real store.
 | `conftest.py`                   | loads the two worlds as pytest plugins                                                                                                                                 | where a fixture comes from                                                                            |
 | `world.py`                      | the job's world: the store server, a fake `buildkite-agent`, the plugin as an agent checks it out, jobs                                                                | what a hook sees; how a step's options become variables; which Python makes the virtual environments  |
 | `test_jobs.py`                  | what a step relies on, through the hooks: download, upload, promote, the library, and a build started for a dependency                                                 | how a property of the job's side is stated over generated cases                                       |
+| `test_credentials.py`           | which R2 key pair a caller gets, from variables and SSM, and the fallback of a reader to the read-write pair                                                           | a change to the choice of key pair                                                                    |
 | `test_security.py`              | an archive writes nothing outside its output directory, and the Buildkite API token shows nowhere                                                                      | the two properties that are no happy path                                                             |
+| `test_entry_filters.py`         | what an entry filter extracts, and under which name, from a tar, a tar.gz and a zip                                                                                    | the stripping of an entry filter's directory from output paths                                        |
 | `outside_caller.py`             | a program that calls `download_artifacts`, `Branch`, `Key`, `load_store_config` and `read_manifest` as the README shows, run by `test_jobs.py` in a process of its own | changing one of those names or its arguments                                                          |
 | `planning/builds.py`            | the world of builds: projects generated from a graph, a platform matrix and step ids, and a simulated Buildkite                                                        | what a generated project looks like; how a trigger step, a job and a failed step are played           |
 | `planning/fakes.py`             | the fakes behind `Edge`: the store, git, the agent and Buildkite's pipelines, in memory                                                                                | what a fake answers; adding a question to `Edge`                                                      |
@@ -46,6 +48,10 @@ runs no real Buildkite build and reaches no real store.
   another plugin. `sanitise.py` keeps the step structure, the labels, the keys
   and this plugin's blocks, and it writes the `git_ref` of a branch as
   `refs/heads/feature`. Read a fixture before it is committed.
+- The store server of the job's world notes which access key signed each request. A
+  job on R2 holds a read-write and a read-only pair, and every test that uses
+  the `store` fixture fails when a request that writes was signed by the
+  read-only key.
 - Every organisation, host and URL in the suite is invented. So is every
   project but the five of the fixtures, which `REAL` of `planning/builds.py`
   names.

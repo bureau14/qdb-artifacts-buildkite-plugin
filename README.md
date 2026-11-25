@@ -15,7 +15,7 @@ Artifacts are scoped by project, key, platform and step id: the key says what a 
 ## Requirements
 
 - **Python 3.13** on the host agent, named by the agent in `QDB_CICD_AGENT_PLUGIN_PYTHON`, which every agent image sets for its plugins. The plugin runs that Python and no other, none from `PATH`, and does not check its version; the plugin's pipeline tests on 3.13.
-- The agent must have IAM permissions (S3) or SSM-stored R2 credentials configured. See [Backend configuration](#backend-configuration).
+- The agent must have IAM permissions (S3) or SSM-stored R2 credentials, a read-write pair and a read-only pair, configured. See [Backend configuration](#backend-configuration).
 
 ## Usage
 
@@ -265,6 +265,8 @@ steps:
 
 ### `upload` object keys
 
+A step with an `upload` block that sets any key but names no `files` fails, in `pre-command` before its command and again in `post-command`; the plugin does not guess a pattern.
+
 | Key           | Type             | Required | Description                                                                                                               |
 | ------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `variant`     | string           | yes      | The platform the step uploads (e.g. `linux-amd64-release`).                                                               |
@@ -288,12 +290,12 @@ build's (`BUILDKITE_BRANCH`); an upload or promote block names neither.
 
 ### `download` object keys
 
-| Key           | Type    | Required | Description                                                                                                   |
-| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `projects`    | array   | yes      | List of entries to download, each of one project and platform.                                                |
-| `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Default: `false`. |
-| `parallel`    | integer |          | Files downloaded simultaneously. Default: `4`.                                                                |
-| `concurrency` | integer |          | Multipart threads per download. Default: `32`.                                                                |
+| Key           | Type    | Required | Description                                                                                                                                                                                                                                         |
+| ------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects`    | array   | yes      | List of entries to download, each of one project and platform.                                                                                                                                                                                      |
+| `clean`       | boolean |          | Remove `output-dir` of all configured projects before downloading. Useful for retried jobs. Every project must set an `output-dir` that is not the checkout or a directory above it, or the job fails before it removes anything. Default: `false`. |
+| `parallel`    | integer |          | Files downloaded simultaneously. At least `1`. Default: `4`.                                                                                                                                                                                        |
+| `concurrency` | integer |          | Multipart threads per download. At least `1`. Default: `32`.                                                                                                                                                                                        |
 
 #### `projects` item keys
 
@@ -321,6 +323,10 @@ File patterns in `files` support an optional `!entry_filter` suffix:
 
 This matches archives by glob (`*-server.tar.zst`), extracts only entries matching `bin/*`, and strips the `bin/` prefix from output paths -- so `bin/qdb` lands at `<output-dir>/qdb`.
 
+The stripped prefix ends at the last `/` before the first glob character of the filter, so a glob inside a file name strips nothing of it: `a.tar.zst!lib/libqdb?.so` extracts `lib/libqdb1.so` as `<output-dir>/libqdb1.so`.
+
+An entry filter without a glob character names one entry, and strips the entry's directory: `*-server.tar.zst!README` extracts `README` as `<output-dir>/README`, and `*-server.tar.zst!docs/README` extracts `docs/README` as `<output-dir>/README`.
+
 Multiple entry filters may match the same archive. Their matching entries are
 extracted as a union in one archive download and decompression pass, while each
 filter keeps its own stripping prefix. For example:
@@ -337,11 +343,11 @@ Supported archive formats for extraction: `.tar.gz`, `.tar.zst` / `.tar.zstd`, `
 
 ## How it works
 
-| Hook            | Action                                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `post-checkout` | Makes the step's virtual environment with the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, and fails when that names nothing that runs.                                         |
-| `pre-command`   | Fails a step that uploads or promotes without a step id, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched.                   |
-| `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty. |
+| Hook            | Action                                                                                                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post-checkout` | Makes the step's virtual environment with the Python that `QDB_CICD_AGENT_PLUGIN_PYTHON` names, and fails when that names nothing that runs.                                                                         |
+| `pre-command`   | Fails a step that uploads or promotes without a step id, and a step whose `upload` block names no `files`, then downloads the files of the steps each entry takes. Every entry is resolved before a file is fetched. |
+| `post-command`  | Uploads the matched files, also after a failed command, so that the files of a failed build can be read. Promotes only after a command that passed and an upload that was not empty.                                 |
 
 The plan step, its second run and the last step of a build (options `plan`, `plan_again` and `last_step`, see [Snapshot dependencies](#snapshot-dependencies)) run their own command in `post-command` and nothing else. They install `lib/planning/requirements.txt` besides `lib/requirements.txt`, into a virtual environment of their own.
 
@@ -551,7 +557,7 @@ but does not clean it; the plugin's `clean` option remains handled by its wrappe
 To reuse the plugin's environment/SSM backend configuration, including R2,
 import `ssm_client` and `load_store_config` from `vendor.qdb_artifacts.lib`,
 and use `load_store_config(ssm_client())` to obtain `cfg` instead of
-constructing it directly. For R2 the configuration holds the access key.
+constructing it directly. For R2 the configuration holds the read-only access key, as the library only reads.
 
 ### Read the manifest of a step
 
@@ -587,19 +593,25 @@ blocks or exit handlers.
 
 Config is resolved in order: **environment variable -> SSM parameter -> default**.
 
-| Setting              | Env var                          | SSM parameter                                                           | Default      |
-| -------------------- | -------------------------------- | ----------------------------------------------------------------------- | ------------ |
-| Backend              | `ARTIFACTS_BACKEND`              | `/services/buildkite/config/artifacts/object-store/backend`             | `s3`         |
-| Destination          | `ARTIFACTS_DESTINATION`          | `/services/buildkite/config/artifacts/object-store/destination`         | _(required)_ |
-| Endpoint URL         | `ARTIFACTS_ENDPOINT_URL`         | `/services/buildkite/config/artifacts/object-store/endpoint-url`        | _(none)_     |
-| R2 Account ID        | `ARTIFACTS_R2_ACCOUNT_ID`        | `/services/buildkite/config/artifacts/object-store/r2/account-id`       | _(R2 only)_  |
-| R2 Access Key ID     | `ARTIFACTS_R2_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/access-key-id`    | _(R2 only)_  |
-| R2 Secret Access Key | `ARTIFACTS_R2_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/secret-access-key`        | _(R2 only)_  |
-| Artifacts domain     | `ARTIFACTS_DOMAIN`               | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain` | _(optional)_ |
+| Setting                        | Env var                                    | SSM parameter                                                                  | Default                |
+| ------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------- |
+| Backend                        | `ARTIFACTS_BACKEND`                        | `/services/buildkite/config/artifacts/object-store/backend`                    | `s3`                   |
+| Destination                    | `ARTIFACTS_DESTINATION`                    | `/services/buildkite/config/artifacts/object-store/destination`                | _(required)_           |
+| Endpoint URL                   | `ARTIFACTS_ENDPOINT_URL`                   | `/services/buildkite/config/artifacts/object-store/endpoint-url`               | _(none)_               |
+| R2 Account ID                  | `ARTIFACTS_R2_ACCOUNT_ID`                  | `/services/buildkite/config/artifacts/object-store/r2/account-id`              | _(R2 only)_            |
+| R2 Access Key ID               | `ARTIFACTS_R2_ACCESS_KEY_ID`               | `/services/buildkite/config/artifacts/object-store/r2/access-key-id`           | _(R2 only)_            |
+| R2 Secret Access Key           | `ARTIFACTS_R2_SECRET_ACCESS_KEY`           | `/services/buildkite/credentials/artifacts/r2/secret-access-key`               | _(R2 only)_            |
+| R2 read-only Access Key ID     | `ARTIFACTS_R2_READ_ONLY_ACCESS_KEY_ID`     | `/services/buildkite/config/artifacts/object-store/r2/read-only-access-key-id` | _(R2 only, see below)_ |
+| R2 read-only Secret Access Key | `ARTIFACTS_R2_READ_ONLY_SECRET_ACCESS_KEY` | `/services/buildkite/credentials/artifacts/r2/read-only-secret-access-key`     | _(R2 only, see below)_ |
+| Artifacts domain               | `ARTIFACTS_DOMAIN`                         | `/services/buildkite/config/artifacts/object-store/r2/artifacts-domain`        | _(optional)_           |
 
 For **AWS S3**, the agent's IAM role is used -- no explicit credentials needed.
 
 For **Cloudflare R2**, set `ARTIFACTS_BACKEND=r2` and provide the R2 credentials above.
+
+On R2 the plugin picks the key pair by what the caller does. A download, and the library's `load_store_config`, `resolve_artifacts` and `download_artifacts`, use the read-only key pair, which can only read. An upload, a promote, the plan step, its second run and the last step write to the bucket and use the read-write key pair. The read-only token needs no permission to write, so a job that only downloads cannot overwrite an artifact or move a latest file.
+
+A store that has no read-only key pair yet still works: a reader then uses the read-write key pair and the job log says `WARNING: no read-only R2 key pair is configured`. A store that has half a read-only pair, or a placeholder in it, fails the job. For a program outside Buildkite, `load_store_config(ssm)` takes the read-only pair, and `load_store_config(ssm, WRITE)`, with `WRITE` from `lib.config`, takes the read-write one. The S3 backend has no key pair of the plugin: it signs with the agent's IAM role for every caller, and a role that can only read the bucket makes a reader read-only.
 
 ## Debug mode
 
