@@ -323,6 +323,8 @@ File patterns in `files` support an optional `!entry_filter` suffix:
 
 This matches archives by glob (`*-server.tar.zst`), extracts only entries matching `bin/*`, and strips the `bin/` prefix from output paths -- so `bin/qdb` lands at `<output-dir>/qdb`.
 
+The stripped prefix ends at the last `/` before the first glob character of the filter, so a glob inside a file name strips nothing of it: `a.tar.zst!lib/libqdb?.so` extracts `lib/libqdb1.so` as `<output-dir>/libqdb1.so`.
+
 An entry filter without a glob character names one entry, and strips the entry's directory: `*-server.tar.zst!README` extracts `README` as `<output-dir>/README`, and `*-server.tar.zst!docs/README` extracts `docs/README` as `<output-dir>/README`.
 
 Multiple entry filters may match the same archive. Their matching entries are

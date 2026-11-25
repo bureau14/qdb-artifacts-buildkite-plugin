@@ -14,7 +14,7 @@ import zstandard
 from lib.extract import extract_local_archive
 from lib.rules import match_rules, parse_rules
 
-ENTRIES = ("README", "dir/README", "dir/other.txt")
+ENTRIES = ("README", "dir/README", "dir/other.txt", "lib/libqdb1.so", "lib/sub/libqdb2.so")
 
 
 def as_tar(entries: tuple) -> bytes:
@@ -45,6 +45,10 @@ ARCHIVES = {
 FILTERS = {
     "README": {"README": "README"},
     "dir/README": {"README": "dir/README"},
+    "lib/libqdb?.so": {"libqdb1.so": "lib/libqdb1.so"},
+    "lib/libqdb[0-9].so": {"libqdb1.so": "lib/libqdb1.so"},
+    "lib/lib*": {"libqdb1.so": "lib/libqdb1.so"},
+    "lib/*": {"libqdb1.so": "lib/libqdb1.so", "sub/libqdb2.so": "lib/sub/libqdb2.so"},
 }
 
 
@@ -60,9 +64,9 @@ def extracted(tmp_path, archive_name, entry_filter):
 
 @pytest.mark.parametrize("archive_name", sorted(ARCHIVES))
 @pytest.mark.parametrize("entry_filter", sorted(FILTERS))
-def test_an_entry_filter_without_glob_characters_extracts_its_entry(
+def test_an_entry_filter_strips_only_the_directories_before_its_first_glob(
     tmp_path, archive_name, entry_filter
 ):
-    """An entry filter that names one entry extracts that entry, and only it, under the entry's
-    own name without the directories of the filter."""
+    """An entry filter strips the whole directories that precede its first glob character, or
+    all its directories when it has none, and never a part of a file name."""
     assert extracted(tmp_path, archive_name, entry_filter) == FILTERS[entry_filter]

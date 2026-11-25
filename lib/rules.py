@@ -19,10 +19,11 @@ def parse_rule(pattern):
 
     archive_glob  -- fnmatch against the artifact's path (e.g. '*-server.tar.zst')
     entry_filter  -- optional fnmatch against archive entries (e.g. 'bin/*')
-    strip_prefix  -- the filter's fixed prefix before its first glob character, stripped from
-                     output paths, so 'bin/*' extracts 'bin/qdb' to output_dir/qdb. A filter
-                     without a glob character strips its directory, so 'bin/qdb' extracts to
-                     output_dir/qdb and 'README' to output_dir/README
+    strip_prefix  -- the filter's whole directories before its first glob character, stripped
+                     from output paths, so 'bin/*' extracts 'bin/qdb' to output_dir/qdb and
+                     'lib/libqdb?.so' extracts 'lib/libqdb1.so' to output_dir/libqdb1.so. A
+                     filter without a glob character strips its directory, so 'bin/qdb'
+                     extracts to output_dir/qdb and 'README' to output_dir/README
     """
     archive_glob, bang, entry_filter = pattern.partition("!")
     if not bang:
@@ -32,9 +33,7 @@ def parse_rule(pattern):
 
 def strip_prefix_of(entry_filter):
     fixed = re.match(r"[^*?[]*", entry_filter)[0]
-    if fixed != entry_filter:
-        return fixed
-    return entry_filter[: entry_filter.rfind("/") + 1]
+    return fixed[: fixed.rfind("/") + 1]
 
 
 def parse_rules(patterns):
