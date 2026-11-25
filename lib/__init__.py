@@ -16,7 +16,14 @@ from .config import StoreConfig, load_store_config
 from .download import download_artifacts
 from .errors import ArtifactsError
 from .manifest import read_manifest
-from .resolve import Branch, Key, ResolvedArtifact, ResolvedStep, resolve_artifacts
+from .resolve import (
+    Branch,
+    Key,
+    ResolvedArtifact,
+    ResolvedStep,
+    resolve_artifacts,
+    resolve_dependency_key,
+)
 
 __all__ = [
     "ArtifactsError",
@@ -29,6 +36,7 @@ __all__ = [
     "load_store_config",
     "read_manifest",
     "resolve_artifacts",
+    "resolve_dependency_key",
     "s3_client",
     "ssm_client",
 ]

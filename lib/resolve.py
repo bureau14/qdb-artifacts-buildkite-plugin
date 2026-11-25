@@ -21,10 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import layout
+from .codec import decoded
+from .config import StoreConfig
 from .errors import ArtifactsError
 from .forms import name_of
 from .job import Build, Job, job_ref
-from .key import commit_of
+from .key import KeyJson, commit_of
 from .layout import Folder
 from .log import log
 from .manifest import Manifest, is_made, read_manifest_at
@@ -280,6 +282,26 @@ class Key:
     """The build of a step at ``key``."""
 
     key: str
+
+
+def resolve_dependency_key(cfg: StoreConfig, resolved: ResolvedStep, project_id: str) -> Key:
+    """Read the direct dependency recorded by the producer of a resolved step.
+
+    A key document can record multiple keys for one project. Without a unique key
+    the caller cannot reproduce the producer's selection by project alone.
+    """
+    store = destination_store(cfg)
+    where = layout.key_json(store.prefix, resolved.project, resolved.key)
+    body = store.get(where)
+    if body is None:
+        raise ArtifactsError(f"Missing snapshot metadata at {where}")
+    document = decoded(KeyJson, body)
+    keys = {key for project, key in document.deps if project == project_id}
+    if len(keys) != 1:
+        raise ArtifactsError(
+            f"Expected one dependency key for {project_id} in {where}, found {len(keys)}"
+        )
+    return Key(keys.pop())
 
 
 def resolve_artifacts(cfg, project_id, variant, step, build, patterns, exclude_patterns=None):

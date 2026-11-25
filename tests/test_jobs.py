@@ -871,3 +871,26 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     assert made == set(matrix) - failing
     assert all(decode_manifest(manifests[v]).promoted.build.id == build_id(1) for v in made)
     assert {f.folder for r in records for f in r.failed} == {Folder(v, "build") for v in failing}
+
+
+@pytest.mark.parametrize("recorded", [None, (), ("first",), ("first", "second")])
+def test_external_dependency_key_comes_from_the_selected_snapshot(store, monkeypatch, recorded):
+    from lib import ArtifactsError, Key, StoreConfig, resolve_artifacts, resolve_dependency_key
+
+    for name, value in store_variables(store, "s3").items():
+        monkeypatch.setenv(name, value)
+    cfg = StoreConfig("s3", f"s3://{BUCKET}/objects", endpoint_url=store.endpoint)
+    deps = (("another-project", "another-key"),) + tuple(("core", k) for k in recorded or ())
+    document = KeyJson("widget", "a" * 40, deps)
+    key = key_of(document)
+    store.put_all(
+        step_wrote(key, MASTER, Folder("linux", "build"), {"wheel": b"x"}, 1, True, under="objects")
+    )
+    if recorded is not None:
+        store.put(layout.key_json("objects", "widget", key), encode_key_json(document))
+    _, resolved, _ = resolve_artifacts(cfg, "widget", "linux", "build", Key(key), ["wheel"])
+    if recorded == ("first",):
+        assert resolve_dependency_key(cfg, resolved, "core") == Key("first")
+    else:
+        with pytest.raises(ArtifactsError):
+            resolve_dependency_key(cfg, resolved, "core")
