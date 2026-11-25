@@ -479,9 +479,8 @@ environment variables or SSM configuration are required:
 ```python
 from vendor.qdb_artifacts.lib import Branch, StoreConfig, resolve_artifacts
 
-cfg = StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite")
 bucket, resolved, objects = resolve_artifacts(
-    cfg=cfg,
+    cfg=StoreConfig(backend="s3", destination="s3://my-artifacts/buildkite"),
     project_id="quasardb",
     variant="linux-amd64-release",
     step="build",
@@ -513,19 +512,6 @@ matching `(entry_filter, strip_prefix)` pairs in configuration order for
 callers that also want to extract selected archive entries. Project,
 platform, step, build, and patterns are explicit inputs rather than
 Buildkite-specific defaults.
-
-An external caller can use `s3_client(cfg)` from the same package to sign a GET
-for a selected object. Pass the configuration used for resolution so the client
-uses the same S3 or R2 endpoint and credentials.
-
-```python
-from vendor.qdb_artifacts.lib import s3_client
-
-client = s3_client(cfg)
-url = client.generate_presigned_url(
-    "get_object", Params={"Bucket": bucket, "Key": objects[0].key}, ExpiresIn=900
-)
-```
 
 ### Download and extract artifacts
 
