@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import layout, transfer
 from .annotation import annotate_upload
+from .config import WRITE
 from .errors import ArtifactsError
 from .job import Job
 from .key import create_key_json, own_key
@@ -142,7 +143,7 @@ def upload(job: Job, o: Options) -> bool:
     # Asked only now: an upload that allow_empty skips asks git nothing.
     own = own_key(job, o.key)
     folder = uploaded_folder(o)
-    at = open_destination()
+    at = open_destination(WRITE)
     location = layout.step_folder(at.store.prefix, job.project, own.key, folder)
     relative = [(rel, f.stat().st_size) for f, rel in files]
 

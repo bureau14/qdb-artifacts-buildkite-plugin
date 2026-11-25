@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import transfer
 from .annotation import annotate_downloads
+from .config import READ
 from .errors import ArtifactsError
 from .extract import extract_local_archive
 from .job import Job
@@ -163,7 +164,7 @@ def download(job: Job, o: Options) -> None:
     d = o.download
     if d.clean:
         clean_outputs(d)
-    at = open_destination()
+    at = open_destination(READ)
     own = functools.cache(lambda: own_key(job, o.key).key)
     found = [taken(at.store, n, e, job, own) for n, e in enumerate(d.projects, start=1)]
     parallel, concurrency = d.parallel, d.concurrency

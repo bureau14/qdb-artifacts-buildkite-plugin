@@ -22,6 +22,7 @@ import dataclasses
 import itertools
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -46,6 +47,13 @@ R2 = {
     "ARTIFACTS_R2_ACCESS_KEY_ID": "test-r2-access-key",
     "ARTIFACTS_R2_SECRET_ACCESS_KEY": "test-r2-secret-access-key",
 }
+R2_READ_ONLY = {
+    "ARTIFACTS_R2_READ_ONLY_ACCESS_KEY_ID": "test-r2-read-only-access-key",
+    "ARTIFACTS_R2_READ_ONLY_SECRET_ACCESS_KEY": "test-r2-read-only-secret-access-key",
+}
+READ_WRITE_KEY = R2["ARTIFACTS_R2_ACCESS_KEY_ID"]
+READ_ONLY_KEY = R2_READ_ONLY["ARTIFACTS_R2_READ_ONLY_ACCESS_KEY_ID"]
+WRITING_METHODS = ("PUT", "POST", "DELETE")
 OPTION_PREFIX = "BUILDKITE_PLUGIN_QDB_ARTIFACTS_"
 GENERATED = "pipeline.yml"
 MASTER = "refs/heads/master"
@@ -100,9 +108,39 @@ class QuietHandler(WSGIRequestHandler):
         pass
 
 
+class Signed:
+    """Which access key signed each request the store server saw, as (method, access key id)."""
+
+    def __init__(self):
+        self.requests: list[tuple[str, str]] = []
+
+    def clear(self) -> None:
+        self.requests.clear()
+
+    def keys(self, *methods: str) -> set[str]:
+        """The access keys that signed a request of one of ``methods``, any method when none."""
+        return {k for m, k in self.requests if not methods or m in methods}
+
+
+SIGNED = Signed()
+CREDENTIAL = re.compile(r"Credential=([^/]+)/")
+
+
+def recording(app, signed: Signed):
+    """``app`` as a WSGI application that notes the access key of every signed request."""
+
+    def serve(environ, start_response):
+        found = CREDENTIAL.search(environ.get("HTTP_AUTHORIZATION", ""))
+        if found:
+            signed.requests.append((environ["REQUEST_METHOD"], found.group(1)))
+        return app(environ, start_response)
+
+    return serve
+
+
 @pytest.fixture(scope="session")
 def store_endpoint():
-    app = DomainDispatcherApplication(create_backend_app)
+    app = recording(DomainDispatcherApplication(create_backend_app), SIGNED)
     server = make_server("127.0.0.1", 0, app, threaded=True, request_handler=QuietHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}"
@@ -127,6 +165,7 @@ class Store:
 
     endpoint: str
     s3: object
+    signed: Signed
 
     def put(self, key: str, body: bytes) -> None:
         self.s3.put_object(Bucket=BUCKET, Key=key, Body=body)
@@ -157,7 +196,9 @@ def store(store_endpoint):
     urllib.request.urlopen(reset).read()
     s3 = admin_client("s3", store_endpoint)
     s3.create_bucket(Bucket=BUCKET)
-    return Store(store_endpoint, s3)
+    SIGNED.clear()
+    yield Store(store_endpoint, s3, SIGNED)
+    assert READ_ONLY_KEY not in SIGNED.keys(*WRITING_METHODS), "the read-only key wrote"
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +505,7 @@ def store_variables(store: Store, backend: str, destination: str = f"s3://{BUCKE
     holds the R2 key pair and no AWS credential, so that only the pair can sign its requests."""
     aws = {"AWS_ACCESS_KEY_ID": "test-aws-access-key", "AWS_SECRET_ACCESS_KEY": "test-aws-secret"}
     return {
-        **(R2 if backend == "r2" else aws),
+        **({**R2, **R2_READ_ONLY} if backend == "r2" else aws),
         "AWS_DEFAULT_REGION": REGION,
         "AWS_ENDPOINT_URL_SSM": store.endpoint,
         "AWS_EC2_METADATA_DISABLED": "true",

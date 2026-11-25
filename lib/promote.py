@@ -17,6 +17,7 @@ import dataclasses
 import time
 
 from . import layout
+from .config import WRITE
 from .errors import ArtifactsError
 from .forms import branch_ref, iso_utc
 from .job import Job
@@ -60,7 +61,7 @@ def promote_folder(
 def promote(job: Job, o: Options) -> None:
     """Promote the folder the step's promote block names, at the build's key."""
     key, folder = own_key(job, o.key).key, promoted_folder(o)
-    store = open_destination().store
+    store = open_destination(WRITE).store
     promotion = Promoted(iso_utc(time.time()), job.branch, job.build)
     writes = job.writes_latest_files
     held = promote_folder(store, job.project, key, folder, promotion, writes)

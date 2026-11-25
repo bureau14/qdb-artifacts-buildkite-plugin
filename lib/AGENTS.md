@@ -28,7 +28,7 @@ only `cli.py` reaches it.
 | `retry.py`      | a call repeated with backoff: each file transfer, and each request to Buildkite's API                       | how often and how long a file transfer is tried                                                                               |
 | `objects.py`    | the small objects of the store behind one interface, `Store`                                                | what an absent object and an object that exists already answer; what a test fakes                                             |
 | `clients.py`    | the boto3 clients, where S3 and R2 differ                                                                   | credentials, timeouts, how boto3 retries a request for a small object, path-style addressing for R2                           |
-| `config.py`     | the store configuration, from variables, then SSM, then defaults                                            | adding a setting; the default R2 endpoint; why a placeholder value is an error                                                |
+| `config.py`     | the store configuration, from variables, then SSM, then defaults                                            | adding a setting; the default R2 endpoint; why a placeholder value is an error; which R2 key pair a caller gets               |
 | `annotation.py` | what a job shows on the build page of its upload and its downloads                                          | the annotation contexts; why a failed annotation does not fail a job; one row per project and platform of a download          |
 | `codec.py`      | dataclasses as canonical JSON and back                                                                      | the bytes that a key is a hash of; adding a stored document                                                                   |
 | `forms.py`      | the forms of a ref, of a commit and of a time                                                               | a full ref against a build's name                                                                                             |
@@ -77,6 +77,12 @@ only `cli.py` reaches it.
   fit its dataclass. `options.options_of` raises `ArtifactsError` for a `parallel`
   or `concurrency` that is not a whole number of at least 1, before any work
   starts.
+- A caller opens the store for what it does: `open_destination(READ)` for the
+  download, `open_destination(WRITE)` for the upload, the promote and the steps
+  of `planning/`, which write `key.json` and failure records. A caller that
+  names no access reads, so `load_store_config(ssm)` of a program outside
+  Buildkite never gets the key pair that can write. A new caller that writes
+  must say `WRITE`.
 - The names that `__init__.py` exports are what a program outside Buildkite
   calls. The README's "Resolve and download artifacts outside the plugin"
   documents them. `tests/outside_caller.py` calls `download_artifacts`,
@@ -85,6 +91,13 @@ only `cli.py` reaches it.
 
 **Why**:
 
+- The R2 key pair is chosen in `config.py` and nowhere else: `StoreConfig`
+  holds the one pair of the caller, and `clients.py` signs with it. A reader
+  without a read-only pair in the store falls back to the read-write pair and
+  logs a warning, because the plugin may be deployed before the parameters
+  exist, and a hard failure would stop every download of every build. Half a
+  pair fails, as that is a mistake and no rollout state. S3 has no pair: the
+  agent's IAM role decides what a caller may write.
 - A download goes by the manifest because a listing cannot tell a promoted
   upload from one that is half written.
 - An upload reads the manifest before it writes its files, and again before it
