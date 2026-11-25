@@ -22,7 +22,7 @@ from .resolve import (
     ResolvedArtifact,
     ResolvedStep,
     resolve_artifacts,
-    resolve_dependency_key,
+    resolve_dependency_keys,
 )
 
 __all__ = [
@@ -36,7 +36,7 @@ __all__ = [
     "load_store_config",
     "read_manifest",
     "resolve_artifacts",
-    "resolve_dependency_key",
+    "resolve_dependency_keys",
     "s3_client",
     "ssm_client",
 ]

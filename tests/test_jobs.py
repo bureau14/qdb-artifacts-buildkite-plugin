@@ -38,7 +38,7 @@ from world import (
     store_variables,
 )
 
-from lib import ArtifactsError, Key, StoreConfig, layout, resolve_artifacts, resolve_dependency_key
+from lib import ArtifactsError, Key, StoreConfig, layout, resolve_artifacts, resolve_dependency_keys
 from lib.codec import decoded, encoded
 from lib.forms import branch_ref, name_of, short_commit
 from lib.job import Build
@@ -879,10 +879,10 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
         pytest.param(None, id="missing-document"),
         pytest.param((), id="missing-project"),
         pytest.param(("first",), id="one-key"),
-        pytest.param(("first", "second"), id="ambiguous-keys"),
+        pytest.param(("first", "second"), id="multiple-keys"),
     ],
 )
-def test_external_dependency_key_comes_from_the_selected_snapshot(
+def test_external_dependency_keys_come_from_the_selected_snapshot(
     store, monkeypatch, dependency_keys
 ):
     for name, value in store_variables(store, "s3").items():
@@ -897,8 +897,8 @@ def test_external_dependency_key_comes_from_the_selected_snapshot(
     if dependency_keys is not None:
         store.put(layout.key_json("objects", "widget", key), encode_key_json(document))
     _, resolved, _ = resolve_artifacts(cfg, "widget", "linux", "build", Key(key), ["wheel"])
-    if dependency_keys == ("first",):
-        assert resolve_dependency_key(cfg, resolved, "core") == Key("first")
-    else:
+    if dependency_keys is None:
         with pytest.raises(ArtifactsError):
-            resolve_dependency_key(cfg, resolved, "core")
+            resolve_dependency_keys(cfg, resolved, "core")
+    else:
+        assert resolve_dependency_keys(cfg, resolved, "core") == [Key(k) for k in dependency_keys]
