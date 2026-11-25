@@ -285,21 +285,22 @@ class Key:
 
 
 def resolve_dependency_key(cfg: StoreConfig, resolved: ResolvedStep, project_id: str) -> Key:
-    """Read the direct dependency recorded by the producer of a resolved step.
+    """Return the snapshot key the producer recorded for its direct dependency ``project_id``.
 
-    A key document can record multiple keys for one project. Without a unique key
-    the caller cannot reproduce the producer's selection by project alone.
+    Other projects in the producer's key.json are irrelevant to this lookup. If the
+    requested project appears with two different keys, its name alone cannot tell
+    the caller which snapshot to fetch.
     """
     store = destination_store(cfg)
-    where = layout.key_json(store.prefix, resolved.project, resolved.key)
-    body = store.get(where)
+    key_path = layout.key_json(store.prefix, resolved.project, resolved.key)
+    body = store.get(key_path)
     if body is None:
-        raise ArtifactsError(f"Missing snapshot metadata at {where}")
+        raise ArtifactsError(f"Missing snapshot metadata at {key_path}")
     document = decoded(KeyJson, body)
     keys = {key for project, key in document.deps if project == project_id}
     if len(keys) != 1:
         raise ArtifactsError(
-            f"Expected one dependency key for {project_id} in {where}, found {len(keys)}"
+            f"Expected one dependency key for {project_id} in {key_path}, found {len(keys)}"
         )
     return Key(keys.pop())
 

@@ -513,11 +513,13 @@ callers that also want to extract selected archive entries. Project,
 platform, step, build, and patterns are explicit inputs rather than
 Buildkite-specific defaults.
 
-To resolve a direct dependency of the selected snapshot, pass
-`resolve_dependency_key(cfg, resolved_step, project_id)` as the next
-`resolve_artifacts` call's `build`. It reads the producer's `key.json` and
-raises `ArtifactsError` if the document is missing or does not record exactly
-one distinct key for that project.
+To fetch the QuasarDB archives used to build a Python wheel, first resolve the
+wheel's named `build` step and keep the returned `ResolvedStep` as `wheel`.
+Call `resolve_dependency_key(cfg, wheel, "quasardb-build")` to read the QuasarDB
+snapshot key recorded by that wheel. Pass the returned `Key` as the `build`
+argument when resolving the `quasardb-build` project's `build` step. The lookup
+raises `ArtifactsError` if the wheel's `key.json` is missing or records zero or
+multiple distinct keys for `quasardb-build`.
 
 ### Download and extract artifacts
 
