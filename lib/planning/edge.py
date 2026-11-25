@@ -23,7 +23,7 @@ from typing import Any
 
 from .. import layout
 from ..codec import decoded, encoded
-from ..config import env_or_ssm
+from ..config import WRITE, env_or_ssm
 from ..errors import ArtifactsError
 from ..job import Job, checkout_commit
 from ..key import create_key_json
@@ -88,7 +88,7 @@ def buildkite_pipelines(ssm: Any) -> Callable[[str], PipelineFacts]:
 
 def real_edge() -> Edge:
     """The edge of a step on an agent."""
-    at = open_destination()
+    at = open_destination(WRITE)
     git = RealGit(log=log)
     return Edge(
         store=at.store,

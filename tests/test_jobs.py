@@ -31,6 +31,8 @@ from world import (
     BUCKET,
     GENERATED,
     MASTER,
+    READ_ONLY_KEY,
+    READ_WRITE_KEY,
     STEP_KINDS,
     Outcome,
     build_id,
@@ -720,6 +722,33 @@ def test_storage_is_additive(jobs, store, prefix, ref, key_source, branch_build)
     assert (m.promoted.build.id, m.uploaded.build.id) == (build_id(1), build_id(1))
     assert objects.get(latest, key.encode()) == key.encode()
     assert planned or objects[layout.key_json(under, "widget", key)] == encode_key_json(own)
+
+
+@pytest.mark.parametrize("backend", ["r2"])
+def test_a_reader_signs_with_the_read_only_key_and_a_writer_with_the_read_write_key(jobs, store):
+    """On R2 an upload and a promote sign every request with the read-write key and a download
+    signs every request with the read-only key, which no request that writes ever uses."""
+    payload = PAYLOADS[0]
+    maker, reader = jobs("widget", SUBJECT), jobs("app", 9)
+    maker.write(payload.made(stamp(SUBJECT, MASTER, "linux", "build"), "build"))
+    options = {"key": PLANNED_KEY, **upload_and_promote(**payload.options("build"))}
+    project = {
+        "project_id": "widget",
+        "variant": "linux",
+        "step": "build",
+        "output-dir": "in",
+        "keys": {"build": PLANNED_KEY},
+        **payload.download,
+    }
+
+    made = maker.with_plugin(options).run("post-command")
+    written_by = store.signed.keys()
+    store.signed.clear()
+    fetched = reader.with_plugin({"download": {"projects": [project]}}).run("pre-command")
+
+    assert (made.code, fetched.code) == (0, 0), made.output + fetched.output
+    assert written_by == {READ_WRITE_KEY}
+    assert store.signed.keys() == {READ_ONLY_KEY}
 
 
 @pytest.mark.parametrize(

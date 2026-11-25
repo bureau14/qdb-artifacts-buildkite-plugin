@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError
 
 from . import layout
 from .clients import s3_client, ssm_client
-from .config import StoreConfig, load_store_config
+from .config import READ, StoreConfig, load_store_config
 
 ABSENT = ("NoSuchKey", "404")
 TAKEN = ("PreconditionFailed",)
@@ -110,8 +110,9 @@ class Opened:
     ssm: object
 
 
-def open_destination() -> Opened:
-    """Open the destination a job's configuration names."""
+def open_destination(access: str = READ) -> Opened:
+    """Open the destination a job's configuration names, for a caller that does ``access``
+    (``config.READ`` or ``config.WRITE``), which decides the R2 key pair."""
     ssm = ssm_client()
-    cfg = load_store_config(ssm)
+    cfg = load_store_config(ssm, access)
     return Opened(cfg, destination_store(cfg), ssm)
