@@ -293,7 +293,7 @@ def resolve_dependency_keys(cfg: StoreConfig, resolved: ResolvedStep) -> dict[st
         raise ArtifactsError(f"Missing snapshot metadata at {key_path}")
     document = decoded(KeyJson, body)
     by_project: dict[str, list[Key]] = {}
-    for project, key in sorted(set(document.deps)):
+    for project, key in document.deps:
         by_project.setdefault(project, []).append(Key(key))
     return by_project
 
