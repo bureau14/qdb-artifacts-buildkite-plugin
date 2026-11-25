@@ -94,6 +94,15 @@ class Store:
             for item in page.get("Contents", [])
         ]
 
+    def subfolders(self, prefix: str):
+        """Names of the immediate folders below a slash-terminated prefix, across all pages."""
+        pages = self.client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix, Delimiter="/"
+        )
+        for page in pages:
+            for folder in page.get("CommonPrefixes", []):
+                yield folder["Prefix"][len(prefix) : -1]
+
 
 def destination_store(cfg: StoreConfig) -> Store:
     """The store of the destination ``cfg`` names."""

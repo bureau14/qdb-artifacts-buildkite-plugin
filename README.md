@@ -472,6 +472,15 @@ and step, then pass their object-store locations to your own downloader.
 Install the dependencies from `lib/requirements.txt`; the library never imports
 `lib/planning/`, and needs no PyYAML.
 
+Callers selecting a whole platform can pass `build_id="LATEST_SUCCESSFUL"`,
+`git_ref`, and `require_strict_ref_match=True` in place of `step` and `build`.
+The resolver reads the promoted step manifests selected by the branch's newest
+snapshot key. The returned `resolved.build_id` is that immutable snapshot key.
+Pass it as `build_id` to select the platform's promoted steps at that key after
+the branch has moved. For a separate signing client,
+`resolve_object_auth(ssm, cfg, permission="object-read-only")` returns the R2
+key pair from the loaded configuration or empty credentials for S3 IAM.
+
 The following example uses S3 with the standard AWS credential chain. Replace
 `s3://my-artifacts/buildkite` with your artifact bucket/prefix; no Buildkite
 environment variables or SSM configuration are required:

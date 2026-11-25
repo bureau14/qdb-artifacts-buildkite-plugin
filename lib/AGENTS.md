@@ -118,9 +118,8 @@ only `cli.py` reaches it.
   the plugin also annotates the build with these facts, and the library's
   `download_artifacts` only logs. A person who looks at a job sees which commit
   of the other project it ran against.
-- The library takes one step for each call, and the caller names the build as
-  `Branch(git_ref)` or `Key(key)`. The call has no form without one of them, so
-  a caller always says which build it wants.
+- A named-step library call takes a `Branch(git_ref)` or `Key(key)`. The
+  platform resolver takes a snapshot key or `LATEST_SUCCESSFUL` and a ref.
 - `artifacts.py` lies outside the package so that `lib` imports as a package
   for the hooks exactly as it does for a caller of the library. Its docstring
   gives the details.

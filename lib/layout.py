@@ -58,6 +58,10 @@ def key_json(prefix: str, project: str, key: str) -> str:
     return key_join(prefix, project, key, KEY_JSON)
 
 
+def platform_prefix(prefix: str, project: str, key: str, platform: str) -> str:
+    return key_join(prefix, project, key, platform) + "/"
+
+
 def step_folder(prefix: str, project: str, key: str, folder: Folder) -> str:
     return key_join(prefix, project, key, folder.platform, folder.step)
 

@@ -871,3 +871,56 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     assert made == set(matrix) - failing
     assert all(decode_manifest(manifests[v]).promoted.build.id == build_id(1) for v in made)
     assert {f.folder for r in records for f in r.failed} == {Folder(v, "build") for v in failing}
+
+
+def test_platform_resolves_promoted_steps_by_branch_and_snapshot_key():
+    import boto3
+    from moto import mock_aws
+
+    from lib import ArtifactsError, ObjectAuth, StoreConfig, resolve_artifacts, resolve_object_auth
+
+    cfg = StoreConfig("s3", f"s3://{BUCKET}/objects")
+    auth = resolve_object_auth(None, cfg, permission="object-read-only")
+    assert auth == ObjectAuth()
+    r2 = StoreConfig("r2", cfg.destination, r2_access_key_id="id", r2_secret_access_key="secret")
+    assert resolve_object_auth(None, r2, permission="object-read-only") == ObjectAuth(
+        "id", "secret"
+    )
+
+    def resolve(build_id, ref=FEATURE):
+        return resolve_artifacts(
+            cfg=cfg,
+            auth=auth,
+            project_id="widget",
+            build_id=build_id,
+            git_ref=ref,
+            variant="linux",
+            patterns=["*.whl"],
+            require_strict_ref_match=True,
+        )
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=BUCKET)
+        for step, promoted in [("client", True), ("utils", True), ("pending", False)]:
+            files = {f"{step}.whl": b"wheel", "notes.txt": b"notes"}
+            for key, data in step_wrote(
+                PLANNED_KEY, FEATURE, Folder("linux", step), files, 1, promoted, under="objects"
+            ).items():
+                s3.put_object(Bucket=BUCKET, Key=key, Body=data)
+        bucket, snapshot, objects = resolve("LATEST_SUCCESSFUL")
+        assert bucket == BUCKET and snapshot.build_id == PLANNED_KEY
+        assert [obj.rel for obj in objects] == ["client.whl", "utils.whl"]
+        for step in ("client", "utils"):
+            s3.delete_object(
+                Bucket=BUCKET,
+                Key=layout.latest_file("objects", "widget", FEATURE, Folder("linux", step)),
+            )
+        assert resolve(snapshot.build_id) == (bucket, snapshot, objects)
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=layout.latest_file("objects", "widget", MASTER, Folder("linux", "client")),
+            Body=PLANNED_KEY.encode(),
+        )
+        with pytest.raises(ArtifactsError):
+            resolve("LATEST_SUCCESSFUL")
