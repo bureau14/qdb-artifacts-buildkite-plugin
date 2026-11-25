@@ -74,7 +74,9 @@ only `cli.py` reaches it.
 - A failure that the library can explain raises `ArtifactsError`. Any other
   failure raises the exception of boto3, of zstandard, of dacite or of the
   standard library. dacite raises when a stored document or an option does not
-  fit its dataclass.
+  fit its dataclass. `options.options_of` raises `ArtifactsError` for a `parallel`
+  or `concurrency` that is not a whole number of at least 1, before any work
+  starts.
 - The names that `__init__.py` exports are what a program outside Buildkite
   calls. The README's "Resolve and download artifacts outside the plugin"
   documents them. `tests/outside_caller.py` calls `download_artifacts`,
