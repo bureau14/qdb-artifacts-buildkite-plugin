@@ -8,7 +8,7 @@ all agents share, defaults for a plain S3 setup with an IAM role.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
 
@@ -47,25 +47,6 @@ class StoreConfig:
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
     artifacts_domain: str | None = None
-
-
-@dataclass(frozen=True)
-class ObjectAuth:
-    """Explicit credentials for R2, or an empty pair for the S3 IAM credential chain."""
-
-    access_key_id: str | None = None
-    secret_access_key: str | None = field(default=None, repr=False)
-
-
-def resolve_object_auth(ssm, cfg, permission):
-    """Expose the credentials already resolved by load_store_config for URL signing.
-
-    The configured R2 pair determines access. The permission argument describes the
-    operation and cannot grant or narrow the permissions on that pair.
-    """
-    if cfg.backend == "r2":
-        return ObjectAuth(cfg.r2_access_key_id, cfg.r2_secret_access_key)
-    return ObjectAuth()
 
 
 def ssm_value(ssm, name: str) -> str | None:

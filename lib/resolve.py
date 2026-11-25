@@ -17,7 +17,7 @@ step all resolve through these functions.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from . import layout
@@ -282,82 +282,24 @@ class Key:
     key: str
 
 
-@dataclass(frozen=True)
-class ResolvedBuild:
-    """The immutable snapshot key shared by the selected steps of a platform."""
+def resolve_artifacts(cfg, project_id, variant, step, build, patterns, exclude_patterns=None):
+    """Find one step of a project's platform and select its artifacts, without downloading.
 
-    build_id: str
-
-
-def platform_steps(store, project, variant, build_id, git_ref, strict):
-    """A branch follows the plugin's newest-key rule. A pin must survive branch movement."""
-    if build_id == "LATEST_SUCCESSFUL":
-        return walk_newest(store, project, walked_refs(git_ref, strict), variant)
-    prefix = layout.platform_prefix(store.prefix, project, build_id, variant)
-    steps = []
-    for step in store.subfolders(prefix):
-        folder = Folder(variant, step)
-        location = layout.step_folder(store.prefix, project, build_id, folder)
-        manifest = read_manifest_at(store, location)
-        if is_made(manifest):
-            steps.append(ResolvedStep(project, folder, build_id, location, manifest))
-    if not steps:
-        raise ArtifactsError(f"No promoted step of {project} ({variant}) at key {build_id}")
-    return steps
-
-
-def resolve_artifacts(
-    cfg,
-    project_id,
-    variant,
-    step=None,
-    build=None,
-    patterns=None,
-    exclude_patterns=None,
-    *,
-    auth=None,
-    build_id=None,
-    git_ref=None,
-    require_strict_ref_match=False,
-):
-    """Select one named step by Branch/Key, or a platform by snapshot key or LATEST_SUCCESSFUL.
-
-    The step form returns a ResolvedStep. The platform form returns a ResolvedBuild
-    whose build_id is the selected snapshot key. Both return (bucket, result, objects).
+    ``build`` says which build of the step: a ``Branch``, its latest successful build there,
+    or a ``Key``. ``patterns`` use the plugin's archive_glob[!entry_filter] syntax. Returns
+    (bucket, ResolvedStep, objects), objects a list of ResolvedArtifact. A step that cannot be
+    found, or that gives no file, raises ArtifactsError. Needs no Buildkite environment.
     """
-    if patterns is None:
-        raise TypeError("resolve_artifacts requires patterns")
-    if auth is not None and cfg.backend == "r2":
-        cfg = replace(
-            cfg, r2_access_key_id=auth.access_key_id, r2_secret_access_key=auth.secret_access_key
-        )
     store = destination_store(cfg)
+    folder = Folder(variant, step)
     name = f"The download of {project_id} ({variant})"
-    if build_id is not None:
-        if (
-            step is not None
-            or build is not None
-            or (build_id == "LATEST_SUCCESSFUL" and not git_ref)
-        ):
-            raise TypeError("Use build_id alone for a pin, or LATEST_SUCCESSFUL with git_ref")
-        steps = platform_steps(
-            store, project_id, variant, build_id, git_ref, require_strict_ref_match
-        )
-        result = ResolvedBuild(steps[0].key)
+    if isinstance(build, Key):
+        resolved = keyed_step(store, project_id, build.key, folder, name)
     else:
-        if step is None or not isinstance(build, (Key, Branch)):
-            raise TypeError("A named step requires a Branch or Key")
-        folder = Folder(variant, step)
-        if isinstance(build, Key):
-            result = keyed_step(store, project_id, build.key, folder, name)
-        else:
-            result = walk_named(store, project_id, walked_refs(build.git_ref, build.strict), folder)
-        steps = [result]
-    rules = parse_rules(patterns)
-    objects = []
-    for resolved in steps:
-        log_step(name, resolved)
-        objects.extend(selected(resolved, rules, exclude_patterns))
+        refs = walked_refs(build.git_ref, build.strict)
+        resolved = walk_named(store, project_id, refs, folder)
+    log_step(name, resolved)
+    objects = selected(resolved, parse_rules(patterns), exclude_patterns)
     if not objects:
-        raise nothing_matched(name, patterns, exclude_patterns, steps)
-    return store.bucket, result, objects
+        raise nothing_matched(name, patterns, exclude_patterns, [resolved])
+    return store.bucket, resolved, objects

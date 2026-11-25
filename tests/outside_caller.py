@@ -15,6 +15,7 @@ the file count of its manifest, as JSON.
 
 import json
 import sys
+from urllib.request import urlopen
 
 
 def download(tree, request, output_dir):
@@ -26,6 +27,8 @@ def download(tree, request, output_dir):
         download_artifacts,
         load_store_config,
         read_manifest,
+        resolve_artifacts,
+        s3_client,
     )
 
     ssm = boto3.client("ssm")
@@ -33,7 +36,17 @@ def download(tree, request, output_dir):
     asked = dict(request)
     key, git_ref = asked.pop("key", None), asked.pop("git_ref", None)
     build = Key(key) if key is not None else Branch(git_ref, strict=True)
+    selection = {k: v for k, v in asked.items() if k != "extract"}
+    bucket, found, objects = resolve_artifacts(cfg=cfg, build=build, **selection)
+    client = s3_client(cfg)
+    for obj in objects:
+        url = client.generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": obj.key}, ExpiresIn=60
+        )
+        with urlopen(url, timeout=10) as response:
+            assert len(response.read()) == obj.size
     _, resolved, _ = download_artifacts(cfg=cfg, build=build, output_dir=output_dir, **asked)
+    assert resolved.key == found.key
     manifest = read_manifest(resolved)
     return {"key": resolved.key, "file_count": len(manifest["files"])}
 
