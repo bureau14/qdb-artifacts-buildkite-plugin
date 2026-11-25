@@ -11,12 +11,19 @@ A failure the library can explain raises ArtifactsError. Other failures raise
 the exception of boto3, of zstandard or of the standard library.
 """
 
-from .clients import ssm_client
+from .clients import s3_client, ssm_client
 from .config import StoreConfig, load_store_config
 from .download import download_artifacts
 from .errors import ArtifactsError
 from .manifest import read_manifest
-from .resolve import Branch, Key, ResolvedArtifact, ResolvedStep, resolve_artifacts
+from .resolve import (
+    Branch,
+    Key,
+    ResolvedArtifact,
+    ResolvedStep,
+    resolve_artifacts,
+    resolve_dependency_keys,
+)
 
 __all__ = [
     "ArtifactsError",
@@ -29,5 +36,7 @@ __all__ = [
     "load_store_config",
     "read_manifest",
     "resolve_artifacts",
+    "resolve_dependency_keys",
+    "s3_client",
     "ssm_client",
 ]

@@ -26,6 +26,7 @@ def download(tree, request, output_dir):
         download_artifacts,
         load_store_config,
         read_manifest,
+        resolve_artifacts,
     )
 
     ssm = boto3.client("ssm")
@@ -33,7 +34,10 @@ def download(tree, request, output_dir):
     asked = dict(request)
     key, git_ref = asked.pop("key", None), asked.pop("git_ref", None)
     build = Key(key) if key is not None else Branch(git_ref, strict=True)
+    selection = {k: v for k, v in asked.items() if k != "extract"}
+    _, found, _ = resolve_artifacts(cfg=cfg, build=build, **selection)
     _, resolved, _ = download_artifacts(cfg=cfg, build=build, output_dir=output_dir, **asked)
+    assert resolved.key == found.key
     manifest = read_manifest(resolved)
     return {"key": resolved.key, "file_count": len(manifest["files"])}
 

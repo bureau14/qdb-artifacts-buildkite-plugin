@@ -21,10 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import layout
+from .codec import decoded
+from .config import StoreConfig
 from .errors import ArtifactsError
 from .forms import name_of
 from .job import Build, Job, job_ref
-from .key import commit_of
+from .key import KeyJson, commit_of
 from .layout import Folder
 from .log import log
 from .manifest import Manifest, is_made, read_manifest_at
@@ -280,6 +282,20 @@ class Key:
     """The build of a step at ``key``."""
 
     key: str
+
+
+def resolve_dependency_keys(cfg: StoreConfig, resolved: ResolvedStep) -> dict[str, list[Key]]:
+    """Return the given producer snapshot's direct dependency keys grouped by project."""
+    store = destination_store(cfg)
+    key_path = layout.key_json(store.prefix, resolved.project, resolved.key)
+    body = store.get(key_path)
+    if body is None:
+        raise ArtifactsError(f"Missing snapshot metadata at {key_path}")
+    document = decoded(KeyJson, body)
+    by_project: dict[str, list[Key]] = {}
+    for project, key in document.deps:
+        by_project.setdefault(project, []).append(Key(key))
+    return by_project
 
 
 def resolve_artifacts(cfg, project_id, variant, step, build, patterns, exclude_patterns=None):
