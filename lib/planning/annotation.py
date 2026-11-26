@@ -1,8 +1,9 @@
 """What the plan step and the last step show on the build page. Text only.
 
-A plan is a table, which says of each project whether it is reused; a failure is a fenced code block between a heading and a closing sentence.
-A name that a repository chose, such as a branch or a template path, is in a code span or in
-the block, because it can hold Markdown characters.
+A plan is a table, which says of each project whether it is reused; a failure is a fenced code
+block between a heading and a closing sentence. A name that a repository chose, such as a
+branch or a template path, is in a code span or in the block, because it can hold Markdown
+characters.
 """
 
 from __future__ import annotations
