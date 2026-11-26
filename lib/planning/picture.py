@@ -17,8 +17,8 @@ from typing import NamedTuple
 from xml.sax.saxutils import escape
 
 from ..forms import name_of, short_commit
-from .plan import Plan, Planned, dependencies_first, tree_of
-from .states import BUILDS, BUILT, FAILED, REUSED, State, said
+from .plan import Plan, dependencies_first, tree_of
+from .states import BUILDS, BUILT, FAILED, REUSED, State, said, stays_off_latest
 
 # The artifact of the build that holds the picture.
 PICTURE = "snapshot-plan.svg"
@@ -44,20 +44,20 @@ BETWEEN_COLUMNS, BETWEEN_ROWS, MARGIN, LABELS, TIP = 76, 18, 8, 26, 2
 # ---------------------------------------------------------------------------
 
 
-def remark(plan: Plan, n: Planned) -> str:
-    """The line under a project's commit, only for one that differs from the rest: its build
+def remark(plan: Plan, project: str, s: State) -> str:
+    """The line under a project's state, only for one that differs from the rest: its build
     does not become the latest of its branch, or it is taken from another branch or tag than
     the build's."""
-    name = name_of(n.ref)
-    if not n.writes_latest_file:
-        return f"not the latest of {name}"
+    name = name_of(plan.projects[project].ref)
+    if stays_off_latest(plan, project, s):
+        return f"does not become the latest of {name}"
     return "" if name == plan.context else f"from {name}"
 
 
-def box_width(plan: Plan, states: Mapping[str, State]) -> float:
+def box_width(states: Mapping[str, State], remarks: Mapping[str, str]) -> float:
     """One width for every box, so the columns line up."""
     names = max(map(len, states)) * CHAR
-    lines = [x for p, s in states.items() for x in (said(s), remark(plan, plan.projects[p]))]
+    lines = [*map(said, states.values()), *remarks.values()]
     return max(NARROWEST, names + PADDING, max(map(len, lines)) * REMARK_CHAR + PADDING)
 
 
@@ -130,10 +130,10 @@ class Rect(NamedTuple):
         return self.y + self.h / 2
 
 
-def height(plan: Plan, s: Slot) -> int:
+def height(remarks: Mapping[str, str], s: Slot) -> int:
     if s.project is None:
         return PASSING
-    return TALL if remark(plan, plan.projects[s.project]) else SHORT
+    return TALL if remarks[s.project] else SHORT
 
 
 def span(heights: Sequence[int]) -> int:
@@ -141,11 +141,11 @@ def span(heights: Sequence[int]) -> int:
 
 
 def placed(
-    plan: Plan, found: Sequence[Sequence[Slot]], width: float
+    remarks: Mapping[str, str], found: Sequence[Sequence[Slot]], width: float
 ) -> dict[tuple[int, Slot], Rect]:
     """Where each slot lies: the deepest column on the left, every column centred on the
     tallest one."""
-    heights = [[height(plan, s) for s in column] for column in found]
+    heights = [[height(remarks, s) for s in column] for column in found]
     tallest = max(map(span, heights))
     rects = {}
     for k, column in enumerate(found):
@@ -173,11 +173,10 @@ def text(
     )
 
 
-def box(plan: Plan, r: Rect, project: str, s: State, own: bool) -> str:
-    """A project: its name, its commit, its state and its remark. The build's own has a strong
-    border. The frame's class names the state and its reason."""
+def box(plan: Plan, r: Rect, project: str, s: State, noted: str, own: bool) -> str:
+    """A project: its name, its commit, its state and its remark ``noted``. The build's own
+    has a strong border. The frame's class names the state and its reason."""
     n = plan.projects[project]
-    noted = remark(plan, n)
     fill, edge, ink = COLOURS[s.kind]
     frame = (
         f'<rect class="{f"{s.kind} {s.reason}".strip()}" x="{r.x:.1f}" y="{r.y:.1f}" '
@@ -236,7 +235,8 @@ def tree_picture(plan: Plan, project: str, states: Mapping[str, State]) -> str |
         return None
     depth = depths(deps, project)
     found = columns(deps, depth, project)
-    rects = placed(plan, found, box_width(plan, states))
+    remarks = {p: remark(plan, p, states[p]) for p in deps}
+    rects = placed(remarks, found, box_width(states, remarks))
     labels = [
         label(rects[len(found) - 1, found[-1][0]], "built first"),
         label(rects[0, found[0][0]], "this build"),
@@ -246,5 +246,8 @@ def tree_picture(plan: Plan, project: str, states: Mapping[str, State]) -> str |
         for taker in deps
         for taken in deps[taker]
     ]
-    boxes = [box(plan, rects[depth[p], Slot(p)], p, states[p], own=p == project) for p in deps]
+    boxes = [
+        box(plan, rects[depth[p], Slot(p)], p, states[p], remarks[p], own=p == project)
+        for p in deps
+    ]
     return svg(list(rects.values()), [*labels, *arrows, *boxes])
