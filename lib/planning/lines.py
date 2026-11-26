@@ -32,11 +32,12 @@ def choose_release_line(merge_base_times: Mapping[str, int | None]) -> str:
     return max(known)[2] if known else "master"
 
 
-def release_line(git, url: str, branch: str) -> str:
-    """The release line of ``branch`` of the repository at ``url``, which ``git`` has checked
-    out; ``branch`` itself when it is one, with no question to git."""
+def release_line(git, url: str, branch: str, of: str | None = None) -> str:
+    """The release line of ``branch`` of the repository at ``url``: ``branch`` itself when it
+    is one, with no question to git. ``git`` has the branch's commit checked out, or it is
+    given as ``of``."""
     if is_release_line(branch):
         return branch
     lines = {b: c for b, c in sorted(git.branches(url).items()) if is_release_line(b)}
-    times = git.merge_base_times(url, sorted(set(lines.values())))
+    times = git.merge_base_times(url, sorted(set(lines.values())), of)
     return choose_release_line({line: times.get(c) for line, c in lines.items()})

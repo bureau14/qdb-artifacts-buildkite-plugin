@@ -23,7 +23,9 @@ class Job:
     The last four are set by the plan step on a build it starts for a dependency:
     ``root_build`` is the id of the build that made the plan (SNAPSHOT_PLAN), ``needs`` the
     folders asked of this build (SNAPSHOT_NEEDS), ``writes_latest_files`` is false only when
-    SNAPSHOT_BRANCH_BUILD says ``false``. ``rebuild`` is SNAPSHOT_REBUILD as a person set it.
+    SNAPSHOT_BRANCH_BUILD says ``false``, which the plan step writes into the pipeline it
+    uploads. ``rebuild`` and ``refs`` are SNAPSHOT_REBUILD and SNAPSHOT_REFS as a person set
+    them.
     """
 
     project: str
@@ -36,6 +38,7 @@ class Job:
     root_build: str | None = None
     needs: str | None = None
     rebuild: str | None = None
+    refs: str | None = None
     writes_latest_files: bool = True
 
 
@@ -55,6 +58,7 @@ def job_of(env: Mapping[str, str]) -> Job:
         root_build=env.get("SNAPSHOT_PLAN"),
         needs=env.get("SNAPSHOT_NEEDS"),
         rebuild=env.get("SNAPSHOT_REBUILD"),
+        refs=env.get("SNAPSHOT_REFS"),
         writes_latest_files=env.get("SNAPSHOT_BRANCH_BUILD") != "false",
     )
 

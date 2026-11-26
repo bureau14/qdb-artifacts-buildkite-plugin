@@ -544,6 +544,7 @@ class World:
             root_build=build.env.get("SNAPSHOT_PLAN"),
             needs=build.env.get("SNAPSHOT_NEEDS"),
             rebuild=build.env.get("SNAPSHOT_REBUILD"),
+            refs=build.env.get("SNAPSHOT_REFS"),
             writes_latest_files=build.env.get("SNAPSHOT_BRANCH_BUILD") != "false",
         )
 
@@ -565,7 +566,9 @@ class World:
         before = len(uploads)
         decided = lambda: decide(self.job_of(build), self.edge(build), str(path))
         outcome = self.outcome(build, decided)
-        added = [s for text in uploads[before:] for s in yaml.safe_load(text)["steps"]]
+        docs = [yaml.safe_load(text) for text in uploads[before:]]
+        added = [s for doc in docs for s in doc["steps"]]
+        build.env.update(*(doc.get("env", {}) for doc in docs))
         at = build.steps.index(step) + 1
         build.steps[at:at] = added
         return outcome

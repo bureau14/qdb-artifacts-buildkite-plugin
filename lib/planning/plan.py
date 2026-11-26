@@ -55,7 +55,9 @@ class Latest:
 class Planned:
     """A project of the plan. ``ref`` is the full ref its commit was taken from, whose name a
     build of it runs under; ``deps`` its direct snapshot dependencies; ``steps`` the step ids
-    its templates promote; ``latest`` its latest successful downloads, which only the root build has. ``key`` is None only while ``make_plan`` has not keyed it."""
+    its templates promote; ``latest`` its latest successful downloads, which only the root
+    build has; ``given`` what a person gave for it in ``SNAPSHOT_REFS``, which decided its ref
+    and commit. ``key`` is None only while ``make_plan`` has not keyed it."""
 
     ref: str
     commit: str
@@ -64,6 +66,7 @@ class Planned:
     deps: tuple[str, ...] = ()
     steps: tuple[str, ...] = ()
     latest: tuple[Latest, ...] = ()
+    given: str | None = None
 
 
 @dataclass(frozen=True)

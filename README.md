@@ -404,16 +404,28 @@ A **latest successful** dependency says `latest: true`. It is not planned and ne
 
 ### Where a dependency is taken from
 
-The root build is taken at the commit its checkout holds. A dependency is taken from its pin; else:
+The root build is taken at the commit its checkout holds. A dependency is taken from the ref a person gave for it in `SNAPSHOT_REFS`; else from its pin; else:
 
 - **in a build on a branch**, from the first of these its repository has: that branch, the release line of the root build's commit (a branch named `master`, `main` or `<digits>.<digits>.x`), `master`, `main`;
 - **in a build at a tag** (started with the tag's name in Buildkite's branch field), from the same tag and nothing else.
 
 Every build runs under the name of its git ref, so a build started for a dependency taken from `refs/heads/master` runs as `master`.
 
+### Build against another ref of a dependency
+
+Set `SNAPSHOT_REFS` on the root build to take a dependency from a ref of your choice in that build alone. It holds `project=ref` for each such project, with spaces between them:
+
+```
+SNAPSHOT_REFS="quasardb-build=sc-20300/arrow-fix qdb-duck=v3.14.2"
+```
+
+The ref is a branch name, a tag name (a branch of that name counts first), a full ref such as `refs/tags/v3.14.2`, or a commit written as its 40 characters. A commit must be in the history of the ref the project would be taken from without it, and the build started for it runs under that ref's name. The project is taken there in the whole plan, also where a template pins it. The plan step fails before anything is built when a project is not a snapshot dependency in the plan, is the root build's own, or lacks the ref.
+
+No build of such a plan moves master's latest files to what it built: the rule of the next section holds for every build, and the page says of each project whether it becomes the latest of its branch.
+
 ### Who writes a branch's latest files
 
-The root build does. A build started for a dependency does when the build a person would start on its branch at its commit would take every project below it at the commit the plan takes it at: from that branch, from its release line, `master` or `main` where a repository lacks the branch, or from a pin its own templates or those below it write. The plan step hands the answer to the started build as `SNAPSHOT_BRANCH_BUILD`.
+A build does when its project is taken at the commit git names for its ref, and the build a person would start there without `SNAPSHOT_REFS` would take every project below it at the commit the plan takes it at: from that branch, from its release line, `master` or `main` where a repository lacks the branch, or from a pin its own templates or those below it write. The plan step writes the answer into the pipeline it uploads, as `SNAPSHOT_BRANCH_BUILD`.
 
 A plan step that finds steps already made at its key also points its branch's latest files at that key, when git names the build's commit as its branch's newest: so a branch cut at built commits gets its latest files at the first build on it, and an older build that runs again does not move them back.
 
@@ -441,7 +453,7 @@ The plan step fails a build whose generated pipeline breaks one of these, before
 3. The jobs download, upload and promote at those keys.
 4. The last step records the steps that did not pass.
 
-The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and, when it is taken from another branch or tag than the build's, that name; a project that several take is written out once. Below the table the page names each project whose build does not become the latest successful build of its branch (see "Who writes a branch's latest files"), and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
+The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and the branch or tag it is taken from, marked when `SNAPSHOT_REFS` gave it; a project that several take is written out once. When a build of the tree does not become the latest successful build of its branch (see "Who writes a branch's latest files"), a column says yes or no of every project that the plan builds, and of a reused one that it is not built here. Below the table the page names each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
 
 The picture and the table say of each project what becomes of it, and a line above them counts the projects in each state:
 
@@ -465,12 +477,13 @@ The page is drawn when the plan step runs and again at its second run, after the
 
 ### Variables
 
-| Variable                | Set by                              | Meaning                                                                                             |
-| ----------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT_REBUILD`      | a person                            | `1`: the root build builds again, under a key of its own. `all`: so does every project of its plan. |
-| `SNAPSHOT_PLAN`         | the plan step, on a build it starts | The root build's id, whose meta-data holds the plan.                                                |
-| `SNAPSHOT_NEEDS`        | the same                            | The platforms and step ids the dependent downloads.                                                 |
-| `SNAPSHOT_BRANCH_BUILD` | the same                            | `false`: the build writes no latest file of its branch.                                             |
+| Variable                | Set by                                | Meaning                                                                                             |
+| ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `SNAPSHOT_REBUILD`      | a person                              | `1`: the root build builds again, under a key of its own. `all`: so does every project of its plan. |
+| `SNAPSHOT_REFS`         | a person                              | `project=ref` for each dependency the root build takes from that ref, with spaces between them.     |
+| `SNAPSHOT_PLAN`         | the plan step, on a build it starts   | The root build's id, whose meta-data holds the plan.                                                |
+| `SNAPSHOT_NEEDS`        | the same                              | The platforms and step ids the dependent downloads.                                                 |
+| `SNAPSHOT_BRANCH_BUILD` | the plan step, on the jobs it uploads | `false`: the job writes no latest file of its branch.                                               |
 
 The plan step of a root build asks Buildkite's API (scope `read_pipelines`) for the repository and configuration of every pipeline of its plan, with the token in `ARTIFACTS_BUILDKITE_TOKEN`, else in the SSM parameter `/services/buildkite/credentials/artifacts/buildkite-api-token`.
 

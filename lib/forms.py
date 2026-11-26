@@ -40,6 +40,11 @@ def name_of(ref: str) -> str:
     return ref
 
 
+def is_commit(name: str) -> bool:
+    """Whether ``name`` is a commit id written in full."""
+    return len(name) == 40 and all(c in "0123456789abcdef" for c in name)
+
+
 def short_commit(commit: str) -> str:
     """A commit id as a label, a message or the build page shows it."""
     return commit[:12]

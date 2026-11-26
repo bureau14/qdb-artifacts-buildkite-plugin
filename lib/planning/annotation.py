@@ -19,7 +19,17 @@ from ..markdown import build_link, code, codes, collapsed, table
 from .picture import PICTURE
 from .plan import REBUILD_ALL, REBUILD_ONE, Plan, tree_of, trigger_label
 from .records import NOT_DECLARED, RULE, Cause, Record
-from .states import BUILDS, BUILT, FAILED, FAILED_BEFORE, NEW_BELOW, REASONS, REUSED, State
+from .states import (
+    BUILDS,
+    BUILT,
+    FAILED,
+    FAILED_BEFORE,
+    NEW_BELOW,
+    REASONS,
+    REUSED,
+    State,
+    stays_off_latest,
+)
 
 INDENT = "  "
 
@@ -99,21 +109,32 @@ def why_cell(s: State) -> str:
 
 
 def plan_columns(plan: Plan, states: Mapping[str, State]) -> list[Column]:
-    """A project's commit, and its state. Two columns are there only when a project has
-    something to say in them: its branch or tag, when it is taken from another than the
-    build's, and why it builds."""
+    """A project's commit, the branch or tag it is taken from, and its state. Two columns
+    are there only when a project has something to say in them: why it builds, and whether
+    its build becomes the latest of its branch, which then says of every project yes, no, or
+    that this plan does not build it."""
 
-    def elsewhere(p: str) -> str:
-        name = name_of(plan.projects[p].ref)
-        return "" if name == plan.context else code(name)
+    def taken_from(p: str) -> str:
+        n = plan.projects[p]
+        return code(name_of(n.ref)) + (", given in `SNAPSHOT_REFS`" if n.given else "")
 
-    optional: list[Column] = [
-        ("Branch or tag", elsewhere),
+    def becomes_latest(p: str) -> str:
+        if states[p].kind == REUSED:
+            return "not built here"
+        return "no" if stays_off_latest(plan, p, states[p]) else "yes"
+
+    always: list[Column] = [
+        ("Commit", lambda p: code(short_commit(plan.projects[p].commit))),
+        ("Branch or tag", taken_from),
         ("Build", lambda p: build_cell(states[p])),
-        ("Why", lambda p: why_cell(states[p])),
     ]
-    commit: Column = ("Commit", lambda p: code(short_commit(plan.projects[p].commit)))
-    return [commit, *(c for c in optional if any(map(c[1], states)))]
+    why: Column = ("Why", lambda p: why_cell(states[p]))
+    latest: Column = ("Becomes the latest of its branch", becomes_latest)
+    return [
+        *always,
+        *([why] if any(map(why[1], states)) else []),
+        *([latest] if "no" in map(becomes_latest, states) else []),
+    ]
 
 
 def plan_table(plan: Plan, project: str, states: Mapping[str, State]) -> str:
@@ -135,19 +156,17 @@ def counted(states: Mapping[str, State]) -> str:
     return "Projects: " + ", ".join(t.format(counts[k]) for k, t in COUNTED.items() if counts[k])
 
 
-def not_the_latest(plan: Plan, projects: Iterable[str]) -> list[str]:
-    """A line for each project whose build does not write its branch's latest files: what
-    that means for a person, and why."""
+NOT_THE_LATEST = (
+    "Becomes the latest of its branch, no: what is built here is used by this build, and a "
+    "download of the branch's latest successful build keeps taking the build before it. A "
+    "build of that branch would be at another commit, or take other commits of the projects "
+    "below it."
+)
 
-    def line(p: str, branch: str) -> str:
-        return (
-            f"- {code(p)} is built here against other commits of the projects below it than a "
-            f"build of its branch {branch} would take. This build uses the result; it does not "
-            f"become the latest successful build of {branch}."
-        )
 
-    planned = ((p, plan.projects[p]) for p in projects)
-    return [line(p, code(name_of(n.ref))) for p, n in planned if not n.writes_latest_file]
+def not_the_latest(plan: Plan, states: Mapping[str, State]) -> list[str]:
+    """What the table's no means, once, when a project has it."""
+    return [NOT_THE_LATEST] if any(stays_off_latest(plan, p, s) for p, s in states.items()) else []
 
 
 def keys_table(plan: Plan, projects: Sequence[str]) -> str:
@@ -188,7 +207,7 @@ def plan_annotation(
         counted(states),
         TREE_PICTURE if len(projects) > 1 else "",
         plan_table(plan, project, states),
-        "\n".join([*outside, *not_the_latest(plan, projects)]),
+        "\n\n".join([*not_the_latest(plan, states), "\n".join(outside)]).strip(),
         collapsed("Snapshot keys", keys_table(plan, projects)),
     ]
     return "\n\n".join(filter(None, parts))

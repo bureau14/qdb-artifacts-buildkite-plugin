@@ -111,6 +111,13 @@ def states(plan: Plan, project: str, held: Mapping[str, Held], began: float) -> 
     return found
 
 
+def stays_off_latest(plan: Plan, project: str, s: State) -> bool:
+    """Whether this plan makes ``project`` and its build does not become the latest
+    successful build of its branch. A reused project is not made here, so nothing of it could
+    become the latest."""
+    return s.kind != REUSED and not plan.projects[project].writes_latest_file
+
+
 def why(s: State) -> str:
     """The reason of a project that builds, in a few words."""
     if s.reason == NEW_BELOW:

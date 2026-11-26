@@ -35,8 +35,8 @@ def trigger_key(project: str) -> str:
 
 
 def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[str]) -> dict:
-    """The step that starts the build of ``project`` as the plan says, hands it ``needs`` and
-    whether it writes its branch's latest files, and waits for the trigger steps ``after``.
+    """The step that starts the build of ``project`` as the plan says, hands it ``needs``, and
+    waits for the trigger steps ``after``.
     ``soft_fail``: the manifests say whether the dependency is usable, not the build's colour."""
     n = plan.projects[project]
     return {
@@ -52,6 +52,8 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[
             "env": {
                 "SNAPSHOT_PLAN": plan.id,
                 "SNAPSHOT_NEEDS": needs_value(needs),
+                # For a started build whose plugin is older and reads it here: it runs the
+                # plugin its own templates name, which may not write it into its upload.
                 "SNAPSHOT_BRANCH_BUILD": "true" if n.writes_latest_file else "false",
             },
         },
