@@ -911,7 +911,8 @@ def test_a_started_build_passes_its_plan_and_last_steps_through_the_real_hooks(
     plan = root_build_plan(job.commit)
     needs = json.dumps([[v, "build"] for v in sorted(matrix)])
     agent.set(build_id(ROOT_BUILD), "meta-data", "snapshot-plan", encode_plan(plan))
-    agent.set(build_id(1), "meta-data", "snapshot-arrived", str(int(time.time())))
+    for build in (ROOT_BUILD, 1):
+        agent.set(build_id(build), "meta-data", "snapshot-arrived", str(int(time.time())))
     started = job.with_env(SNAPSHOT_PLAN=build_id(ROOT_BUILD), SNAPSHOT_NEEDS=needs)
 
     planned = (

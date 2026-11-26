@@ -44,6 +44,7 @@ from lib.layout import Folder
 from lib.manifest import Promoted, Uploaded, captured, write_manifest
 from lib.planning.buildkite import PipelineFacts
 from lib.planning.lines import is_release_line, release_line
+from lib.planning.picture import PICTURE
 from lib.planning.records import RULE
 
 MASTER = "refs/heads/master"
@@ -644,6 +645,50 @@ def test_the_plan_steps_page_shows_the_tree_of_its_build_as_a_table_and_as_a_pic
             )
             assert all(apart(boxes[p], boxes[q]) for p in boxes for q in boxes if p < q)
             assert all(boxes[d][2] < boxes[p][0] for p, d in taken)
+
+
+def states_of(picture: str) -> dict[str, list[str]]:
+    """What a picture says of each project: the class of its box, which is its state and, for
+    one that builds, the reason."""
+    parts = list(ElementTree.fromstring(picture))
+    return {
+        after.text: part.get("class").split()
+        for part, after in zip(parts, parts[1:])
+        if part.tag == SVG + "rect"
+    }
+
+
+def test_the_picture_says_which_projects_are_reused_and_why_the_others_build(
+    worlds, lower_project, shape
+):
+    """A tree is built, a dependency gets a new commit, and the tree is built again. The
+    picture the root build shows before any build it starts has run says that the dependency
+    builds for its new commit, that each project above it builds for a new project below it,
+    and that every other project is reused. The picture it shows once those builds ended says
+    built of each project a build was started for, and reused of the same projects as before;
+    the root build's own project, which it is about to build, still builds."""
+    graph, project, root = lower_project.graph, lower_project.project, lower_project.root
+    matrix, step_ids = shape
+    world = worlds(graph, matrix, step_ids)
+    world.build(root)
+    world.commit(project)
+    shown = lambda: states_of(world.agents.artifacts[world.builds_of(root)[-1].id][PICTURE])
+    before: dict = {}
+    world.at_plan_step = lambda build: before.update(before or shown())
+
+    root_build = world.build(root)
+
+    over = above(graph, project) & tree(graph, root)
+    reused = {p: ["reused"] for p in tree(graph, root) - over - {project}}
+    waiting = {p: ["builds", "new_below"] for p in over}
+    assert root_build.state == "passed"
+    assert before == {**reused, **waiting, project: ["builds", "new_commit"]}
+    assert shown() == {
+        **reused,
+        **{p: ["built"] for p in over | {project}},
+        root: ["builds", "new_below"],
+    }
+    assert {b.project for b in root_build.tree()} == over | {project}
 
 
 def cannot_give_a_snapshot(world, at, condition: str) -> str:

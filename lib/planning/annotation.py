@@ -1,12 +1,14 @@
 """What the plan step and the last step show on the build page. Text only.
 
-A plan is a table; a failure is a fenced code block between a heading and a closing sentence.
-A name that a repository chose, such as a branch or a template path, is in a code span or in
-the block, because it can hold Markdown characters.
+A plan is a table, which says of each project whether it is reused; a failure is a fenced code
+block between a heading and a closing sentence. A name that a repository chose, such as a
+branch or a template path, is in a code span or in the block, because it can hold Markdown
+characters.
 """
 
 from __future__ import annotations
 
+import collections
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
@@ -15,12 +17,14 @@ from ..job import Build
 from ..layout import Folder
 from ..markdown import build_link, code, codes, collapsed, table
 from .picture import PICTURE
-from .plan import REBUILD_ALL, REBUILD_ONE, Plan, Planned, tree_of, trigger_label
+from .plan import REBUILD_ALL, REBUILD_ONE, Plan, tree_of, trigger_label
 from .records import NOT_DECLARED, RULE, Cause, Record
+from .states import BUILDS, BUILT, FAILED, FAILED_BEFORE, NEW_BELOW, REASONS, REUSED, State
 
 INDENT = "  "
 
-Column = tuple[str, Callable[[Planned], str]]
+# A column of the plan's table: its heading, and what it says of a project.
+Column = tuple[str, Callable[[str], str]]
 
 
 def fenced(lines: Sequence[str]) -> str:
@@ -80,29 +84,55 @@ def project_cell(at: Place) -> str:
     return STEP_IN * at.depth + name
 
 
-def plan_columns(plan: Plan, planned: Iterable[Planned]) -> list[Column]:
-    """A project's commit; and its branch or tag, a column that is there only when a project
-    is taken from another than the build's, and says something only for such a project."""
-
-    def elsewhere(n: Planned) -> str:
-        return "" if name_of(n.ref) == plan.context else code(name_of(n.ref))
-
-    columns: list[Column] = [("Commit", lambda n: code(short_commit(n.commit)))]
-    if any(map(elsewhere, planned)):
-        columns.append(("Branch or tag", elsewhere))
-    return columns
+def build_cell(s: State) -> str:
+    """A project's state, with a link to each build that made it or failed."""
+    return ", ".join([s.kind, *([] if s.kind == BUILDS else map(build_link, s.builds))])
 
 
-def plan_table(plan: Plan, project: str) -> str:
+def why_cell(s: State) -> str:
+    """Why a project builds; nothing for any other."""
+    if s.reason == NEW_BELOW:
+        return f"new {codes(s.below)}"
+    if s.reason == FAILED_BEFORE:
+        return f"{build_link(s.builds[0])} failed"
+    return REASONS.get(s.reason, "")
+
+
+def plan_columns(plan: Plan, states: Mapping[str, State]) -> list[Column]:
+    """A project's commit, and its state. Two columns are there only when a project has
+    something to say in them: its branch or tag, when it is taken from another than the
+    build's, and why it builds."""
+
+    def elsewhere(p: str) -> str:
+        name = name_of(plan.projects[p].ref)
+        return "" if name == plan.context else code(name)
+
+    optional: list[Column] = [
+        ("Branch or tag", elsewhere),
+        ("Build", lambda p: build_cell(states[p])),
+        ("Why", lambda p: why_cell(states[p])),
+    ]
+    commit: Column = ("Commit", lambda p: code(short_commit(plan.projects[p].commit)))
+    return [commit, *(c for c in optional if any(map(c[1], states)))]
+
+
+def plan_table(plan: Plan, project: str, states: Mapping[str, State]) -> str:
     """One row per place of the tree; a project's facts are in its first row."""
-    rows = places(plan, project)
-    columns = plan_columns(plan, (plan.projects[at.project] for at in rows))
+    columns = plan_columns(plan, states)
 
     def row(at: Place) -> list[str]:
-        facts = ["" if at.again else cell(plan.projects[at.project]) for _, cell in columns]
-        return [project_cell(at), *facts]
+        return [project_cell(at), *("" if at.again else cell(at.project) for _, cell in columns)]
 
-    return table(["Project", *(heading for heading, _ in columns)], map(row, rows))
+    return table(["Project", *(heading for heading, _ in columns)], map(row, places(plan, project)))
+
+
+COUNTED = {BUILDS: "{} to build", BUILT: "{} built", REUSED: "{} reused", FAILED: "{} failed"}
+
+
+def counted(states: Mapping[str, State]) -> str:
+    """How many projects of the tree are in each state."""
+    counts = collections.Counter(s.kind for s in states.values())
+    return "Projects: " + ", ".join(t.format(counts[k]) for k, t in COUNTED.items() if counts[k])
 
 
 def not_the_latest(plan: Plan, projects: Iterable[str]) -> list[str]:
@@ -125,11 +155,17 @@ def keys_table(plan: Plan, projects: Sequence[str]) -> str:
     return table(["Project", "Snapshot key"], rows)
 
 
-def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str, str]]) -> str:
-    """The plan as ``project`` builds it: the picture of its tree, when it takes any project;
-    the tree as a table; a line for each project that needs a word; and every key behind a
-    line that opens. ``left_out`` names each download of the project's own at another ref, as
-    step, platform and ref: its key leaves such a download out."""
+def plan_annotation(
+    plan: Plan,
+    project: str,
+    left_out: Sequence[tuple[str, str, str]],
+    states: Mapping[str, State],
+) -> str:
+    """The plan as ``project`` builds it: how many projects of its tree are in each state of
+    ``states``; the picture of the tree, when it takes any project; the tree as a table; a
+    line for each project that needs a word; and every key behind a line that opens.
+    ``left_out`` names each download of the project's own at another ref, as step, platform
+    and ref: its key leaves such a download out."""
     root = plan.root
     heading = f"Snapshot plan of `{project}`" + (
         f" build {root.build_number}"
@@ -149,8 +185,9 @@ def plan_annotation(plan: Plan, project: str, left_out: Sequence[tuple[str, str,
     parts = [
         f"**{heading}**",
         context,
+        counted(states),
         TREE_PICTURE if len(projects) > 1 else "",
-        plan_table(plan, project),
+        plan_table(plan, project, states),
         "\n".join([*outside, *not_the_latest(plan, projects)]),
         collapsed("Snapshot keys", keys_table(plan, projects)),
     ]

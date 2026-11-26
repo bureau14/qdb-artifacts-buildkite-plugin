@@ -17,6 +17,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,8 +35,9 @@ from ..objects import open_destination
 from .agent import RealAgent
 from .buildkite import PipelineFacts, fetch_pipeline
 from .git import RealGit
-from .plan import Plan, Planned, decode_plan, key_json_of, planned_project
+from .plan import Plan, Planned, decode_plan, key_json_of, planned_project, tree_of
 from .records import Cause, Origin, Record, failure_in_plan
+from .states import Held
 
 OUTCOME = "snapshot-outcome"
 REUSED, BUILT, FAILED = "reused", "built", "failed"
@@ -126,6 +128,33 @@ def stored_records(edge: Edge, project: str, key: str) -> list[Record]:
     listed = edge.store.list(layout.failure_records(edge.store.prefix, project, key))
     found = (edge.store.get(item.key) for item in listed)
     return [decoded(Record, b) for b in found if b is not None]
+
+
+def folders_at(edge: Edge, project: str, key: str) -> list[Folder]:
+    """Every folder of ``project`` that holds an object at ``key``."""
+    at = layout.at_key(edge.store.prefix, project, key)
+    platforms = [p for p in edge.store.below(at) if p != layout.FAILURES]
+    return [Folder(p, s) for p in platforms for s in edge.store.below(f"{at}{p}/")]
+
+
+def held_at(edge: Edge, project: str, n: Planned, asked: Iterable[Folder]) -> Held:
+    """What the store holds of ``project`` at its planned key, of the folders ``asked`` of it
+    and of those found there."""
+    manifests = manifests_at(edge, project, n.key, {*asked, *folders_at(edge, project, n.key)})
+    keys = edge.store.below(layout.keys_of_commit(edge.store.prefix, project, n.commit))
+    records = tuple(stored_records(edge, project, n.key))
+    return Held(manifests, records, built_before=any(k != n.key for k in keys))
+
+
+def held_of_tree(
+    edge: Edge, p: Plan, project: str, asked: Mapping[str, Iterable[Folder]]
+) -> dict[str, Held]:
+    """``held_at`` of every project of the tree of ``project``, all read at once: each takes
+    a request per platform and per folder."""
+    projects = tree_of(p, project)
+    with ThreadPoolExecutor() as pool:
+        held = pool.map(lambda q: held_at(edge, q, p.projects[q], asked.get(q, ())), projects)
+        return dict(zip(projects, held))
 
 
 def create_record(edge: Edge, r: Record) -> None:

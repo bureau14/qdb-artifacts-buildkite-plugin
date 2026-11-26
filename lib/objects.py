@@ -94,6 +94,16 @@ class Store:
             for item in page.get("Contents", [])
         ]
 
+    def below(self, prefix: str) -> list[str]:
+        """The name of every level directly under ``prefix`` that holds an object, in order: of
+        ``<project>/<key>/`` its platforms and ``failures``, of ``<project>/<commit>-`` every
+        key of that commit."""
+        pages = self.client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix, Delimiter="/"
+        )
+        found = (item["Prefix"] for page in pages for item in page.get("CommonPrefixes", []))
+        return [level.rstrip("/").rsplit("/", 1)[-1] for level in found]
+
 
 def destination_store(cfg: StoreConfig) -> Store:
     """The store of the destination ``cfg`` names."""
