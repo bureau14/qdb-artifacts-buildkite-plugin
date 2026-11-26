@@ -119,16 +119,20 @@ def dependencies_of(p: Plan) -> dict[str, tuple[str, ...]]:
     return {project: n.deps for project, n in p.projects.items()}
 
 
+def is_forced(p: Plan, project: str) -> bool:
+    """Whether ``SNAPSHOT_REBUILD`` forces ``project``: the root build's under ``one``, every
+    one under ``all``."""
+    return p.rebuild == REBUILD_ALL or (p.rebuild == REBUILD_ONE and project == p.root.project)
+
+
 def key_json_of(p: Plan, project: str) -> KeyJson:
     """What the key of ``project`` stands for: its commit, the key of each snapshot dependency
     and each key read for a latest successful download, and the plan's id when
-    ``SNAPSHOT_REBUILD`` forces the project (the root build's under ``one``, every one under
-    ``all``)."""
+    ``SNAPSHOT_REBUILD`` forces the project."""
     n = p.projects[project]
     planned = ((d, p.projects[d].key) for d in n.deps)
     read = ((r.download.project, k) for r in n.latest for k in r.keys.values())
-    forced = p.rebuild == REBUILD_ALL or (p.rebuild == REBUILD_ONE and project == p.root.project)
-    return KeyJson(project, n.commit, (*planned, *read), p.id if forced else None)
+    return KeyJson(project, n.commit, (*planned, *read), p.id if is_forced(p, project) else None)
 
 
 def keyed(p: Plan) -> Plan:

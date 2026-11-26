@@ -49,3 +49,8 @@ def iso_utc(epoch: float) -> str:
     """``epoch`` seconds as UTC ISO 8601 with a "Z", to the millisecond."""
     t = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
+def epoch_of(written: str) -> float:
+    """The epoch seconds of a time that ``iso_utc`` wrote."""
+    return datetime.datetime.strptime(written, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()

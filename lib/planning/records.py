@@ -8,11 +8,10 @@ in vain, and lets a dependent name the cause.
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
-from ..forms import iso_utc
+from ..forms import epoch_of, iso_utc
 from ..job import Build
 from ..layout import Folder
 
@@ -137,7 +136,7 @@ def last_step_record(
 
 
 def recorded_time(r: Record) -> float:
-    return datetime.datetime.strptime(r.recorded_at, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
+    return epoch_of(r.recorded_at)
 
 
 def most_recent(records: Iterable[Record]) -> Record | None:
