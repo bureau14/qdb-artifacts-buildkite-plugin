@@ -8,8 +8,9 @@ Of another repository (``url``):
   ``directory`` in the tree of ``commit`` whose path ``wanted`` accepts;
 - ``reaches(url, tip, commit)``: whether ``commit`` is ``tip`` or a commit before it;
 - ``branches(url)``: ``{branch: commit}`` of every branch;
-- ``merge_base_times(url, commits)``: for each commit, the committer time of its merge-base
-  with the commit checked out; None for one that shares no history with it.
+- ``merge_base_times(url, commits, of)``: for each commit, the committer time of its
+  merge-base with the commit checked out, or with the commit ``of`` when one is given; None
+  for one that shares no history with it.
 
 Of the build's own checkout: ``head_commit()``, and ``checkout_files(directory, wanted)``,
 read from the commit's tree and never from the working tree.
@@ -184,11 +185,11 @@ class RealGit:
     def head_commit(self) -> str:
         return checkout_commit(self._cwd)
 
-    def _merge_base_time(self, commit: str) -> int | None:
-        """Committer time of the merge-base of HEAD and ``commit``; None when they share no
+    def _merge_base_time(self, tip: str, commit: str, cwd: str | None) -> int | None:
+        """Committer time of the merge-base of ``tip`` and ``commit``; None when they share no
         history, for which ``git merge-base`` exits 1 and prints nothing."""
-        args = ["merge-base", "--end-of-options", "HEAD", commit]
-        c = self._git(args, None)
+        args = ["merge-base", "--end-of-options", tip, commit]
+        c = self._git(args, cwd)
         if c.returncode == 1 and not c.stdout.strip() and not c.stderr.strip():
             return None
         if c.returncode != 0:
@@ -196,17 +197,27 @@ class RealGit:
                 f"git {' '.join(args)} failed ({c.returncode}): {c.stderr.strip()}"
             )
         base = c.stdout.decode("ascii").strip()
-        shown = self._ok(["show", "-s", "--format=%ct", "--end-of-options", base])
+        shown = self._ok(["show", "-s", "--format=%ct", "--end-of-options", base], cwd)
         return int(shown.decode("ascii").strip())
 
-    def merge_base_times(self, url: str, commits: Sequence[str]) -> dict[str, int | None]:
-        """The commits are fetched into the checkout in one fetch, objects only."""
+    def merge_base_times(
+        self, url: str, commits: Sequence[str], of: str | None = None
+    ) -> dict[str, int | None]:
+        """With the commit checked out, the commits are fetched into the checkout in one
+        fetch, objects only. With the commit ``of`` of the repository, which the checkout need
+        not hold, both histories are fetched without trees into a scratch repository."""
         wanted = unique(commits)
-        if wanted:
-            self._remote([*FETCH, "--no-write-fetch-head", "--", url, *wanted])
-        times = {c: self._merge_base_time(c) for c in wanted}
+        if of is None:
+            if wanted:
+                self._remote([*FETCH, "--no-write-fetch-head", "--", url, *wanted])
+            times = {c: self._merge_base_time("HEAD", c, None) for c in wanted}
+        else:
+            with tempfile.TemporaryDirectory(prefix="snapshot-git-") as d:
+                self._ok(["init", "-q"], d)
+                self._remote([*FETCH, "--filter=tree:0", "--", url, of, *wanted], d)
+                times = {c: self._merge_base_time(of, c, d) for c in wanted}
         shown = ", ".join(
             f"{c[:12]} {'no shared history' if t is None else t}" for c, t in times.items()
         )
-        self._log(f"merge-base times of HEAD with {url}: {shown or 'none asked'}")
+        self._log(f"merge-base times of {of or 'HEAD'} with {url}: {shown or 'none asked'}")
         return times

@@ -37,13 +37,15 @@ class Ask:
     """``pipeline(slug)``: Buildkite's facts. ``commit(repository, ref)``: the ref's commit,
     None when the repository lacks it. ``reaches(repository, tip, commit)``: whether ``commit``
     is ``tip`` or before it. ``files(repository, commit)``: its templates and pipeline.py.
-    ``line()``: the root build's release line."""
+    ``line()``: the root build's release line. ``line_of(repository, branch, commit)``: the
+    release line of another branch, whose tip ``commit`` is."""
 
     pipeline: Callable[[str], PipelineFacts]
     commit: Callable[[str, str], str | None]
     reaches: Callable[[str, str, str], bool]
     files: Callable[[str, str], Mapping[str, bytes]]
     line: Callable[[], str]
+    line_of: Callable[[str, str, str], str]
 
 
 def is_read(path: str) -> bool:
@@ -75,7 +77,8 @@ def asking(
         return git.read_files(url, commit, ".buildkite", is_read)
 
     line = functools.cache(lambda: release_line(git, at.repository, name))
-    return Ask(pipeline, commit, functools.cache(git.reaches), files, line)
+    line_of = functools.cache(lambda url, branch, tip: release_line(git, url, branch, tip))
+    return Ask(pipeline, commit, functools.cache(git.reaches), files, line, line_of)
 
 
 @dataclass(frozen=True)

@@ -194,14 +194,16 @@ def settled(root: str, member: Member, given: Mapping[str, str], ask: Ask) -> di
 
 
 def own_line(at: Place, root: Place, ask: Ask) -> str | None:
-    """The release line of the build a person would start of the project at ``at``, as far as
-    this plan knows it: its branch when that is a line; on the root build's branch, the root build's line, in another repository only when it has a branch of that name; else None, and
-    only its own branch counts."""
+    """The release line of the build a person would start of the project at ``at``, which is
+    its ref's commit: its branch when that is a line; on another branch than the root
+    build's, the line git finds for it in its history; on the root build's branch, the root
+    build's line, in another repository only when it has a branch of that name, else None,
+    and only its own branch counts. None at a tag."""
     branch = branch_of(at.ref)
     if branch is None or is_release_line(branch):
         return branch
     if at.ref != root.ref:
-        return None
+        return ask.line_of(at.repository, branch, at.commit)
     line = ask.line()
     known = at.repository == root.repository or ask.commit(at.repository, branch_ref(line))
     return line if known else None

@@ -167,8 +167,10 @@ class FakeGit:
         found = ((branch_of(r), c) for (u, r), c in self.hosting.refs.items() if u == repository)
         return {b: c for b, c in found if b is not None}
 
-    def merge_base_times(self, repository: str, commits: Sequence[str]) -> dict[str, int | None]:
-        mine = set(self.hosting.history(self.head))
+    def merge_base_times(
+        self, repository: str, commits: Sequence[str], of: str | None = None
+    ) -> dict[str, int | None]:
+        mine = set(self.hosting.history(of or self.head))
         return {c: len(mine.intersection(self.hosting.history(c))) or None for c in commits}
 
 

@@ -471,7 +471,8 @@ def test_a_ref_given_for_a_dependency_places_it_for_one_build(worlds, lower_proj
     commit. That build builds the dependency at that commit and every project above it, each
     download of the dependency takes that build of it, and the page says a ref was given.
     Master's latest files of every project stay as they were, so the next build without
-    SNAPSHOT_REFS takes the tree as master has it."""
+    SNAPSHOT_REFS takes the tree as master has it. A dependency given as a branch that left
+    master becomes the latest of that branch: its own build would take the same tree."""
     graph, project, root = lower_project.graph, lower_project.project, lower_project.root
     world = worlds(graph)
     projects, every = tree(graph, root), folders(MATRICES["linux"], STEP_IDS["build"])
@@ -492,6 +493,9 @@ def test_a_ref_given_for_a_dependency_places_it_for_one_build(worlds, lower_proj
     assert taken == {built[project].id}
     assert "SNAPSHOT_REFS" in page
     assert {(p, f): world.latest(p, MASTER, f) for p in projects for f in every} == latest
+    if given == "branch":
+        named = {world.latest(project, branch_ref("feature"), f) for f in every}
+        assert named == {plan.projects[project].key}
 
 
 def entries_of(document: str, project: str) -> list[dict]:
@@ -1073,14 +1077,15 @@ def line_of(world, project: str, planned) -> str | None:
 
 def assumed_line(world, plan, told, root: str, p: str) -> str | None:
     """The release line the plan takes the own build of ``p`` to have: its branch when that is
-    a release line; on the root build's branch, the root build's line, when git told the plan
-    that the repository of ``p`` has a branch of that name; else none, at a tag or not known."""
+    a release line; on another branch than the root build's, the line that branch left; on
+    the root build's branch, the root build's line, when git told the plan that the repository
+    of ``p`` has a branch of that name; else none, at a tag or not known."""
     at, root_at = plan.projects[p], plan.projects[root]
     branch = branch_of(at.ref)
     if branch is None or is_release_line(branch):
         return branch
     if at.ref != root_at.ref:
-        return None
+        return line_of(world, p, at)
     line = line_of(world, root, root_at)
     known = (url(p), branch_ref(line)) in told & world.hosting.refs.keys()
     return line if known else None

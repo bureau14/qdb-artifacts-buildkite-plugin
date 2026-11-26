@@ -139,9 +139,13 @@ the package's docstring and no code.
   moves a project below it. `planner.writes_latest_file` decides, and the plan
   step writes the answer into the `env` of the pipeline it uploads, as
   `SNAPSHOT_BRANCH_BUILD`, so the root build's jobs and a started build's get
-  it the same way. Only the text `false` turns the writing off. The rule takes
-  a branch of one name to have left the same release line in every repository
-  that has it.
+  it the same way. Only the text `false` turns the writing off. On the root
+  build's branch the rule takes a branch of one name to have left the same
+  release line in every repository that has it. For a project on another
+  branch, as one given in `SNAPSHOT_REFS`, the plan asks git for the line that
+  branch left, with a fetch of the histories without files, because the plan
+  step has no checkout of that repository. It asks only when the project is at
+  its branch's commit and a repository below it lacks the branch.
 - A ref a person gives in `SNAPSHOT_REFS` counts before a pin, and is not a
   pin: `writes_latest_file` never sees it, because the build a person starts
   later does not have it. A commit is taken only from the ref the project
