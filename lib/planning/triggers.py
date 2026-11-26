@@ -35,8 +35,8 @@ def trigger_key(project: str) -> str:
 
 
 def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[str]) -> dict:
-    """The step that starts the build of ``project`` as the plan says, hands it ``needs`` and
-    whether it writes its branch's latest files, and waits for the trigger steps ``after``.
+    """The step that starts the build of ``project`` as the plan says, hands it ``needs``, and
+    waits for the trigger steps ``after``.
     ``soft_fail``: the manifests say whether the dependency is usable, not the build's colour."""
     n = plan.projects[project]
     return {
@@ -49,11 +49,7 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[
             "branch": name_of(n.ref),
             "commit": n.commit,
             "message": f"snapshot dependency of {plan.root.project} build {plan.root.build_number}",
-            "env": {
-                "SNAPSHOT_PLAN": plan.id,
-                "SNAPSHOT_NEEDS": needs_value(needs),
-                "SNAPSHOT_BRANCH_BUILD": "true" if n.writes_latest_file else "false",
-            },
+            "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": needs_value(needs)},
         },
     }
 

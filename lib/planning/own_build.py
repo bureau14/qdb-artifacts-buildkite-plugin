@@ -35,7 +35,7 @@ from .latest import latest_download, read_latest
 from .picture import PICTURE, tree_picture
 from .pipeline import DocumentError, Step, dependencies, left_out, promotions, steps_of
 from .plan import Plan, PlanError, encode_plan
-from .planner import RootBuild, make_plan, name_refs, named_ref, rebuild_setting
+from .planner import RootBuild, given_refs, make_plan, name_refs, named_ref, rebuild_setting
 from .records import NOT_DECLARED, RULE, Origin, RefusedFolder
 from .rewrite import needed_folders
 from .rule import rule_violations, stepless_downloads, unwritten_promotions
@@ -138,6 +138,7 @@ def made_plan(job: Job, edge: Edge, generated: Generated, named: Mapping[str, st
             build_id=job.build.id,
             build_number=job.build.number,
             rebuild=rebuild_setting(job.rebuild),
+            given=given_refs(job.refs),
         )
         downloads = [
             latest_download(e, project)

@@ -11,7 +11,7 @@ import functools
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 
-from ..forms import branch_ref, is_tag, name_of
+from ..forms import branch_ref, is_commit, is_tag, name_of, tag_ref
 from .buildkite import PipelineFacts, PipelineNotFound
 from .lines import release_line
 from .plan import PlanError
@@ -35,11 +35,13 @@ class Place:
 @dataclass(frozen=True)
 class Ask:
     """``pipeline(slug)``: Buildkite's facts. ``commit(repository, ref)``: the ref's commit,
-    None when the repository lacks it. ``files(repository, commit)``: its templates and
-    pipeline.py. ``line()``: the root build's release line."""
+    None when the repository lacks it. ``reaches(repository, tip, commit)``: whether ``commit``
+    is ``tip`` or before it. ``files(repository, commit)``: its templates and pipeline.py.
+    ``line()``: the root build's release line."""
 
     pipeline: Callable[[str], PipelineFacts]
     commit: Callable[[str, str], str | None]
+    reaches: Callable[[str, str, str], bool]
     files: Callable[[str, str], Mapping[str, bytes]]
     line: Callable[[], str]
 
@@ -73,7 +75,7 @@ def asking(
         return git.read_files(url, commit, ".buildkite", is_read)
 
     line = functools.cache(lambda: release_line(git, at.repository, name))
-    return Ask(pipeline, commit, files, line)
+    return Ask(pipeline, commit, functools.cache(git.reaches), files, line)
 
 
 @dataclass(frozen=True)
@@ -130,10 +132,50 @@ def first_ref(ask: Ask, repository: str, refs: Iterable[str]) -> tuple[str, str]
     return next(((r, c) for r, c in found if c is not None), None)
 
 
+def given_refs(given: str) -> tuple[str, ...]:
+    """The refs a name a person gave may be, in the order they count: a full ref is itself,
+    another name a branch, then a tag."""
+    return (given,) if given.startswith("refs/") else (branch_ref(given), tag_ref(given))
+
+
+def given_place(project: str, repository: str, given: str, at: str, ask: Ask) -> Place:
+    """Where ``project`` is taken from when a person gave ``given`` for it under a root build
+    at the ref ``at``: a branch, a tag or a full ref of its repository, or a commit written in
+    full. A commit is taken only from the ref the project would come from without it, so the
+    build started of it runs under that ref's name and git is asked for one history."""
+    if not is_commit(given):
+        found = first_ref(ask, repository, given_refs(given))
+        if found is None:
+            raise Refused(
+                f"{project} cannot be planned: SNAPSHOT_REFS gives it {given}, which is neither "
+                f"a branch nor a tag of {repository}. A commit is written in full, as its 40 "
+                "characters."
+            )
+        return Place(repository, *found)
+    found = first_ref(ask, repository, default_refs(at, ask.line))
+    if found is None or not ask.reaches(repository, found[1], given):
+        tried = "none of " + ", ".join(default_refs(at, ask.line)) if found is None else found[0]
+        raise Refused(
+            f"{project} cannot be planned: SNAPSHOT_REFS gives it the commit {given}, which is "
+            f"not in the history of the ref {project} is taken from without it ({repository} "
+            f"has {tried}). Way out: give the branch or tag that holds the commit."
+        )
+    return Place(repository, found[0], given)
+
+
 def place_of(
-    project: str, repository: str, pin: Pin | None, at: str, dependent: Dependent, ask: Ask
+    project: str,
+    repository: str,
+    pin: Pin | None,
+    given: str | None,
+    at: str,
+    dependent: Dependent,
+    ask: Ask,
 ) -> Place:
-    """Where ``project`` is taken from under a root build at the ref ``at``."""
+    """Where ``project`` is taken from under a root build at the ref ``at``: where a person
+    gave it, else at its pin, else at the first of ``default_refs`` its repository has."""
+    if given is not None:
+        return given_place(project, repository, given, at, ask)
     if pin is not None:
         commit = ask.commit(repository, pin.ref)
         if commit is None:
@@ -203,16 +245,17 @@ def snapshot_declaration(
 
 
 def resolve(
-    project: str, dependent: Dependent, pin: Pin | None, at: str, ask: Ask
+    project: str, dependent: Dependent, pin: Pin | None, given: str | None, at: str, ask: Ask
 ) -> Member | Refused:
     """``project`` where it is taken from under a root build at the ref ``at``, or why it
-    cannot be planned there. A pipeline Buildkite does not have fails the plan."""
+    cannot be planned there. ``given`` is what a person gave for it, which counts before its
+    pin. A pipeline Buildkite does not have fails the plan."""
     try:
         facts = ask.pipeline(project)
     except PipelineNotFound as exc:
         raise PlanError(f"{exc}. {dependent}") from exc
     try:
-        place = place_of(project, facts.repository, pin, at, dependent, ask)
+        place = place_of(project, facts.repository, pin, given, at, dependent, ask)
         return Member(place, snapshot_declaration(project, place, dependent, facts, ask))
     except Refused as refused:
         return refused

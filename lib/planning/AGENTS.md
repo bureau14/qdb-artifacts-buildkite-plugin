@@ -130,14 +130,24 @@ the package's docstring and no code.
   `master`. An agent whose git mirror lacks the build's commit fetches the
   build's branch by name, and a name that is no ref fails that checkout. A
   root build runs under the name that a person or Buildkite gave it.
-- A build started for a dependency writes its branch's latest files only when
-  the build that a person would start on that branch at that commit would take
-  every project below it at the commits of this plan. A started build compiled
-  against a story branch would otherwise put its files where a download of the
-  branch's latest successful build takes them. `planner.writes_latest_file`
-  decides, and the started build gets the answer as `SNAPSHOT_BRANCH_BUILD`.
-  Only the text `false` turns the writing off. The rule takes a branch of one
-  name to have left the same release line in every repository that has it.
+- A build writes its branch's latest files only when its project is taken at
+  the commit git names for its ref, and the build that a person would start
+  there without `SNAPSHOT_REFS` would take every project below it at the
+  commits of this plan. A build compiled against a story branch would
+  otherwise put its files where a download of the branch's latest successful
+  build takes them. The rule holds for the root build too: a ref a person gave
+  moves a project below it. `planner.writes_latest_file` decides, and the plan
+  step writes the answer into the `env` of the pipeline it uploads, as
+  `SNAPSHOT_BRANCH_BUILD`, so the root build's jobs and a started build's get
+  it the same way. Only the text `false` turns the writing off. The rule takes
+  a branch of one name to have left the same release line in every repository
+  that has it.
+- A ref a person gives in `SNAPSHOT_REFS` counts before a pin, and is not a
+  pin: `writes_latest_file` never sees it, because the build a person starts
+  later does not have it. A commit is taken only from the ref the project
+  would come from without it. The started build runs under that ref's name,
+  and an agent whose mirror lacks the commit fetches that ref, which holds it.
+  Any other commit would need a ref name to run under that nobody gave.
 - A plan step that finds folders made at its key points its branch's latest
   files at the key only when git names the build's commit as the newest of its
   ref. A branch cut at built commits so gets its latest files at its first

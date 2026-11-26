@@ -451,6 +451,49 @@ def test_a_pin_places_its_project_for_the_whole_tree(worlds, lower_project, shap
     assert names == {p: name_of(plan.projects[p].ref) for p in names}
 
 
+def given_commit(world, project: str, given: str) -> tuple[str, str]:
+    """A new commit of ``project`` that master does not name, and what a person writes in
+    ``SNAPSHOT_REFS`` to have it: the branch it is the tip of, the tag on it, or the commit
+    itself, with a newer commit after it on master."""
+    if given == "tag":
+        return world.tag(project, "v9"), "v9"
+    commit = world.commit(project, "feature" if given == "branch" else "master")
+    if given == "branch":
+        return commit, "feature"
+    world.commit(project)
+    return commit, commit
+
+
+@pytest.mark.parametrize("given", ["branch", "tag", "commit"])
+def test_a_ref_given_for_a_dependency_places_it_for_one_build(worlds, lower_project, given):
+    """After the builds of a tree on master, a dependency gets a commit master does not
+    name, and a root build on master is given it in SNAPSHOT_REFS, as a branch, a tag or a
+    commit. That build builds the dependency at that commit and every project above it, each
+    download of the dependency takes that build of it, and the page names what was given.
+    Master's latest files of every project stay as they were, so the next build without
+    SNAPSHOT_REFS takes the tree as master has it."""
+    graph, project, root = lower_project.graph, lower_project.project, lower_project.root
+    world = worlds(graph)
+    projects, every = tree(graph, root), folders(MATRICES["linux"], STEP_IDS["build"])
+    world.build(root)
+    latest = {(p, f): world.latest(p, MASTER, f) for p in projects for f in every}
+    commit, name = given_commit(world, project, given)
+    done = len(world.downloads)
+
+    root_build = world.build(root, SNAPSHOT_REFS=f"{project}={name}")
+
+    plan = world.plan(root_build)
+    built = {b.project: b for b in root_build.tree()}
+    taken = {d.made_by for d in world.downloads[done:] if d.project == project}
+    _, page = world.agents.annotations[root_build.id]["snapshot-plan"]
+    assert root_build.state == "passed"
+    assert set(built) == ({project} | above(graph, project)) & projects
+    assert (built[project].commit, plan.projects[project].given) == (commit, name)
+    assert taken == {built[project].id}
+    assert f"`{name}`" in page
+    assert {(p, f): world.latest(p, MASTER, f) for p in projects for f in every} == latest
+
+
 def entries_of(document: str, project: str) -> list[dict]:
     steps = yaml.safe_load(document)["steps"]
     found = (

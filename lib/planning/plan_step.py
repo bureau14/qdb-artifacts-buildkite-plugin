@@ -85,6 +85,8 @@ from .triggers import second_run_pipeline
 
 # One annotation per context: a retried step replaces its own.
 STEP_CONTEXT = "snapshot"
+# The variable of an uploaded pipeline that tells its jobs whether they write latest files.
+BRANCH_BUILD = "SNAPSHOT_BRANCH_BUILD"
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +100,10 @@ def point_latest_files(job: Job, edge: Edge, own: OwnBuild) -> None:
     the first build on it, and an older build that runs again does not move them back. A build
     started for a dependency asks git now, not the plan: its ref may have moved since the
     plan was made."""
-    if not own.made or not job.writes_latest_files:
+    planned_own = own.plan.projects[job.project]
+    if not own.made or not planned_own.writes_latest_file:
         return
-    key, ref = own.origin.key, own.plan.projects[job.project].ref
+    key, ref = own.origin.key, planned_own.ref
     named = own.named
     if named is None:
         named = edge.git.commits_of(https_repository(job.repository), [ref])
@@ -217,8 +220,9 @@ def start_builds(
 
 
 def upload_pipeline(job: Job, edge: Edge, own: OwnBuild) -> None:
-    """Upload the generated pipeline with every key written into it. The meta-data the last
-    step reads is set before the upload, so no uploaded step runs in a build without it."""
+    """Upload the generated pipeline with every key written into it, and with whether its
+    jobs write their branch's latest files, as the plan says. The meta-data the last step
+    reads is set before the upload, so no uploaded step runs in a build without it."""
     p, steps = own.plan, own.generated.steps
     planned_own = p.projects[job.project]
     dependencies_of_own = {d: p.projects[d] for d in planned_own.deps}
@@ -231,7 +235,9 @@ def upload_pipeline(job: Job, edge: Edge, own: OwnBuild) -> None:
     keyless = sorted(f for f, s in built.items() if s.key is None)
     if keyless:
         raise DocumentError(f"the step that promotes {keyless[0]} has no key")
-    document = yaml.safe_dump(planned(own.generated.doc, steps, rewrite))
+    doc = planned(own.generated.doc, steps, rewrite)
+    env = {**doc.get("env", {}), BRANCH_BUILD: str(planned_own.writes_latest_file).lower()}
+    document = yaml.safe_dump({**doc, "env": env})
     edge.agent.meta_data_set(PROMOTES, promotes_value({f: s.key for f, s in built.items()}))
     edge.agent.meta_data_set(OUTCOME, BUILT)
     edge.agent.pipeline_upload(document)

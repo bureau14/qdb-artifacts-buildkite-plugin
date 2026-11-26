@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..forms import branch_of, branch_ref, tag_ref
 from .buildkite import PipelineFacts
@@ -53,7 +53,7 @@ from .templates import Declaration, snapshot_dependencies
 class RootBuild:
     """The build that plans. ``name`` is the name it runs under, ``refs`` git's answer for
     ``name_refs`` of it in its repository, ``commit`` the commit checked out, ``rebuild`` what
-    ``rebuild_setting`` gives."""
+    ``rebuild_setting`` gives, ``given`` what ``given_refs`` gives."""
 
     project: str
     name: str
@@ -62,6 +62,7 @@ class RootBuild:
     build_id: str
     build_number: int
     rebuild: str = REBUILD_NONE
+    given: Mapping[str, str] = field(default_factory=dict)
 
 
 def name_refs(name: str) -> tuple[str, str]:
@@ -83,16 +84,32 @@ def rebuild_setting(value: str | None) -> str:
     return settings[value]
 
 
+def given_refs(value: str | None) -> dict[str, str]:
+    """``SNAPSHOT_REFS`` as ``{project: ref}``: ``project=ref`` for each project a person
+    gives a ref, with spaces between them; else an error."""
+    pairs = [pair.partition("=") for pair in (value or "").split()]
+    broken = [f"{p}{eq}{ref}" for p, eq, ref in pairs if not (p and ref)]
+    twice = sorted({p for p, _, _ in pairs if sum(q == p for q, _, _ in pairs) > 1})
+    if broken or twice:
+        found = [*broken, *(f"{p} more than once" for p in twice)]
+        raise PlanError(
+            f"SNAPSHOT_REFS={value!r}: expected project=ref for each project, with spaces "
+            f"between them, each project once; found {', '.join(found)}"
+        )
+    return {p: ref for p, _, ref in pairs}
+
+
 # ---------------------------------------------------------------------------
 # The tree
 # ---------------------------------------------------------------------------
 
 
 def walk(
-    root: str, member: Member, pins: Mapping[str, Pin], ask: Ask
+    root: str, member: Member, pins: Mapping[str, Pin], given: Mapping[str, str], ask: Ask
 ) -> dict[str, Member | Refused]:
     """Every project of the tree of ``root``, which ``member`` is, breadth first, each
-    resolved once, for the first project that reaches it. A refused one is not descended."""
+    resolved once, for the first project that reaches it. A refused one is not descended.
+    ``given`` holds the ref a person gave for a project, which counts before its pin."""
     found: dict[str, Member | Refused] = {root: member}
     queue = [root]
     while queue:
@@ -101,7 +118,9 @@ def walk(
             if project in found:
                 continue
             dependent = Dependent(by, dep.path)
-            found[project] = resolve(project, dependent, pins.get(project), member.place.ref, ask)
+            found[project] = resolve(
+                project, dependent, pins.get(project), given.get(project), member.place.ref, ask
+            )
             if isinstance(found[project], Member):
                 queue.append(project)
     return found
@@ -124,9 +143,28 @@ def pins_of(found: Mapping[str, Member | Refused]) -> dict[str, Pin]:
     return {project: written[0] for project, written in pins.items()}
 
 
-def settled(root: str, member: Member, ask: Ask) -> dict[str, Member]:
-    """The tree of ``root``, walked with the pins it holds. Pins that never settle, and a
-    project refused in the settled tree, fail the plan."""
+def unplanned(root: str, found: Mapping[str, object], given: Mapping[str, str]) -> list[str]:
+    """Why each project of ``given`` cannot be given a ref: the root build's own, which is
+    taken at the commit checked out, and one that is not in the tree ``found``."""
+    own = [
+        f"SNAPSHOT_REFS gives a ref for {p}, the project of this build, which is built at the "
+        "commit it checked out. Start the build on the branch to build."
+        for p in given
+        if p == root
+    ]
+    outside = [
+        f"SNAPSHOT_REFS gives a ref for {p}, which is not a snapshot dependency in this plan. "
+        f"Its projects are {', '.join(sorted(q for q in found if q != root)) or 'none'}."
+        for p in sorted(given)
+        if p not in found
+    ]
+    return own + outside
+
+
+def settled(root: str, member: Member, given: Mapping[str, str], ask: Ask) -> dict[str, Member]:
+    """The tree of ``root``, walked with the pins it holds and the refs a person gave. Pins
+    that never settle, a project refused in the settled tree, and a ref given for a project
+    that takes none fail the plan."""
 
     def refs(pins: Mapping[str, Pin]) -> dict[str, str]:
         return {project: pin.ref for project, pin in sorted(pins.items())}
@@ -134,7 +172,7 @@ def settled(root: str, member: Member, ask: Ask) -> dict[str, Member]:
     pins = pins_of({root: member})
     tried: list[dict[str, str]] = []
     while True:
-        found = walk(root, member, pins, ask)
+        found = walk(root, member, pins, given, ask)
         held = pins_of(found)
         if refs(held) == refs(pins):
             break
@@ -144,6 +182,7 @@ def settled(root: str, member: Member, ask: Ask) -> dict[str, Member]:
             raise PlanError(f"the pins of this plan never settle, each set moves another: {shown}")
         pins = held
     refused = [str(m) for _, m in sorted(found.items()) if isinstance(m, Refused)]
+    refused += unplanned(root, found, given)
     if refused:
         raise PlanError("\n".join(refused))
     return found
@@ -171,11 +210,14 @@ def own_line(at: Place, root: Place, ask: Ask) -> str | None:
 def writes_latest_file(
     p: str, tree: Mapping[str, Member], under: frozenset[str], root: Place, ask: Ask
 ) -> bool:
-    """Whether a build of ``p`` started for a dependency writes its branch's latest files:
-    when the build a person would start on its branch at its commit takes every project
-    ``under`` it at the commit this plan takes it at. That build knows the pins of ``p`` and of
-    the projects under it, and takes the rest from ``default_refs`` of its own ref."""
+    """Whether a build of ``p`` under this plan writes its branch's latest files: when ``p``
+    is taken at the commit git names for its ref, and the build a person would start there
+    without giving a ref takes every project ``under`` it at the commit this plan takes it
+    at. That build knows the pins of ``p`` and of the projects under it, and takes the rest
+    from ``default_refs`` of its own ref."""
     at = tree[p].place
+    if ask.commit(at.repository, at.ref) != at.commit:
+        return False
     pins = pins_of({q: tree[q] for q in (p, *under)})
 
     def own_commit(q: str) -> str | None:
@@ -207,7 +249,7 @@ def make_plan(
     at = Place(pipeline(root.project).repository, named_ref(root.name, root.refs), root.commit)
     named = {ref: root.refs.get(ref) for ref in name_refs(root.name)}
     ask = asking(git, pipeline, at, root.name, named)
-    tree = settled(root.project, Member(at, own), ask)
+    tree = settled(root.project, Member(at, own), root.given, ask)
     deps = {p: tuple(sorted(snapshot_dependencies(m.declaration))) for p, m in tree.items()}
     # Before ``below``: a cycle fails the plan here.
     order = dependencies_first(deps)
@@ -219,10 +261,11 @@ def make_plan(
             ref=place.ref,
             commit=place.commit,
             key=None,
-            writes_latest_file=is_root or writes_latest_file(p, tree, below(deps, p), at, ask),
+            writes_latest_file=writes_latest_file(p, tree, below(deps, p), at, ask),
             deps=deps[p],
             steps=tree[p].declaration.steps,
             latest=latest if is_root else (),
+            given=root.given.get(p),
         )
 
     return keyed(

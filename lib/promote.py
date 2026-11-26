@@ -7,7 +7,7 @@ the key, and the last writer wins. Promoted already, by any build, it leaves it 
 latest file, so the retry of a job that promoted never moves a latest file back. Not there, it
 fails: the step that uploads it uploaded nothing.
 
-A build started for a dependency writes latest files only when its plan says so
+A job writes latest files only when the plan of its build says so
 (``Job.writes_latest_files``).
 """
 
@@ -72,7 +72,7 @@ def promote(job: Job, o: Options) -> None:
         log(f"Promoted {folder} at {key}; the latest file of {job.branch} names it")
     else:
         log(
-            f"Promoted {folder} at {key}; no latest file of {job.branch} names this key: the "
-            "build was started for a dependency, and its plan does not show that its branch's "
-            "own build would take every dependency at the same commits"
+            f"Promoted {folder} at {key}; no latest file of {job.branch} names this key: its "
+            "plan does not show that a build of its branch would be at this commit and take "
+            "every dependency at the same commits"
         )

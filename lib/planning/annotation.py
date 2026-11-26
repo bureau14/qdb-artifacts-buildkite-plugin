@@ -141,13 +141,24 @@ def not_the_latest(plan: Plan, projects: Iterable[str]) -> list[str]:
 
     def line(p: str, branch: str) -> str:
         return (
-            f"- {code(p)} is built here against other commits of the projects below it than a "
-            f"build of its branch {branch} would take. This build uses the result; it does not "
-            f"become the latest successful build of {branch}."
+            f"- {code(p)} is not built here as a build of its branch {branch} would be: at "
+            "another commit, or against other commits of the projects below it. This build "
+            f"uses the result; it does not become the latest successful build of {branch}."
         )
 
     planned = ((p, plan.projects[p]) for p in projects)
     return [line(p, code(name_of(n.ref))) for p, n in planned if not n.writes_latest_file]
+
+
+def given_refs(plan: Plan, projects: Iterable[str]) -> list[str]:
+    """A line for each project a person gave a ref for."""
+    planned = ((p, plan.projects[p]) for p in projects)
+    return [
+        f"- {code(p)} is taken at {code(n.given)}: `SNAPSHOT_REFS` of {code(plan.root.project)} "
+        f"build {plan.root.build_number} gives it."
+        for p, n in planned
+        if n.given is not None
+    ]
 
 
 def keys_table(plan: Plan, projects: Sequence[str]) -> str:
@@ -188,7 +199,7 @@ def plan_annotation(
         counted(states),
         TREE_PICTURE if len(projects) > 1 else "",
         plan_table(plan, project, states),
-        "\n".join([*outside, *not_the_latest(plan, projects)]),
+        "\n".join([*given_refs(plan, projects), *outside, *not_the_latest(plan, projects)]),
         collapsed("Snapshot keys", keys_table(plan, projects)),
     ]
     return "\n\n".join(filter(None, parts))
