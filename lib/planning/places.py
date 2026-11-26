@@ -132,7 +132,7 @@ def first_ref(ask: Ask, repository: str, refs: Iterable[str]) -> tuple[str, str]
     return next(((r, c) for r, c in found if c is not None), None)
 
 
-def given_refs(given: str) -> tuple[str, ...]:
+def refs_named(given: str) -> tuple[str, ...]:
     """The refs a name a person gave may be, in the order they count: a full ref is itself,
     another name a branch, then a tag."""
     return (given,) if given.startswith("refs/") else (branch_ref(given), tag_ref(given))
@@ -144,7 +144,7 @@ def given_place(project: str, repository: str, given: str, at: str, ask: Ask) ->
     full. A commit is taken only from the ref the project would come from without it, so the
     build started of it runs under that ref's name and git is asked for one history."""
     if not is_commit(given):
-        found = first_ref(ask, repository, given_refs(given))
+        found = first_ref(ask, repository, refs_named(given))
         if found is None:
             raise Refused(
                 f"{project} cannot be planned: SNAPSHOT_REFS gives it {given}, which is neither "
