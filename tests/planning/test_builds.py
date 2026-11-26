@@ -469,7 +469,7 @@ def test_a_ref_given_for_a_dependency_places_it_for_one_build(worlds, lower_proj
     """After the builds of a tree on master, a dependency gets a commit master does not
     name, and a root build on master is given it in SNAPSHOT_REFS, as a branch, a tag or a
     commit. That build builds the dependency at that commit and every project above it, each
-    download of the dependency takes that build of it, and the page names what was given.
+    download of the dependency takes that build of it, and the page says a ref was given.
     Master's latest files of every project stay as they were, so the next build without
     SNAPSHOT_REFS takes the tree as master has it."""
     graph, project, root = lower_project.graph, lower_project.project, lower_project.root
@@ -490,7 +490,7 @@ def test_a_ref_given_for_a_dependency_places_it_for_one_build(worlds, lower_proj
     assert set(built) == ({project} | above(graph, project)) & projects
     assert (built[project].commit, plan.projects[project].given) == (commit, name)
     assert taken == {built[project].id}
-    assert f"`{name}`" in page
+    assert "SNAPSHOT_REFS" in page
     assert {(p, f): world.latest(p, MASTER, f) for p in projects for f in every} == latest
 
 

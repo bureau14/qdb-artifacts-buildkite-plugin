@@ -99,21 +99,29 @@ def why_cell(s: State) -> str:
 
 
 def plan_columns(plan: Plan, states: Mapping[str, State]) -> list[Column]:
-    """A project's commit, and its state. Two columns are there only when a project has
-    something to say in them: its branch or tag, when it is taken from another than the
-    build's, and why it builds."""
+    """A project's commit, the branch or tag it is taken from, and its state. Two columns
+    are there only when a project has something to say in them: why it builds, and whether
+    its build becomes the latest of its branch, which then says yes or no of every project."""
 
-    def elsewhere(p: str) -> str:
-        name = name_of(plan.projects[p].ref)
-        return "" if name == plan.context else code(name)
+    def taken_from(p: str) -> str:
+        n = plan.projects[p]
+        return code(name_of(n.ref)) + (", given in `SNAPSHOT_REFS`" if n.given else "")
 
-    optional: list[Column] = [
-        ("Branch or tag", elsewhere),
+    def becomes_latest(p: str) -> str:
+        return "yes" if plan.projects[p].writes_latest_file else "no"
+
+    always: list[Column] = [
+        ("Commit", lambda p: code(short_commit(plan.projects[p].commit))),
+        ("Branch or tag", taken_from),
         ("Build", lambda p: build_cell(states[p])),
-        ("Why", lambda p: why_cell(states[p])),
     ]
-    commit: Column = ("Commit", lambda p: code(short_commit(plan.projects[p].commit)))
-    return [commit, *(c for c in optional if any(map(c[1], states)))]
+    why: Column = ("Why", lambda p: why_cell(states[p]))
+    latest: Column = ("Latest of its branch", becomes_latest)
+    return [
+        *always,
+        *([why] if any(map(why[1], states)) else []),
+        *([latest] if "no" in map(becomes_latest, states) else []),
+    ]
 
 
 def plan_table(plan: Plan, project: str, states: Mapping[str, State]) -> str:
@@ -135,30 +143,18 @@ def counted(states: Mapping[str, State]) -> str:
     return "Projects: " + ", ".join(t.format(counts[k]) for k, t in COUNTED.items() if counts[k])
 
 
+NOT_THE_LATEST = (
+    "Latest of its branch, no: the build is used here and does not become the latest "
+    "successful build of its branch, because a build of that branch would be at another "
+    "commit or take other commits of the projects below it."
+)
+
+
 def not_the_latest(plan: Plan, projects: Iterable[str]) -> list[str]:
-    """A line for each project whose build does not write its branch's latest files: what
-    that means for a person, and why."""
-
-    def line(p: str, branch: str) -> str:
-        return (
-            f"- {code(p)} is not built here as a build of its branch {branch} would be: at "
-            "another commit, or against other commits of the projects below it. This build "
-            f"uses the result; it does not become the latest successful build of {branch}."
-        )
-
-    planned = ((p, plan.projects[p]) for p in projects)
-    return [line(p, code(name_of(n.ref))) for p, n in planned if not n.writes_latest_file]
-
-
-def taken_as_given(plan: Plan, projects: Iterable[str]) -> list[str]:
-    """A line for each project a person gave a ref for."""
-    planned = ((p, plan.projects[p]) for p in projects)
-    return [
-        f"- {code(p)} is taken at {code(n.given)}: `SNAPSHOT_REFS` of {code(plan.root.project)} "
-        f"build {plan.root.build_number} gives it."
-        for p, n in planned
-        if n.given is not None
-    ]
+    """What the table's no means, once, when a project of ``projects`` has it."""
+    return (
+        [NOT_THE_LATEST] if not all(plan.projects[p].writes_latest_file for p in projects) else []
+    )
 
 
 def keys_table(plan: Plan, projects: Sequence[str]) -> str:
@@ -199,7 +195,7 @@ def plan_annotation(
         counted(states),
         TREE_PICTURE if len(projects) > 1 else "",
         plan_table(plan, project, states),
-        "\n".join([*taken_as_given(plan, projects), *outside, *not_the_latest(plan, projects)]),
+        "\n\n".join([*not_the_latest(plan, projects), "\n".join(outside)]).strip(),
         collapsed("Snapshot keys", keys_table(plan, projects)),
     ]
     return "\n\n".join(filter(None, parts))

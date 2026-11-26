@@ -421,7 +421,7 @@ SNAPSHOT_REFS="quasardb-build=sc-20300/arrow-fix qdb-duck=v3.14.2"
 
 The ref is a branch name, a tag name (a branch of that name counts first), a full ref such as `refs/tags/v3.14.2`, or a commit written as its 40 characters. A commit must be in the history of the ref the project would be taken from without it, and the build started for it runs under that ref's name. The project is taken there in the whole plan, also where a template pins it. The plan step fails before anything is built when a project is not a snapshot dependency in the plan, is the root build's own, or lacks the ref.
 
-No build of such a plan moves master's latest files to what it built: the rule of the next section holds for every build, and the page names each project it stops.
+No build of such a plan moves master's latest files to what it built: the rule of the next section holds for every build, and the page says of each project whether it becomes the latest of its branch.
 
 ### Who writes a branch's latest files
 
@@ -453,7 +453,7 @@ The plan step fails a build whose generated pipeline breaks one of these, before
 3. The jobs download, upload and promote at those keys.
 4. The last step records the steps that did not pass.
 
-The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and, when it is taken from another branch or tag than the build's, that name; a project that several take is written out once. Below the table the page names each project whose build does not become the latest successful build of its branch (see "Who writes a branch's latest files"), and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
+The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and the branch or tag it is taken from, marked when `SNAPSHOT_REFS` gave it; a project that several take is written out once. When a build of the tree does not become the latest successful build of its branch (see "Who writes a branch's latest files"), a column says yes or no of every project. Below the table the page names each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
 
 The picture and the table say of each project what becomes of it, and a line above them counts the projects in each state:
 
