@@ -58,6 +58,16 @@ def key_json(prefix: str, project: str, key: str) -> str:
     return key_join(prefix, project, key, KEY_JSON)
 
 
+def at_key(prefix: str, project: str, key: str) -> str:
+    """The prefix of everything at ``key``."""
+    return key_join(prefix, project, key) + "/"
+
+
+def keys_of_commit(prefix: str, project: str, commit: str) -> str:
+    """The prefix of every key of ``commit``: a key is the commit, a dash and a digest."""
+    return key_join(prefix, project, commit) + "-"
+
+
 def step_folder(prefix: str, project: str, key: str, folder: Folder) -> str:
     return key_join(prefix, project, key, folder.platform, folder.step)
 

@@ -60,6 +60,11 @@ class MemoryStore:
         below = (k for k in self.objects if k.startswith(prefix) and "/" not in k[len(prefix) :])
         return [Listed(k, self.times[k]) for k in sorted(below)]
 
+    def below(self, prefix: str) -> list[str]:
+        deeper = (k[len(prefix) :] for k in self.objects if k.startswith(prefix))
+        levels = {prefix + rest.split("/", 1)[0] for rest in deeper if "/" in rest}
+        return [level.rsplit("/", 1)[-1] for level in sorted(levels)]
+
 
 def url(project: str) -> str:
     return f"https://git.example.test/example/{project}.git"
