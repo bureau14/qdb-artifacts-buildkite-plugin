@@ -79,7 +79,7 @@ from .records import (
     shared_failure,
     shared_record,
 )
-from .rewrite import Rewrite, needed_folders, planned, replaced
+from .rewrite import Rewrite, planned, replaced
 from .templates import declared_path
 from .triggers import second_run_pipeline
 
@@ -146,12 +146,6 @@ def check_shared(job: Job, edge: Edge, own: OwnBuild, wanted: frozenset[Folder])
 # ---------------------------------------------------------------------------
 # The dependencies
 # ---------------------------------------------------------------------------
-
-
-def dependency_needs(job: Job, own: OwnBuild) -> dict[str, frozenset[Folder]]:
-    """What the steps this build still runs take of each dependency."""
-    step_ids = {project: n.steps for project, n in own.plan.projects.items()}
-    return needed_folders(own.generated.steps, job.project, own.made, step_ids)
 
 
 def lacking(edge: Edge, p: Plan, needs: Mapping[str, frozenset[Folder]]) -> list[Cause]:
@@ -261,22 +255,21 @@ def first_run(job: Job, edge: Edge, path: str) -> None:
         reuse(job, edge, own)
         return
     check_shared(job, edge, own, wanted)
-    needs = dependency_needs(job, own)
-    causes = lacking(edge, own.plan, needs)
+    causes = lacking(edge, own.plan, own.takes)
     failed = [
         c for c in causes if failure_in_plan(stored_records(edge, c.project, c.key), own.plan.id)
     ]
     if failed:
         fail_with_causes(job, edge, own, failed)
     if causes:
-        start_builds(job, edge, own.plan, {c.project: needs[c.project] for c in causes}, path)
+        start_builds(job, edge, own.plan, {c.project: own.takes[c.project] for c in causes}, path)
         return
     upload_pipeline(job, edge, own)
 
 
 def second_run(job: Job, edge: Edge, path: str) -> None:
     own = own_build(job, edge, path, stored_plan(job, edge))
-    causes = lacking(edge, own.plan, dependency_needs(job, own))
+    causes = lacking(edge, own.plan, own.takes)
     if causes:
         fail_with_causes(job, edge, own, causes)
     upload_pipeline(job, edge, own)

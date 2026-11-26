@@ -4,6 +4,7 @@ What is built first stands on the left and the build itself on the right; an arr
 project to each project that takes it. A project stands in the column of its depth, the longest
 way from the build down to it, so every arrow points right and a wide tree grows downwards.
 An arrow that crosses a column gets a place of its own there, and so runs behind no box.
+A box has the colours of its project's state (``states``) and says it in a line.
 
 The module measures no font: a box is as wide as the longest text needs at ``CHAR`` a letter.
 """
@@ -17,25 +18,25 @@ from xml.sax.saxutils import escape
 
 from ..forms import name_of, short_commit
 from .plan import Plan, Planned, dependencies_first, tree_of
+from .states import BUILDS, BUILT, FAILED, REUSED, State, said
 
 # The artifact of the build that holds the picture.
 PICTURE = "snapshot-plan.svg"
 
 SANS = "system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
 MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-INK, FAINT, REMARK, LINE, EDGE, OWN, FILL = (
-    "#222222",
-    "#666666",
-    "#b35900",
-    "#8a929b",
-    "#b8bec6",
-    "#2f6fde",
-    "#f6f8fa",
-)
+INK, FAINT, REMARK, LINE = "#222222", "#666666", "#b35900", "#8a929b"
+# Of each state: the fill of its box, its border, and its line of words.
+COLOURS = {
+    REUSED: ("#e6f4ea", "#3c9a5f", "#2a7a48"),
+    BUILT: ("#e3eefc", "#5b8def", "#1f55b5"),
+    BUILDS: ("#fff3d6", "#c98a00", "#8a5a00"),
+    FAILED: ("#fde8e8", "#d64545", "#a12b2b"),
+}
 
 # Pixels. CHAR is the width of a letter of a name; a remark is set smaller.
 CHAR, REMARK_CHAR, PADDING, NARROWEST = 7.6, 5.8, 24, 150
-SHORT, TALL, PASSING = 44, 60, 12
+SHORT, TALL, PASSING = 60, 76, 12
 BETWEEN_COLUMNS, BETWEEN_ROWS, MARGIN, LABELS, TIP = 76, 18, 8, 26, 2
 
 # ---------------------------------------------------------------------------
@@ -53,11 +54,11 @@ def remark(plan: Plan, n: Planned) -> str:
     return "" if name == plan.context else f"from {name}"
 
 
-def box_width(plan: Plan, projects: Sequence[str]) -> float:
+def box_width(plan: Plan, states: Mapping[str, State]) -> float:
     """One width for every box, so the columns line up."""
-    names = max(len(p) for p in projects) * CHAR
-    remarks = max(len(remark(plan, plan.projects[p])) for p in projects) * REMARK_CHAR
-    return max(NARROWEST, names + PADDING, remarks + PADDING)
+    names = max(map(len, states)) * CHAR
+    lines = [x for p, s in states.items() for x in (said(s), remark(plan, plan.projects[p]))]
+    return max(NARROWEST, names + PADDING, max(map(len, lines)) * REMARK_CHAR + PADDING)
 
 
 # ---------------------------------------------------------------------------
@@ -172,19 +173,22 @@ def text(
     )
 
 
-def box(plan: Plan, r: Rect, project: str, own: bool) -> str:
-    """A project: its name, its commit and its remark. The build's own has a strong border."""
+def box(plan: Plan, r: Rect, project: str, s: State, own: bool) -> str:
+    """A project: its name, its commit, its state and its remark. The build's own has a strong
+    border. The frame's class names the state and its reason."""
     n = plan.projects[project]
-    said = remark(plan, n)
-    border = f'stroke="{OWN}" stroke-width="2"' if own else f'stroke="{EDGE}" stroke-width="1"'
+    noted = remark(plan, n)
+    fill, edge, ink = COLOURS[s.kind]
     frame = (
-        f'<rect x="{r.x:.1f}" y="{r.y:.1f}" width="{r.w:.1f}" height="{r.h}" rx="6" '
-        f'fill="{FILL}" {border}/>'
+        f'<rect class="{f"{s.kind} {s.reason}".strip()}" x="{r.x:.1f}" y="{r.y:.1f}" '
+        f'width="{r.w:.1f}" height="{r.h}" rx="6" fill="{fill}" stroke="{edge}" '
+        f'stroke-width="{2.5 if own else 1}"/>'
     )
     lines = [
         text(r, 18, project, SANS, 13, INK, 600),
         text(r, 35, short_commit(n.commit), MONO, 11.5, FAINT, 400),
-        text(r, 51, said, SANS, 10.5, REMARK, 400) if said else "",
+        text(r, 51, said(s), SANS, 10.5, ink, 400),
+        text(r, 67, noted, SANS, 10.5, REMARK, 400) if noted else "",
     ]
     return frame + "".join(lines)
 
@@ -224,15 +228,15 @@ def svg(rects: Iterable[Rect], parts: Iterable[str]) -> str:
     )
 
 
-def tree_picture(plan: Plan, project: str) -> str | None:
-    """The tree of ``project`` in ``plan`` as an SVG document; None for a project that takes
-    no other, whose tree is itself."""
+def tree_picture(plan: Plan, project: str, states: Mapping[str, State]) -> str | None:
+    """The tree of ``project`` in ``plan`` as an SVG document, each project in its state of
+    ``states``; None for a project that takes no other, whose tree is itself."""
     deps = {p: plan.projects[p].deps for p in tree_of(plan, project)}
     if len(deps) == 1:
         return None
     depth = depths(deps, project)
     found = columns(deps, depth, project)
-    rects = placed(plan, found, box_width(plan, list(deps)))
+    rects = placed(plan, found, box_width(plan, states))
     labels = [
         label(rects[len(found) - 1, found[-1][0]], "built first"),
         label(rects[0, found[0][0]], "this build"),
@@ -242,5 +246,5 @@ def tree_picture(plan: Plan, project: str) -> str | None:
         for taker in deps
         for taken in deps[taker]
     ]
-    boxes = [box(plan, rects[depth[p], Slot(p)], p, own=p == project) for p in deps]
+    boxes = [box(plan, rects[depth[p], Slot(p)], p, states[p], own=p == project) for p in deps]
     return svg(list(rects.values()), [*labels, *arrows, *boxes])

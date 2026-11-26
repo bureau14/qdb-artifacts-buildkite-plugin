@@ -34,6 +34,7 @@ there.
 | `failing.py`    | how a step fails: log, record, page, error                                                                                                                                                     | a `Refusal`; why an error of the store or of git writes no record                                                                                                |
 | `annotation.py` | what the plan step and the last step show on the build page                                                                                                                                    | the plan's table, whose first column is the tree; the line for a build that does not become the latest of its branch; the page of a failed build and its way out |
 | `picture.py`    | the tree of a plan as an SVG, which the plan step uploads as the artifact `snapshot-plan.svg` and its page shows                                                                               | how the picture is laid out; what a box says; why it needs no library and measures no font                                                                       |
+| `states.py`     | what becomes of each project of a plan, as its page says it: reused, built, failed, or builds and why                                                                                          | the reasons a key is not made and their order; which folders count for a project; why nothing of it is stored                                                    |
 | `edge.py`       | `Edge`, everything the steps read and change, and the build meta-data they keep                                                                                                                | the names of the meta-data; what a test fakes; where the plan is stored                                                                                          |
 | `git.py`        | everything the steps ask of git                                                                                                                                                                | reading another repository without a checkout; why a failed command is never read as "no such ref"                                                               |
 | `buildkite.py`  | what Buildkite's API says of a pipeline                                                                                                                                                        | the token and its scope; retries; why no redirect is followed                                                                                                    |
@@ -158,6 +159,20 @@ the package's docstring and no code.
   to the builds that failed exist for the person who must find what went wrong
   in a tree of builds. A failed step is also not built twice for nothing: a
   build that needs a key whose build failed under the same plan fails at once.
+- The page says of each project whether it is reused, and why not when it is
+  not. `states.py` derives that from what the store holds at the planned key
+  each time the page is drawn: the manifests, the failure records and the other
+  keys of the same commit. The plan holds none of it, because the plan is fixed
+  before the plan step decides and a state changes while the builds run. The
+  second run draws the page again, so it then shows what was built. A project is
+  reused or built by the time of its promotes against the time the root build
+  began, which is why no build reports what it did.
+- The state of the build's own project and of the projects that it takes comes
+  from the folders that the plan step's decision reads (`OwnBuild.needs` and
+  `OwnBuild.takes`), so the page and the decision agree. A build does not know
+  which folders are asked of a project further down: only the build above that
+  project reads its generated pipeline. For such a project the folders found at
+  the key count, and the README states the one case in which that is wrong.
 - The plan's page shows the tree as a picture and as a table. The picture shows
   each project once, at its depth, with every project that takes it. The table
   holds the same tree as text that a person can select and search, and repeats a

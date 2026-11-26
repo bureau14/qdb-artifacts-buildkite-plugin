@@ -443,6 +443,26 @@ The plan step fails a build whose generated pipeline breaks one of these, before
 
 The plan step's page shows the tree of the build twice. A picture, the build's artifact `snapshot-plan.svg`, has what is built first on the left and the build itself on the right, with an arrow from a project to each project that takes it. A table has a row for each project under the project that takes it, with its commit and, when it is taken from another branch or tag than the build's, that name; a project that several take is written out once. Below the table the page names each project whose build does not become the latest successful build of its branch (see "Who writes a branch's latest files"), and each download of the pipeline's own project at another branch: the key leaves such a download out, and its job reads that branch's latest build when it runs. The key of every project is behind the line "Snapshot keys".
 
+The picture and the table say of each project what becomes of it, and a line above them counts the projects in each state:
+
+| The page says    | When                                                                                                           |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| reused, build N  | every step is made at the project's key, by a build that promoted before the root build began; N is that build |
+| built, build N   | every step is made, and one was promoted since the root build began                                            |
+| failed, build N  | build N of the project failed under this plan                                                                  |
+| builds, with why | a step is not made at the key, and one of the reasons below says why                                           |
+
+| Why a project builds        | Meaning                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| rebuild forced              | `SNAPSHOT_REBUILD` gave the key to this plan alone                                                                       |
+| build N failed              | build N of the same key failed under an earlier plan, and the key is tried again                                         |
+| earlier build unfinished    | a build of the same key made or uploaded some steps and left no failure record: it still runs, or it was cancelled       |
+| new commit                  | this commit of the project was never built                                                                               |
+| new `<project>`             | the commit was built before, and a project that it takes is not reused                                                   |
+| not built with these before | the commit was built before, and every project that it takes is reused, but it was never built with these builds of them |
+
+The page is drawn when the plan step runs and again at its second run, after the builds that it started have ended, and it reads the bucket each time. A build knows which steps it is asked for and which steps it takes of its dependencies, so the state of those projects is the decision the plan step takes. Of a project further down, the page knows only the steps that it finds at the key. Such a project reads as reused while a build of its key still runs, or was cancelled, after it promoted some steps; the build above it then still starts a build of it.
+
 ### Variables
 
 | Variable                | Set by                              | Meaning                                                                                             |

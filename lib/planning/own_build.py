@@ -21,15 +21,25 @@ from ..layout import Folder
 from ..manifest import Manifest
 from .annotation import PLAN_REFUSED, PLAN_STEP_ERROR, plan_annotation, shown_folders
 from .buildkite import https_repository
-from .edge import PLAN, Edge, create_own_key_json, made_only, manifests_at
-from .failing import refusal
+from .edge import (
+    PLAN,
+    Edge,
+    create_own_key_json,
+    held_of_tree,
+    made_only,
+    manifests_at,
+    root_build_began,
+)
+from .failing import Refusal, refusal
 from .latest import latest_download, read_latest
 from .picture import PICTURE, tree_picture
 from .pipeline import DocumentError, Step, dependencies, left_out, promotions, steps_of
 from .plan import Plan, PlanError, encode_plan
 from .planner import RootBuild, make_plan, name_refs, named_ref, rebuild_setting
 from .records import NOT_DECLARED, RULE, Origin, RefusedFolder
+from .rewrite import needed_folders
 from .rule import rule_violations, stepless_downloads, unwritten_promotions
+from .states import states
 from .templates import Declaration, TemplateError, is_template_path, read_declaration
 from .triggers import read_needs
 
@@ -51,8 +61,9 @@ class OwnBuild:
     """``origin`` holds the build's key. ``promotes`` is what its pipeline promotes, ``needs``
     what it was asked for: ``SNAPSHOT_NEEDS`` in a build started for a dependency, else all it
     promotes. ``made`` is the manifest of each folder it promotes that is made at its key.
-    ``named`` is git's answer for the refs a root build's name may be, None for a build that
-    had its plan from the start."""
+    ``takes`` is what the steps it still runs take of each dependency. ``named`` is git's
+    answer for the refs a root build's name may be, None for a build that had its plan from
+    the start."""
 
     generated: Generated
     plan: Plan
@@ -60,6 +71,7 @@ class OwnBuild:
     promotes: frozenset[Folder]
     needs: frozenset[Folder]
     made: Mapping[Folder, Manifest]
+    takes: Mapping[str, frozenset[Folder]]
     named: Mapping[str, str] | None
 
 
@@ -170,28 +182,45 @@ def promoted_and_needed(
     return promotes, needs
 
 
-def show_plan(job: Job, edge: Edge, p: Plan, outside: tuple[tuple[str, str, str], ...]) -> None:
-    """The plan on the build's page. The picture of the tree is an artifact of the build,
-    which the page shows; it is uploaded first, so the page never names a picture that is
-    not there."""
-    picture = tree_picture(p, job.project)
+def show_plan(
+    job: Job,
+    edge: Edge,
+    p: Plan,
+    outside: tuple[tuple[str, str, str], ...],
+    asked: Mapping[str, frozenset[Folder]],
+) -> None:
+    """The plan on the build's page, each project in the state the store gives it now.
+    ``asked`` holds the folders this build is asked for and those it takes of each dependency,
+    as far as it knows them. The picture of the tree is an artifact of the build, which the
+    page shows; it is uploaded first, so the page never names a picture that is not there."""
+    held = held_of_tree(edge, p, job.project, asked)
+    found = states(p, job.project, held, root_build_began(job, edge))
+    picture = tree_picture(p, job.project, found)
     if picture is not None:
         edge.agent.artifact_upload(PICTURE, picture)
-    edge.agent.annotate(plan_annotation(p, job.project, outside), "info", PLAN_CONTEXT)
+    edge.agent.annotate(plan_annotation(p, job.project, outside, found), "info", PLAN_CONTEXT)
 
 
 def own_build(job: Job, edge: Edge, path: str, stored: Plan | None) -> OwnBuild:
     """What the build whose command put the generated pipeline at ``path`` knows of itself.
     ``stored`` is its plan when it had one from the start, as a build started for a dependency
     and every second run have: such a build has its key before its pipeline is judged, so a
-    broken rule is recorded too. The page shows the plan."""
+    broken rule is recorded too. The page shows the plan, also of a build that is asked for
+    what it cannot give, which knows of no folder that is asked for."""
     check_command(job, edge, path)
     origin = None if stored is None else create_own_key_json(job, edge, stored)
     generated = generated_pipeline(job, edge, path, origin)
     named = named_refs(job, edge) if stored is None else None
     p = made_plan(job, edge, generated, named) if stored is None else stored
     origin = origin or create_own_key_json(job, edge, p)
-    show_plan(job, edge, p, left_out(generated.steps, job.project, branch_ref(job.branch)))
-    promotes, needs = promoted_and_needed(job, edge, generated, p, origin)
+    outside = left_out(generated.steps, job.project, branch_ref(job.branch))
+    try:
+        promotes, needs = promoted_and_needed(job, edge, generated, p, origin)
+    except Refusal:
+        show_plan(job, edge, p, outside, {})
+        raise
     made = made_only(manifests_at(edge, job.project, origin.key, promotes))
-    return OwnBuild(generated, p, origin, promotes, needs, made, named)
+    step_ids = {project: n.steps for project, n in p.projects.items()}
+    takes = needed_folders(generated.steps, job.project, made, step_ids)
+    show_plan(job, edge, p, outside, {job.project: needs, **takes})
+    return OwnBuild(generated, p, origin, promotes, needs, made, takes, named)
