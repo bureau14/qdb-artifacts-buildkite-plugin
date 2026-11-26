@@ -49,7 +49,13 @@ def trigger_step(plan: Plan, project: str, needs: Iterable[Folder], after: list[
             "branch": name_of(n.ref),
             "commit": n.commit,
             "message": f"snapshot dependency of {plan.root.project} build {plan.root.build_number}",
-            "env": {"SNAPSHOT_PLAN": plan.id, "SNAPSHOT_NEEDS": needs_value(needs)},
+            "env": {
+                "SNAPSHOT_PLAN": plan.id,
+                "SNAPSHOT_NEEDS": needs_value(needs),
+                # For a started build whose plugin is older and reads it here: it runs the
+                # plugin its own templates name, which may not write it into its upload.
+                "SNAPSHOT_BRANCH_BUILD": "true" if n.writes_latest_file else "false",
+            },
         },
     }
 
