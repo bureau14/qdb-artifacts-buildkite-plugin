@@ -6,6 +6,7 @@ Of another repository (``url``):
   annotated tag peeled;
 - ``read_files(url, commit, directory, wanted)``: ``{path: bytes}`` of the files under
   ``directory`` in the tree of ``commit`` whose path ``wanted`` accepts;
+- ``reaches(url, tip, commit)``: whether ``commit`` is ``tip`` or a commit before it;
 - ``branches(url)``: ``{branch: commit}`` of every branch;
 - ``merge_base_times(url, commits)``: for each commit, the committer time of its merge-base
   with the commit checked out; None for one that shares no history with it.
@@ -146,6 +147,22 @@ class RealGit:
                 return {}
             self._remote([*FETCH, "--no-write-fetch-head", "--", url, *unique(files.values())], d)
             return self._contents(files, d)
+
+    def reaches(self, url: str, tip: str, commit: str) -> bool:
+        """In a scratch repository of its own: one fetch of the history of ``tip`` without
+        trees, in which ``commit`` is looked for."""
+        with tempfile.TemporaryDirectory(prefix="snapshot-git-") as d:
+            self._ok(["init", "-q"], d)
+            self._remote([*FETCH, "--filter=tree:0", "--", url, tip], d)
+            if self._git(["cat-file", "-e", f"{commit}^{{commit}}"], d).returncode != 0:
+                return False
+            args = ["merge-base", "--is-ancestor", "--end-of-options", commit, "FETCH_HEAD"]
+            c = self._git(args, d)
+            if c.returncode not in (0, 1):
+                raise ArtifactsError(
+                    f"git {' '.join(args)} failed ({c.returncode}): {c.stderr.strip()}"
+                )
+            return c.returncode == 0
 
     def checkout_files(self, directory: str, wanted: Callable[[str], bool]) -> dict[str, bytes]:
         files = self._listed("HEAD", directory, wanted)

@@ -160,6 +160,9 @@ class FakeGit:
     ) -> dict[str, bytes]:
         return files_under(self.hosting.trees[commit], directory, wanted)
 
+    def reaches(self, repository: str, tip: str, commit: str) -> bool:
+        return commit in self.hosting.history(tip)
+
     def branches(self, repository: str) -> dict[str, str]:
         found = ((branch_of(r), c) for (u, r), c in self.hosting.refs.items() if u == repository)
         return {b: c for b, c in found if b is not None}
